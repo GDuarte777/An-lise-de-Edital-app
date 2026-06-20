@@ -1,0 +1,8 @@
+{
+  "name": "Analisador de Editais",
+  "description": "Plataforma inteligente para upload e análise de editais de pregão eletrônico, criação de propostas e declarações automatizadas, integração ao Google Drive e Sheets, e gestão de certidões corporativas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
