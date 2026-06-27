@@ -7,9 +7,47 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 
-// Target Date for comparative analysis
-const SYSTEM_TODAY_STR = "2026-06-18";
-const SYSTEM_TODAY = new Date(SYSTEM_TODAY_STR);
+// Dynamic real-time date extraction for comparative analysis (timezone-safe)
+const getLocalTodayStr = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const SYSTEM_TODAY_STR = getLocalTodayStr();
+const SYSTEM_TODAY = new Date();
+
+// High-integrity timezone-safe status evaluation using local calendar days
+const evaluateStatus = (expDateStr: string): "expired" | "expiring_soon" | "valid" => {
+  if (!expDateStr) return "valid";
+  
+  const parts = expDateStr.split("-");
+  if (parts.length !== 3) return "valid";
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1; // 0-indexed month
+  const day = parseInt(parts[2], 10);
+  
+  // Set expiration date to the very end of that day (23:59:59.999) to cover the whole user expiration day fairly
+  const expDate = new Date(year, month, day, 23, 59, 59, 999);
+  
+  // Set current date to the beginning of today for accurate whole-day math
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const diffTime = expDate.getTime() - today.getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays <= 0) {
+    return "expired";
+  } else if (diffDays <= 15) {
+    return "expiring_soon";
+  } else {
+    return "valid";
+  }
+};
+
 
 // Pre-populate standard Colombian/Brazilian corporate certificates based strictly on user requirement (no fictitious dates, no uploaded state initially)
 const INITIAL_CERTIFICATES: Certificate[] = [
@@ -191,7 +229,18 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
           }
         });
 
-        return orderedCerts;
+        // RE-EVALUATE AND DYNAMICALLY UPDATE EXPIRED STATUSES OF STORED CERTS IN REAL TIME ACCORDING TO ACTUAL TODAY'S DATE!
+        const evaluatedCerts = orderedCerts.map((c: any) => {
+          if (c.fileUploaded && c.expirationDate) {
+            return {
+              ...c,
+              status: evaluateStatus(c.expirationDate)
+            };
+          }
+          return c;
+        });
+
+        return evaluatedCerts;
       } catch (e) {
         return INITIAL_CERTIFICATES;
       }
@@ -232,23 +281,23 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     localStorage.setItem("aip_certificates", JSON.stringify(certs));
   }, [certs]);
 
-  // Recalculate statuses on dates based on target local date 2026-06-18
-  const evaluateStatus = (expDateStr: string): "expired" | "expiring_soon" | "valid" => {
-    if (!expDateStr) return "valid";
-    const expDate = new Date(expDateStr);
-    
-    // Difference in milliseconds
-    const diffTime = expDate.getTime() - SYSTEM_TODAY.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays < 0) {
-      return "expired";
-    } else if (diffDays <= 15) {
-      return "expiring_soon";
-    } else {
-      return "valid";
-    }
-  };
+  // Recalculate statuses on mount to ensure everything is perfectly in sync with the real current time
+  useEffect(() => {
+    setCerts(prev => {
+      let changed = false;
+      const updated = prev.map(c => {
+        if (c.fileUploaded && c.expirationDate) {
+          const currentStatus = evaluateStatus(c.expirationDate);
+          if (c.status !== currentStatus) {
+            changed = true;
+            return { ...c, status: currentStatus };
+          }
+        }
+        return c;
+      });
+      return changed ? updated : prev;
+    });
+  }, []);
 
   const handleCompanyChange = (field: keyof CompanyData, value: string) => {
     setCompanyData({ ...companyData, [field]: value });

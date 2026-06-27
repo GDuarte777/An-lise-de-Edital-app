@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      width: 360px;
+      margin: 0;
+      padding: 0;
+      background-color: #0b0f19;
+      color: #f1f5f9;
+    }
+    .container {
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #1e293b;
+      padding-bottom: 12px;
+      margin-bottom: 12px;
+    }
+    .logo-badge {
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      color: white;
+      font-weight: 800;
+      font-size: 14px;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      margin: 0;
+    }
+    .subtitle {
+      font-size: 10px;
+      color: #94a3b8;
+      margin: 2px 0 0 0;
+    }
+    .status-card {
+      background-color: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .status-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 9999px;
+    }
+    .badge-waiting {
+      background-color: #334155;
+      color: #cbd5e1;
+    }
+    .badge-success {
+      background-color: #065f46;
+      color: #34d399;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.8; }
+      50% { opacity: 1; }
+      100% { opacity: 0.8; }
+    }
+    .instructions {
+      font-size: 11px;
+      color: #94a3b8;
+      line-height: 1.4;
+      margin: 0;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 650;
+      color: #cbd5e1;
+      margin-bottom: 4px;
+    }
+    input, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      background-color: #020617;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #f1f5f9;
+      padding: 8px 10px;
+      font-size: 11px;
+      font-family: monospace;
+    }
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: #6366f1;
+    }
+    .btn-sync {
+      background: linear-gradient(135deg, #2563eb, #4f46e5);
+      border: none;
+      color: white;
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .btn-sync:hover {
+      filter: brightness(1.1);
+    }
+    .btn-sync:active {
+      transform: scale(0.98);
+    }
+    .footer {
+      text-align: center;
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 14px;
+      border-top: 1px solid #1e293b;
+      padding-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo-badge">L</div>
+      <div>
+        <h1 class="title">LanceBot Pro</h1>
+        <p class="subtitle">Sincronizador de Credenciais Comprasnet</p>
+      </div>
+    </div>
+
+    <!-- Status of Capture -->
+    <div class="status-card">
+      <div class="status-row">
+        <span class="status-label">Status do Token</span>
+        <span id="token-status" class="badge badge-waiting">Aguardando...</span>
+      </div>
+      <p id="instruction-text" class="instructions">
+        Faça login em <strong style="color:#e2e8f0">comprasnet.gov.br</strong> e acesse a Sala de Disputa de qualquer item para capturar o token em tempo real.
+      </p>
+    </div>
+
+    <!-- Fields -->
+    <div class="form-group">
+      <label for="panel-url">URL do Painel LanceBot</label>
+      <input type="text" id="panel-url" value="http://localhost:3000">
+    </div>
+
+    <div class="form-group">
+      <label for="token-view">Token Capturado</label>
+      <textarea id="token-view" rows="3" readonly placeholder="Nenhum token capturado ainda..."></textarea>
+    </div>
+
+    <div class="form-group">
+      <label for="cookie-view">Cookies Capturados</label>
+      <textarea id="cookie-view" rows="2" readonly placeholder="Nenhum cookie capturado ainda..."></textarea>
+    </div>
+
+    <button id="btn-sync" class="btn-sync">
+      <span>⚡ Sincronizar com LanceBot</span>
+    </button>
+
+    <div class="footer">
+      LanceBot RPA • Licitações Estratégicas Ao Vivo
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

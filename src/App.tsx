@@ -1,13 +1,16 @@
 import { useState, useEffect } from "react";
 import { 
   FileText, ShieldCheck, Database, FolderGit, FileSpreadsheet, CloudLightning, 
-  HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, CheckCircle, ListTodo, Calculator, Sparkles
+  HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, CheckCircle, ListTodo, Calculator, Sparkles, Cpu, Users,
+  Menu, X, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
 import CompanyDocsTab from "./components/CompanyDocsTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
 import ProductComparatorTab from "./components/ProductComparatorTab";
+import LanceBotTab from "./components/LanceBotTab";
+import CompetitorAnalyzerTab from "./components/CompetitorAnalyzerTab";
 import FloatingAiChat from "./components/FloatingAiChat";
 import DocPreviewModal from "./components/DocPreviewModal";
 import { 
@@ -27,7 +30,9 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"analyzer" | "documents" | "calculator" | "comparator">("analyzer");
+  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors">("analyzer");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
   // App-wide state
   const [companyData, setCompanyData] = useState<CompanyData>(() => {
@@ -168,151 +173,322 @@ export default function App() {
   };
 
   return (
-    <div id="application-container" className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans select-none relative overflow-x-hidden">
+    <div id="application-container" className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col md:flex-row font-sans select-none relative overflow-x-hidden">
       
       {/* Glowing Frosted blur background elements */}
       <div className="absolute top-[-10%] right-[-15%] w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[110px] -z-10 pointer-events-none"></div>
       <div className="absolute bottom-[-10%] left-[10%] w-[400px] h-[400px] bg-indigo-600/10 rounded-full blur-[90px] -z-10 pointer-events-none"></div>
 
-      {/* Upper Brand bar */}
-      <header className="bg-white/5 border-b border-white/10 backdrop-blur-xl text-white shrink-0 shadow-lg relative z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4.5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Mobile Sticky Navbar Header */}
+      <header className="md:hidden bg-white/5 border-b border-white/10 backdrop-blur-xl text-white sticky top-0 z-40 px-4 py-3 flex items-center justify-between shadow-lg">
+        <div className="flex items-center gap-2">
+          <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-1.5 rounded-lg">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <h1 className="text-sm font-bold tracking-tight text-white">
+            Analisador Inteligente
+          </h1>
+        </div>
+        <button
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
+        >
+          {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </button>
+      </header>
+
+      {/* Desktop Sidebar (Persistent) & Mobile Sidebar Drawer */}
+      <aside 
+        className={`
+          fixed inset-y-0 left-0 z-50 md:sticky md:top-0 h-screen bg-[#0c101e]/95 md:bg-[#0c101e]/60 border-r border-white/10 p-5 flex flex-col justify-between shadow-2xl backdrop-blur-xl md:backdrop-blur-md transition-all duration-300 ease-in-out md:translate-x-0
+          ${sidebarCollapsed ? "md:w-20 md:p-3" : "md:w-72 w-72"}
+          ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+        `}
+      >
+        <div className="flex flex-col h-full gap-6">
           
-          {/* Logo Title */}
-          <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-2.5 rounded-xl shadow-lg shadow-indigo-600/20">
-              <ShieldCheck className="w-6 h-6 animate-pulse" />
+          {/* Logo Brand info inside Sidebar */}
+          <div className="flex items-center justify-between border-b border-white/5 pb-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-2 rounded-xl shadow-lg shadow-indigo-600/20 shrink-0">
+                <ShieldCheck className="w-6 h-6 animate-pulse" />
+              </div>
+              {!sidebarCollapsed && (
+                <div className="transition-opacity duration-200">
+                  <h1 className="text-sm font-bold tracking-tight text-white leading-tight truncate">
+                    Analisador de Editais
+                  </h1>
+                  <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider font-semibold truncate">
+                    Auditoria de Certames
+                  </p>
+                </div>
+              )}
             </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-                Analisador Inteligente de Editais
-                <span className="text-[10px] bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                  Auditoria
-                </span>
-              </h1>
-              <p className="text-slate-400 text-xs mt-0.5 font-normal">
-                Estruturação de propostas, qualificação jurídica e gestão fiscal de licitações públicas
-              </p>
-            </div>
+            
+            {/* Collapse toggle button for desktop */}
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              className="hidden md:flex p-1.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer shrink-0"
+              title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}
+            >
+              {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            </button>
+
+            {/* Close button for Mobile drawer only */}
+            <button
+              onClick={() => setMobileMenuOpen(false)}
+              className="md:hidden p-1 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
-          {/* Connection profile Badge info */}
-          <div className="flex items-center gap-3">
+          {/* Navigation Links (Vertical sidebar) */}
+          <nav className="flex-1 space-y-1.5 overflow-y-auto pr-1 scrollbar-none">
+            
+            {/* Nav item: Análise de Edital */}
+            <button
+              id="tab-btn-analyzer"
+              onClick={() => {
+                setActiveTab("analyzer");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "analyzer"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Análise de Edital"
+            >
+              <FileText className="w-4 h-4 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Análise de Edital</span>
+            </button>
+
+            {/* Nav item: Gestão de Certidões */}
+            <button
+              id="tab-btn-documents"
+              onClick={() => {
+                setActiveTab("documents");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "documents"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Gestão de Certidões"
+            >
+              <ListTodo className="w-4 h-4 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Gestão de Certidões</span>
+            </button>
+
+            {/* Nav item: Calculadora */}
+            <button
+              id="tab-btn-calculator"
+              onClick={() => {
+                setActiveTab("calculator");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "calculator"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Calculadora de Preços"
+            >
+              <Calculator className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Calculadora de Preços</span>
+            </button>
+
+            {/* Nav item: Comparador de Produtos */}
+            <button
+              id="tab-btn-comparator"
+              onClick={() => {
+                setActiveTab("comparator");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "comparator"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Comparador de Produtos"
+            >
+              <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Comparador de Produtos</span>
+            </button>
+
+            {/* Nav item: Robô de Lances */}
+            <button
+              id="tab-btn-bot"
+              onClick={() => {
+                setActiveTab("bot");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "bot"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Robô de Lances"
+            >
+              <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Robô de Lances</span>
+            </button>
+
+            {/* Nav item: Analisar Concorrentes */}
+            <button
+              id="tab-btn-competitors"
+              onClick={() => {
+                setActiveTab("competitors");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "competitors"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Analisar Concorrentes"
+            >
+              <Users className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Analisar Concorrentes</span>
+            </button>
+
+          </nav>
+
+          {/* Bottom Sidebar area: Google Connection Integration */}
+          <div className="border-t border-white/5 pt-4 space-y-3.5">
             {googleConnected ? (
-              <div className="bg-emerald-950/40 border border-emerald-500/30 rounded-xl px-4 py-2 flex items-center gap-3 select-none text-xs text-emerald-400">
-                <div className="text-right">
-                  <p className="font-bold">Google Cloud Linked</p>
-                  <p className="text-[10px] text-slate-400 font-mono tracking-tight">{userEmail || "gabrieltrafego7@gmail.com"}</p>
+              <div className={`bg-emerald-950/25 border border-emerald-500/20 rounded-xl p-3 flex flex-col gap-2 select-none text-[11px] text-emerald-400 ${sidebarCollapsed ? "md:p-2 md:items-center" : ""}`}>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  <p className={`font-bold ${sidebarCollapsed ? "md:hidden" : "block"}`}>Workspace Conectado</p>
                 </div>
+                {!sidebarCollapsed && (
+                  <p className="text-[10px] text-slate-400 font-mono tracking-tight truncate">
+                    {userEmail || "gabrieltrafego7@gmail.com"}
+                  </p>
+                )}
                 <button
                   onClick={handleGoogleLogout}
-                  className="bg-emerald-900/40 hover:bg-rose-950/40 border border-emerald-500/25 hover:border-rose-500/30 p-1.5 rounded-lg text-emerald-400 hover:text-rose-400 transition-colors cursor-pointer"
-                  title="Desconectar do Google"
+                  className={`bg-rose-950/30 hover:bg-rose-950/50 border border-rose-500/20 hover:border-rose-500/30 py-1.5 rounded-lg text-rose-400 text-[10px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${sidebarCollapsed ? "w-8 h-8 p-0" : "w-full"}`}
+                  title="Desconectar Google"
                 >
-                  <LogOut className="w-3.5 h-3.5" />
+                  <LogOut className="w-3 h-3" />
+                  {!sidebarCollapsed && <span>Desconectar Google</span>}
                 </button>
               </div>
             ) : (
               <button
                 onClick={handleGoogleLogin}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold text-xs py-2.5 px-4 rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-indigo-600/20 border border-white/10"
+                className={`bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition-all cursor-pointer shadow-lg shadow-indigo-600/10 border border-white/10 flex items-center justify-center ${
+                  sidebarCollapsed ? "md:w-8 md:h-8 md:p-0 w-full py-2.5 px-3 rounded-xl text-[10px] gap-1.5" : "w-full py-2.5 px-3 rounded-xl text-[10px] gap-1.5"
+                }`}
+                title="Conectar Workspace"
               >
-                <LogIn className="w-4 h-4" />
-                Conectar Workspace (Sheets/Drive)
+                <LogIn className="w-3.5 h-3.5" />
+                {!sidebarCollapsed && <span>Conectar Workspace</span>}
               </button>
             )}
-          </div>
 
-        </div>
-      </header>
-
-      {/* Main Orchestration grid area */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-8 relative z-10">
-        
-        {/* Workspace Central interactive core (Tabs selection and Tabs view) */}
-        <div className="w-full space-y-6">
-          
-          {/* Tabs Toggles */}
-          <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-1.5 flex flex-col md:flex-row items-stretch md:items-center gap-1.5 shadow-lg select-none">
-            <button
-              onClick={() => setActiveTab("analyzer")}
-              className={`flex-1 py-3 px-4 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                activeTab === "analyzer"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-            >
-              <FileText className="w-4.5 h-4.5" />
-              Análise de Edital & Criação Documental
-            </button>
-            
-            <button
-              onClick={() => setActiveTab("documents")}
-              className={`flex-1 py-3 px-4 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                activeTab === "documents"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-            >
-              <ListTodo className="w-4.5 h-4.5" />
-              Gestão de Certidões & Portfólio Fiscal
-            </button>
-
-             <button
-              onClick={() => setActiveTab("calculator")}
-              className={`flex-1 py-3 px-4 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                activeTab === "calculator"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-            >
-              <Calculator className="w-4.5 h-4.5 text-emerald-400" />
-              Planilha de Custos & Margem
-            </button>
-
-            <button
-              onClick={() => setActiveTab("comparator")}
-              className={`flex-1 py-3 px-4 rounded-lg font-bold text-xs md:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
-                activeTab === "comparator"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-            >
-              <Sparkles className="w-4.5 h-4.5 text-indigo-400" />
-              Comparador de Produtos
-            </button>
-          </div>
-
-          {/* Active rendering view */}
-          <div className="select-text w-full">
-            {activeTab === "analyzer" ? (
-              <EditalAnalyzerTab 
-                companyData={companyData} 
-                activeEdital={activeEdital}
-                setActiveEdital={setActiveEdital}
-                onOpenDocPreview={handleOpenDocPreview}
-              />
-            ) : activeTab === "documents" ? (
-              <CompanyDocsTab 
-                companyData={companyData} 
-                setCompanyData={setCompanyData}
-                activeEdital={activeEdital}
-              />
-            ) : activeTab === "calculator" ? (
-              <PricingCalculatorTab
-                companyData={companyData}
-                activeEdital={activeEdital}
-              />
-            ) : (
-              <ProductComparatorTab
-                activeEdital={activeEdital}
-              />
+            {/* Sync status compact logs */}
+            {!sidebarCollapsed && (
+              <div className="bg-slate-900/40 p-2.5 rounded-xl border border-white/5 text-[9px] text-slate-500 space-y-1 font-mono md:block hidden">
+                <span className="text-slate-400 font-bold block">LOGS DE SINCRONISMO:</span>
+                <p className="truncate">{syncLogs[0] || "Sem logs registrados"}</p>
+              </div>
             )}
           </div>
 
         </div>
+      </aside>
 
-      </main>
+      {/* Backdrop for Mobile Sidebar Drawer */}
+      {mobileMenuOpen && (
+        <div 
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-40 md:hidden"
+        />
+      )}
+
+      {/* Main Content Pane */}
+      <div className="flex-1 flex flex-col min-w-0">
+        
+        {/* Top bar header only for desktop to show page details & header spacing */}
+        <header className="hidden md:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-10">
+          <div>
+            <h2 className="text-sm font-bold text-white tracking-wide uppercase">
+              Painel Operacional
+            </h2>
+            <p className="text-slate-400 text-xs mt-0.5">
+              {activeTab === "analyzer" ? "Carregamento e Inteligência Artificial de Editais" :
+               activeTab === "documents" ? "Gestão de Habilitação Jurídica e Fiscal" :
+               activeTab === "calculator" ? "Modelagem Financeira e BDI de Licitações" :
+               activeTab === "comparator" ? "Compatibilização Técnica de Especificações" :
+               activeTab === "bot" ? "Simulador de Disputa de Lances Finais" :
+               "Auditoria Legal de Documentação de Concorrentes"}
+            </p>
+          </div>
+          <div className="text-[10px] font-mono text-slate-500 bg-slate-900/60 px-3 py-1.5 rounded-lg border border-white/5">
+            SISTEMA ATIVO (UTC)
+          </div>
+        </header>
+
+        {/* Content Scrolling Stage Area */}
+        <main className="flex-1 p-4 md:p-8 overflow-y-auto relative z-10">
+          <div className="max-w-7xl mx-auto w-full">
+            
+            {/* Active Render Stage Tab Component */}
+            <div className="select-text w-full">
+              {activeTab === "analyzer" ? (
+                <EditalAnalyzerTab 
+                  companyData={companyData} 
+                  activeEdital={activeEdital}
+                  setActiveEdital={setActiveEdital}
+                  onOpenDocPreview={handleOpenDocPreview}
+                />
+              ) : activeTab === "documents" ? (
+                <CompanyDocsTab 
+                  companyData={companyData} 
+                  setCompanyData={setCompanyData}
+                  activeEdital={activeEdital}
+                />
+              ) : activeTab === "calculator" ? (
+                <PricingCalculatorTab
+                  companyData={companyData}
+                  activeEdital={activeEdital}
+                />
+              ) : activeTab === "comparator" ? (
+                <ProductComparatorTab
+                  activeEdital={activeEdital}
+                />
+              ) : activeTab === "bot" ? (
+                <LanceBotTab
+                  activeEdital={activeEdital}
+                />
+              ) : (
+                <CompetitorAnalyzerTab
+                  activeEdital={activeEdital}
+                />
+              )}
+            </div>
+
+          </div>
+        </main>
+
+      </div>
 
       {/* Dynamic Modal Previews */}
       <DocPreviewModal

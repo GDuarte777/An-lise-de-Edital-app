@@ -69,11 +69,26 @@ export interface EditalAnalysis {
 
 export type ChatRole = "user" | "assistant";
 
+export interface Attachment {
+  name: string;
+  type: string;
+  data: string; // Base64 representation of imagery/data files
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   timestamp: string;
+  attachment?: Attachment;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  selectedEditalId: string; // Empty string for none, "active" for active in memory, or edital timestamp/id
+  messages: ChatMessage[];
+  createdAt: string;
 }
 
 export interface SyncItem {
@@ -83,4 +98,30 @@ export interface SyncItem {
   path: string;
   timestamp: string;
   url?: string;
+}
+
+export interface CompetitorIrregularity {
+  campoExigido: string;
+  propostaConcorrente: string;
+  gravidade: "ALTA" | "MÉDIA" | "BAIXA";
+  baseLegal: string;
+  impacto: string;
+}
+
+export interface CompetitorAnalysis {
+  competitorName?: string;
+  isCompliant: boolean;
+  irregularidadesEncontradas: CompetitorIrregularity[];
+  pontosFortesConcorrente: string[];
+  modeloRecurso: string;
+  analiseEstiloMarkdown: string;
+}
+
+export interface CompetitorHistoryItem {
+  id: string;
+  competitorName: string;
+  focusItems: string;
+  date: string;
+  editalTitle?: string;
+  analysis: CompetitorAnalysis;
 }

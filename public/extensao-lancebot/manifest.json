@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "LanceBot Pro - Capturador de Sessão",
+  "version": "1.0.0",
+  "description": "Captura de forma segura e automática tokens de autorização e cookies do Compras.gov.br e sincroniza diretamente com seu robô LanceBot.",
+  "permissions": [
+    "webRequest",
+    "storage",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://sala-disputa.comprasnet.gov.br/*",
+    "https://*.comprasnet.gov.br/*",
+    "https://*.compras.gov.br/*",
+    "http://localhost:3000/*",
+    "https://*.run.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
