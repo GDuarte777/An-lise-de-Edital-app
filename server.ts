@@ -271,47 +271,83 @@ function parseCertificateLocally(docName: string): any {
   };
 }
 
-function generateDocumentLocally(docType: string, companyData: any, activeEdital: any): string {
+function generateDocumentLocally(docType: string, companyData: any, activeEdital: any, proposalDetails?: any): string {
   const company = companyData || { razonSocial: "Sua Empresa", cnpj: "12.345.678/0001-90", representativeName: "Seu Nome" };
   const editalNum = activeEdital?.identificacaoCertame?.identificacaoNumerica || "Pregão nº 042/2026";
   const orgao = activeEdital?.identificacaoCertame?.orgaoComprador || "Órgão Comprador";
   
   if (docType === "proposal") {
+    const details = proposalDetails || {};
+    const items = details.proposalItems || [];
+    let itemsRows = "";
+    if (items.length > 0) {
+      itemsRows = items.map((it: any, idx: number) => 
+        `| ${idx + 1} | ${it.description} | ${it.quantity} | ${it.brandModel} | R$ ${it.unitValue} | R$ ${it.totalValue} |`
+      ).join("\n");
+    } else {
+      itemsRows = `| 1 | ${activeEdital?.descricaoProduto || "Equipamento conforme edital"} | 08 | Modelo Ofertado | R$ 0,00 | R$ 0,00 |`;
+    }
+
     return `
-# PROPOSTA COMERCIAL DETALHADA (MODO DE SEGURANÇA LOCAL)
-**À comissão de licitação de: ${orgao}**
-**Referência:** Licitação Eletrônica / ${editalNum}
+# ${company.razonSocial || "GABRIEL DUARTE MOTA SOUZA"}
+**CNPJ:** ${company.cnpj || "45.153.397/0001-90"}
+**E-mail:** ${company.email || "GABRIELTRAFEGO7@GMAIL.COM"} | **Tel:** ${company.phone || "(75) 9993-0808"} | ${company.address || "Alagoinhas - BA"}
 
 ---
 
-### 1. DADOS DA PROPONENTE
-- **Razão Social:** ${company.razonSocial}
-- **CNPJ:** ${company.cnpj}
-- **Endereço:** ${company.address || "Av. Principal, nº 100"}
-- **Representante Legal:** ${company.representativeName}
-- **Contato:** ${company.phone || "(11) 98888-7777"} | ${company.email || "comercial@empresa.com.br"}
+<div style="text-align: center; border: 1px solid rgba(255, 255, 255, 0.15); padding: 15px; margin: 20px 0; border-radius: 8px;">
+  <h2 style="margin: 0; font-size: 18px; font-weight: bold; letter-spacing: 1px;">PROPOSTA COMERCIAL</h2>
+  <p style="margin: 5px 0 0 0; font-size: 12px; color: #a0aec0;">${details.proposalDispensa || "Dispensa de Licitação nº 046/2026"} — ${details.proposalProcesso || "Processo Administrativo nº 209/2026"}</p>
+</div>
 
-### 2. ESPECIFICAÇÃO DO PRODUTO OFERTADO
-Abaixo, apresentamos as características técnicas detalhadas do produto proposto, em total consonância e conformidade com as exigências contidas no Termo de Referência do Edital supramencionado.
+Ao **Setor de Dispensa / Comissão de Licitação da ${details.proposalOrgao || orgao}**
 
-| Item | Descrição do Objeto do Edital | Produto Proposto (Marca/Modelo/Ficha) | Qtd | Valor Unitário (R$) | Valor Total (R$) |
+A empresa proponente abaixo identificada apresenta sua proposta comercial escrita e formal para o ${details.proposalObject || "fornecimento dos itens contratados"}, declarando aceitar irrestritamente todas as diretrizes regulamentares da presente licitação.
+
+### 1. IDENTIFICAÇÃO DO CONCORRENTE
+| | |
+|---|---|
+| **Razão Social:** | ${company.razonSocial || "GABRIEL DUARTE MOTA SOUZA"} |
+| **CNPJ:** | ${company.cnpj || "45.153.397/0001-90"} |
+| **Endereço Comercial:** | ${company.address || "AV CONSELHEIRO JUNQUEIRA, Nº 595, BAIRRO CATU, ALAGOINHAS - BA, CEP: 48.015-900"} |
+| **Telefone / WhatsApp:** | ${company.phone || "(75) 9993-0808"} |
+| **E-mail Comercial:** | ${company.email || "GABRIELTRAFEGO7@GMAIL.COM"} |
+| **Responsável Legal:** | ${company.representativeName || "GABRIEL DUARTE MOTA SOUZA"} |
+| **Dados Bancários:** | ${company.bankDetails || "Banco: Nu Pagamentos S.A - Instituição de Pagamento (Cód. 0260) | Agência: 0001 | Conta: 64252707-9"} |
+
+### 2. PLANILHA DE QUANTITATIVOS, ESPECIFICAÇÕES E PREÇOS
+| Item | Descrição Detalhada do Produto Conforme o Edital e Marca Ofertada | Qtd. | Marca / Modelo | Valor Unit. | Valor Total |
 |---|---|---|---|---|---|
-| 01 | ${activeEdital?.descricaoProduto || "Fone de Ouvido USB/Ajustes"} | Conforme especificações exigidas de alto rendimento | 150 | R$ 120,00 | R$ 18.000,00 |
+${itemsRows}
 
-### 3. CONDIÇÕES GERAIS DA PROPOSTA
-1. **Prazo de Entrega:** Até 15 (quinze) dias corridos a contar da correspondente assinatura da Autorização de Fornecimento ou Empenho.
-2. **Prazo de Garantia:** 12 (doze) meses de garantia integral contra defeitos de fabricação.
-3. **Validade da Proposta:** 60 (sessenta) dias a contar da data de abertura oficial da sessão pública deste certame.
-4. **Condições de Pagamento:** Conforme estipulado no Edital, via ordem bancária em até 30 dias após aceitação das notas fiscais.
+**VALOR TOTAL GLOBAL DA PROPOSTA:** R$ ${details.totalValueGlobal || "0,00"}
+**VALOR TOTAL POR EXTENSO:** ${details.totalValueExtenso || "Zero reais."}
 
-### 4. DECLARAÇÃO DE CUMPRIMENTO
-Declaramos, para todos os fins de direito e sob as penalidades legais, que os produtos ofertados atendem plenamente inclusive a todas as diretrizes ecológicas e de padronização vigentes no país.
+### 3. CONDIÇÕES COMERCIAIS OBRIGATÓRIAS
+| | |
+|---|---|
+| **Prazo de Validade:** | ${details.valPrazo || "60 (sessenta) dias, a contar da data de apresentação deste documento."} |
+| **Condições de Pagamento:** | ${details.valPgto || "Em até 30 (trinta) dias úteis, contados da finalização da regular liquidação da despesa pelo Município."} |
+| **Prazo de Entrega:** | ${details.valEntrega || "Até 15 (quinze) dias corridos, contados a partir do recebimento da Ordem de Fornecimento ou Nota de Empenho."} |
+| **Local de Entrega:** | ${details.valLocal || "Secretaria Municipal de Educação de Juazeiro/BA, diretamente no Setor de TI. Sem custos logísticos para o órgão."} |
 
-São Paulo, ${new Date().toLocaleDateString('pt-BR')}.
+### 4. DECLARAÇÕES LEGAIS OBRIGATÓRIAS
+- Declaramos que a presente proposta está em conformidade com todos os preceitos legais e regulamentares em vigor.
+- Declaramos que a validade desta proposta é de 60 (sessenta) dias, a contar da data de sua entrega.
+- Declaramos expressamente que, nos preços acima ofertados, estão inclusos todos os custos indiretos tais como: impostos, taxas, fretes, seguros, embalagens, montagem e entrega do material, bem como quaisquer outras despesas diretas e indiretas.
+- Declaramos que concordamos com as cláusulas dispostas no Edital, Termo de Referência e demais anexos, referentes à presente aquisição.
+- Declaramos que a empresa não está sob pena de interdição de direitos previstos na Lei N. 9.605, de 12.02.98 (Lei de crimes ambientais).
+- Declaramos que o prazo de entrega do material cotado acima é de 15 (quinze) dias corridos contados a partir do primeiro dia útil subsequente ao recebimento da respectiva Nota de Empenho.
 
-__________________________________________________
-**${company.representativeName}**
-Representante de Vendas - ${company.razonSocial}
+${details.proposalDate || "Alagoinhas - BA, 21 de junho de 2026."}
+
+<br/><br/>
+<div style="text-align: center;">
+  <p>__________________________________________________________________</p>
+  <p><strong>${company.representativeName || "GABRIEL DUARTE MOTA SOUZA"}</strong></p>
+  <p style="font-size: 11px; color: #a0aec0; margin-top: 2px;">Representante Legal / Titular</p>
+  <p style="font-size: 11px; color: #a0aec0;">CPF: ${company.representativeCpf || "063.976.775-32"} | CNPJ: ${company.cnpj || "45.153.397/0001-90"}</p>
+</div>
 `;
   } else {
     return `
@@ -1002,36 +1038,66 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
   // API Route: Generate Document (Proposals, Declarations, etc.)
   app.post("/api/generate-document", async (req, res): Promise<any> => {
     try {
-      const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText } = req.body;
+      const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText, proposalDetails } = req.body;
 
       let prompt = "";
 
       if (docType === "proposal") {
+        const details = proposalDetails || {};
+        const items = details.proposalItems || [];
+        const itemsListText = items.map((it: any, idx: number) => 
+          `| ${idx + 1} | ${it.description} | ${it.quantity} | ${it.brandModel} | R$ ${it.unitValue} | R$ ${it.totalValue} |`
+        ).join("\n");
+
         prompt = `
-Você é um analista experiente em licitações públicas. Escreva uma PROPOSTA COMERCIAL formal, em formato Markdown profissional e completa, direcionada ao órgão licitante do pregão.
-Dados do Edital analisado:
-- Descrição do Produto exigido: ${analysisData?.descricaoProduto || "Não informado"}
-- Prazo de entrega previsto: ${analysisData?.prazoEntrega || "Conforme edital"}
-- Condições de pagamento previstas: ${analysisData?.prazoPagamento || "Conforme edital"}
+Você é um consultor especialista em licitações e editais governamentais no Brasil.
+Seu objetivo é gerar uma PROPOSTA COMERCIAL formal, em formato Markdown profissional e completa, baseada estritamente no modelo oficial de proposta fornecido pelo usuário.
 
-Dados da Empresa Proponente (Meus Dados):
-- Nome da Empresa / Razão Social: ${companyData?.razonSocial || "Minha Empresa"}
-- CNPJ: ${companyData?.cnpj || "00.000.000/0001-00"}
-- Endereço completo: ${companyData?.address || "Rua Principal, Cidade"}
-- E-mail de contato: ${companyData?.email || "contato@empresa.com"}
-- Telefone: ${companyData?.phone || "(00) 00000-0000"}
+Siga exatamente o layout, estilo e estrutura do modelo a seguir, preenchendo todos os dados de acordo com os detalhes fornecidos pelo usuário e com as exigências específicas do edital.
 
-Instruções Extras: ${extraInstructions || "Nenhuma específica."}
+--- MODELO DE ESTRUTURA REQUERIDO (MANTENHA ESTA CONFIGURAÇÃO EXATA DE SEÇÕES) ---
+1. Cabeçalho Principal (Nome do proponente destacado em negrito, CNPJ, E-mail, Tel, Cidade - UF).
+2. Título Centralizado "PROPOSTA COMERCIAL" destacado, seguido do número do Pregão/Dispensa e Processo Administrativo.
+3. Destinatário formal ("Ao Setor de Dispensa / Comissão de Licitação da [Secretaria/Orgão Licitante]").
+4. Parágrafo de abertura declarando aceitar irrestritamente as diretrizes da presente Chamada Pública ou Pregão.
+5. Seção "1. IDENTIFICAÇÃO DO CONCORRENTE" formatada em tabela limpa, contendo as colunas/linhas: Razão Social, CNPJ, Endereço Comercial, Telefone / WhatsApp, E-mail Comercial, Responsável Legal e Dados Bancários.
+6. Seção "2. PLANILHA DE QUANTITATIVOS, ESPECIFICAÇÕES E PREÇOS" em tabela com colunas exatas: Item | Descrição Detalhada do Produto Conforme o Edital e Marca Ofertada | Qtd. | Marca / Modelo | Valor Unit. | Valor Total.
+   - Logo abaixo da tabela de itens, apresente destacado em caixa ou negrito:
+     **VALOR TOTAL GLOBAL DA PROPOSTA:** R$ [SOMA TOTAL GLOBAL]
+     **VALOR TOTAL POR EXTENSO:** [TOTAL GLOBAL POR EXTENSO]
+7. Seção "3. CONDIÇÕES COMERCIAIS OBRIGATÓRIAS" em tabela ou lista formal com: Prazo de Validade, Condições de Pagamento, Prazo de Entrega, e Local de Entrega.
+8. Seção "4. DECLARAÇÕES LEGAIS OBRIGATÓRIAS" contendo as declarações tradicionais obrigatórias (conformidade com leis, validade da proposta, inclusão de tributos/fretes, concordância com o edital, regularidade ambiental, e prazo de entrega).
+9. Fechamento formal com Cidade-UF, Data por extenso, e Bloco de Assinatura centralizado com Linha de assinatura, Nome do Representante, Cargo "Representante Legal / Titular", CPF e CNPJ.
 
-A proposta comercial deve seguir as melhores práticas para pregão eletrônico brasileiro. Deve conter:
-1. Cabeçalho formal (Identificação da empresa proponente e do Órgão Licitador/Pregão).
-2. Tabela de Itens (com campos de Descrição, Quantidade Estimada, Preço Unitário Comercial Sugerido - coloque R$ _,__ para preenchimento, e Especificação Técnica).
-3. Declaração do prazo de entrega da mercadoria (comprometendo-se exatamente com os termos requeridos).
-4. Declaração do prazo de validade da proposta (normalmente 60 dias).
-5. Dados bancários para recebimento (deixe em branco ou coloque placeholders estruturados).
-6. Rodapé elegante com campos de assinatura para o Representante Legal.
+--- DADOS DA EMPRESA PROPONENTE ---
+- Nome / Razão Social: ${companyData?.razonSocial || "GABRIEL DUARTE MOTA SOUZA"}
+- CNPJ: ${companyData?.cnpj || "45.153.397/0001-90"}
+- Endereço completo: ${companyData?.address || "AV CONSELHEIRO JUNQUEIRA, Nº 595, BAIRRO CATU, ALAGOINHAS - BA, CEP: 48.015-900"}
+- E-mail: ${companyData?.email || "GABRIELTRAFEGO7@GMAIL.COM"}
+- Telefone: ${companyData?.phone || "(75) 9993-0808"}
+- Responsável Legal: ${companyData?.representativeName || "GABRIEL DUARTE MOTA SOUZA"}
+- CPF do Representante: ${companyData?.representativeCpf || "063.976.775-32"}
+- Dados Bancários: ${companyData?.bankDetails || "Banco: Nu Pagamentos S.A - Instituição de Pagamento (Cód. 0260) | Agência: 0001 | Conta: 64252707-9"}
 
-Retorne APENAS o documento estruturado e formatado em Markdown com excelente visual, ideal para exportar para PDF.
+--- DADOS DA PROPOSTA PERSONALIZADA PELO USUÁRIO ---
+- Título da Proposta/Modalidade: ${details.proposalDispensa || "Dispensa de Licitação nº 046/2026"}
+- Processo Administrativo: ${details.proposalProcesso || "Processo Administrativo nº 209/2026"}
+- Órgão Destinatário: ${details.proposalOrgao || "Secretaria Municipal de Educação de Juazeiro/BA"}
+- Objeto/Intro: ${details.proposalObject || "fornecimento de equipamentos audiovisuais e tecnológicos destinados ao preenchimento integral das metas do Programa Educomunicativo Conexão Escola, sob coordenação da TV Escola Juazeiro"}
+- Itens da Proposta (Use estes valores exatos na tabela de preços):
+${itemsListText || `| 1 | ${analysisData?.descricaoProduto || "Equipamentos audiovisuais conforme especificações do edital"} | 08 | Marca Ofertada | R$ _,__ | R$ _,__ |`}
+- Valor Total Global da Proposta: R$ ${details.totalValueGlobal || "0,00"}
+- Valor Total por Extenso: ${details.totalValueExtenso || "Zero reais."}
+- Prazo de Validade da Proposta: ${details.valPrazo || "60 (sessenta) dias, a contar da data de apresentação deste documento."}
+- Condições de Pagamento: ${details.valPgto || "Em até 30 (trinta) dias úteis, contados da finalização da regular liquidação da despesa pelo Município."}
+- Prazo de Entrega: ${details.valEntrega || "Até 15 (quinze) dias corridos, contados a partir do recebimento da Ordem de Fornecimento ou Nota de Empenho."}
+- Local de Entrega: ${details.valLocal || "Secretaria Municipal de Educação de Juazeiro/BA, diretamente no Setor de TI. Sem custos logísticos para o órgão."}
+- Data e Local de Emissão: ${details.proposalDate || "Alagoinhas - BA, " + new Date().toLocaleDateString('pt-BR')}
+
+--- INSTRUÇÕES ADICIONAIS DO USUÁRIO ---
+${extraInstructions || "Nenhuma específica."}
+
+Gere o documento completo formatado em Markdown impecável, pronto para impressão ou conversão para PDF. Mantenha os valores monetários exatamente nos valores solicitados e preenchidos acima. Do não adicione introduções como "Aqui está a proposta", retorne APENAS o documento estruturado.
 `;
       } else if (docType === "joint_declaration") {
         prompt = `
@@ -1085,13 +1151,19 @@ Manter a redação original do modelo fornecido pelo usuário, apenas aprimorand
         contents: prompt,
       });
 
-      return res.json({ markdown: response.text });
+      return res.json({ 
+        markdown: response.text,
+        title: docType === "proposal" ? (proposalDetails?.proposalFileTitle || "Proposta Comercial de Licitação.md") : undefined
+      });
     } catch (error: any) {
       console.error("Erro na geração de documento, aplicando fallback inteligente local...", error);
       try {
-        const { docType, companyData, analysisData } = req.body;
-        const fallbackDoc = generateDocumentLocally(docType, companyData, analysisData);
-        return res.json({ markdown: fallbackDoc });
+        const { docType, companyData, analysisData, proposalDetails } = req.body;
+        const fallbackDoc = generateDocumentLocally(docType, companyData, analysisData, proposalDetails);
+        return res.json({ 
+          markdown: fallbackDoc,
+          title: docType === "proposal" ? (proposalDetails?.proposalFileTitle || "Proposta Comercial de Licitação.md") : undefined
+        });
       } catch (fallbackError: any) {
         return res.status(500).json({ error: "Erro ao preencher documento local." });
       }
@@ -1262,6 +1334,39 @@ Escreva suas respostas de forma polida e profissional utilizando formatação Ma
       } catch (fallbackError: any) {
         return res.status(500).json({ error: "Erro ao processar chat local." });
       }
+    }
+  });
+
+  // API Route: Generate Chat Title based on first message
+  app.post("/api/chat/title", async (req, res): Promise<any> => {
+    try {
+      const { message } = req.body;
+      if (!message || typeof message !== "string") {
+        return res.status(400).json({ error: "Mensagem ausente ou inválida." });
+      }
+
+      const prompt = `Gere um título curto, direto e descritivo (no máximo 3 ou 4 palavras) para um chat de licitações públicas que se inicia com a seguinte dúvida do usuário. Não coloque aspas, não adicione pontos finais nem explicações adicionais, retorne APENAS o título direto em português do Brasil. Se for apenas uma saudação inicial simples (como 'olá', 'tudo bem', 'bom dia'), retorne 'Conversa Rápida'.
+
+Dúvida do usuário: "${message.substring(0, 500)}"`;
+
+      console.log("Chamando Gemini API para gerar título de conversa...");
+      const response = await generateContentWithFallback({
+        model: "gemini-3.5-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      });
+
+      let generatedTitle = response.text ? response.text.trim() : "";
+      // Strip any surrounding quotes or punctuation if the AI included them
+      generatedTitle = generatedTitle.replace(/^["'“”‘`]+|["'“”’`]+$/g, "").replace(/[.!?]+$/, "").trim();
+
+      if (!generatedTitle || generatedTitle.length > 50) {
+        generatedTitle = "Discussão de Edital";
+      }
+
+      return res.json({ title: generatedTitle });
+    } catch (error: any) {
+      console.error("Erro ao gerar título de conversa, usando fallback local...", error);
+      return res.json({ title: null });
     }
   });
 

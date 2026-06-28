@@ -11,11 +11,20 @@ import PricingCalculatorTab from "./components/PricingCalculatorTab";
 import ProductComparatorTab from "./components/ProductComparatorTab";
 import LanceBotTab from "./components/LanceBotTab";
 import CompetitorAnalyzerTab from "./components/CompetitorAnalyzerTab";
+import CloudSyncTab from "./components/CloudSyncTab";
 import FloatingAiChat from "./components/FloatingAiChat";
 import DocPreviewModal from "./components/DocPreviewModal";
 import { 
-  getSyncedItems, getGoogleAccessToken, setGoogleAccessToken, isGoogleConnected 
+  getSyncedItems, getGoogleAccessToken, isGoogleConnected, initAuth, googleSignIn, logout 
 } from "./utils/googleSync";
+import {
+  getSupabaseConfig,
+  getSupabaseClient,
+  signUpWithSupabase,
+  signInWithSupabase,
+  signOutWithSupabase
+} from "./utils/supabaseClient";
+import SupabaseLoginScreen from "./components/SupabaseLoginScreen";
 
 // Default Initial Corporate profile representing a Brazilian company 
 const DEFAULT_COMPANY_DATA: CompanyData = {
@@ -30,7 +39,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors">("analyzer");
+  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "sync">("analyzer");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
@@ -75,6 +84,21 @@ export default function App() {
   const [googleConnected, setGoogleConnected] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
+  // Supabase SaaS states
+  const [supabaseUser, setSupabaseUser] = useState<any | null>(null);
+  const [supabaseModalOpen, setSupabaseModalOpen] = useState(false);
+  const [saasPlan, setSaasPlan] = useState<string>(() => {
+    return localStorage.getItem("supabase_saas_plan") || "Free";
+  });
+  const [supabaseConnected, setSupabaseConnected] = useState(false);
+
+  // Supabase dynamic auth credentials inside modal
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState<{ success: boolean; message: string } | null>(null);
+
   // Sync Log list
   const [syncLogs, setSyncLogs] = useState<string[]>([
     "Sistema inicializado com sucesso.",
@@ -110,7 +134,62 @@ export default function App() {
     // Read synced items list
     setSyncedItems(getSyncedItems());
     setGoogleConnected(isGoogleConnected());
+
+    const unsubscribe = initAuth(
+      (user) => {
+        setGoogleConnected(true);
+        setUserEmail(user.email);
+        addLogMessage(`Sincronismo com Google Workspace ativo: ${user.email}`);
+      },
+      () => {
+        setGoogleConnected(false);
+        setUserEmail(null);
+      }
+    );
+
+    const handleSyncUpdate = () => {
+      setSyncedItems(getSyncedItems());
+      setGoogleConnected(isGoogleConnected());
+    };
+    window.addEventListener("gdrive-sync-updated", handleSyncUpdate);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("gdrive-sync-updated", handleSyncUpdate);
+    };
   }, []);
+
+  // Sync Supabase user session on mount
+  useEffect(() => {
+    const config = getSupabaseConfig();
+    const isConn = !!config.url && !!config.anonKey;
+    setSupabaseConnected(isConn);
+
+    if (isConn) {
+      const client = getSupabaseClient();
+      if (client) {
+        client.auth.getUser().then(({ data }) => {
+          if (data?.user) {
+            setSupabaseUser(data.user);
+            addLogMessage(`Sessão SaaS Supabase carregada: ${data.user.email}`);
+          }
+        }).catch(() => {});
+
+        // Listen for Auth changes in realtime
+        const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+          if (session?.user) {
+            setSupabaseUser(session.user);
+          } else {
+            setSupabaseUser(null);
+          }
+        });
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      }
+    }
+  }, [supabaseModalOpen]);
 
   const addLogMessage = (msg: string) => {
     const timestamp = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -119,51 +198,79 @@ export default function App() {
     setSyncedItems(getSyncedItems());
   };
 
-  // Client side Google OAuth loader using GSI
-  const handleGoogleLogin = () => {
+  // Client side Google OAuth loader using Firebase SDK
+  const handleGoogleLogin = async () => {
     try {
-      // In a normal sandbox environment, we instantiate GSI client token box
-      addLogMessage("Iniciando fluxo de autorização client-side do Google...");
-
-      // Standard Google OAuth GIS implicit authorization flow
-      // We instruct global google auth API
-      const client = (window as any).google?.accounts?.oauth2?.initTokenClient({
-        client_id: "395692175339-dummygdriveclientid.apps.googleusercontent.com", // Dummy client ID, since user can also provide theirs or run in sandbox
-        scope: "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/spreadsheets",
-        callback: (tokenResponse: any) => {
-          if (tokenResponse.access_token) {
-            setGoogleAccessToken(tokenResponse.access_token);
-            setGoogleConnected(true);
-            setUserEmail("gabrieltrafego7@gmail.com");
-            addLogMessage("Conectado à sua conta do Google com sucesso. Escopos de escrita concedidos!");
-          }
-        },
-      });
-
-      if (client) {
-        client.requestAccessToken();
-      } else {
-        // Fallback or Sandbox mock login
-        // If GIS script is not fully active yet, trigger elegant simulator connection that represents a fully integrated state
-        setTimeout(() => {
-          setGoogleAccessToken("mock-token-gsi-0488295334");
-          setGoogleConnected(true);
-          setUserEmail("gabrieltrafego7@gmail.com");
-          addLogMessage("Sincronismo com Google Drive [Conectado]. Pasta 'Analisador_Pregões' vinculada.");
-          addLogMessage("Sincronismo com Google Planilhas [Conectado]. Tabela de auditoria vinculada.");
-        }, 1000);
+      addLogMessage("Iniciando fluxo de login do Google...");
+      const result = await googleSignIn();
+      if (result) {
+        setGoogleConnected(true);
+        setUserEmail(result.user.email);
+        addLogMessage(`Conectado com sucesso à sua conta Google: ${result.user.email}`);
+        addLogMessage("Pronto para sincronizar arquivos com o Google Drive e Sheets real!");
       }
     } catch (err: any) {
       console.error(err);
-      addLogMessage(`Aviso de conexão: operando em Modo de Saturação Sandbox (Drive local sincronizado).`);
+      addLogMessage(`Erro ao autenticar com o Google: ${err.message || err}`);
     }
   };
 
-  const handleGoogleLogout = () => {
-    setGoogleAccessToken(null);
-    setGoogleConnected(false);
-    setUserEmail(null);
-    addLogMessage("Logout efetuado da conta Google. Arquivos salvos localmente.");
+  const handleGoogleLogout = async () => {
+    try {
+      await logout();
+      setGoogleConnected(false);
+      setUserEmail(null);
+      addLogMessage("Desconectado da conta Google Workspace.");
+    } catch (err: any) {
+      console.error(err);
+      addLogMessage(`Erro ao fazer logout: ${err.message || err}`);
+    }
+  };
+
+  const handleSaaSAuthAction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthMessage(null);
+    try {
+      if (authMode === "signup") {
+        const res = await signUpWithSupabase(authEmail, authPassword);
+        setAuthMessage(res);
+        if (res.success && res.user) {
+          setSupabaseUser(res.user);
+          addLogMessage(`Nova conta SaaS criada no Supabase Auth: ${res.user.email}`);
+        }
+      } else {
+        const res = await signInWithSupabase(authEmail, authPassword);
+        setAuthMessage(res);
+        if (res.success && res.session?.user) {
+          setSupabaseUser(res.session.user);
+          addLogMessage(`Sessão SaaS Supabase autenticada: ${res.session.user.email}`);
+          setTimeout(() => setSupabaseModalOpen(false), 1500);
+        }
+      }
+    } catch (err: any) {
+      setAuthMessage({ success: false, message: err.message || "Erro no processamento da autenticação." });
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSaaSSignOut = async () => {
+    try {
+      await signOutWithSupabase();
+      setSupabaseUser(null);
+      addLogMessage("Sessão SaaS encerrada.");
+      setSupabaseModalOpen(false);
+    } catch (err: any) {
+      console.error(err);
+      addLogMessage(`Erro ao encerrar sessão: ${err.message || err}`);
+    }
+  };
+
+  const handleChangePlan = (newPlan: string) => {
+    setSaasPlan(newPlan);
+    localStorage.setItem("supabase_saas_plan", newPlan);
+    addLogMessage(`Plano SaaS atualizado para: ${newPlan}`);
   };
 
   const handleOpenDocPreview = (title: string, markdown: string, type: "proposal" | "declaration") => {
@@ -171,6 +278,18 @@ export default function App() {
     setPreviewModalOpen(true);
     addLogMessage(`Criado documento "${title}" via IA Gemini 3.5-flash.`);
   };
+  
+  if (!supabaseUser) {
+    return (
+      <SupabaseLoginScreen 
+        onLoginSuccess={(user) => {
+          setSupabaseUser(user);
+          setSupabaseConnected(true);
+          addLogMessage(`Sessão SaaS autenticada: ${user.email}`);
+        }} 
+      />
+    );
+  }
 
   return (
     <div id="application-container" className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col md:flex-row font-sans select-none relative overflow-x-hidden">
@@ -366,10 +485,57 @@ export default function App() {
               <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Analisar Concorrentes</span>
             </button>
 
+            {/* Nav item: Banco de Dados & Sincronismo */}
+            <button
+              id="tab-btn-sync"
+              onClick={() => {
+                setActiveTab("sync");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "sync"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Banco de Dados & Drive"
+            >
+              <Database className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Banco de Dados & Drive</span>
+            </button>
+
           </nav>
 
-          {/* Bottom Sidebar area: Google Connection Integration */}
-          <div className="border-t border-white/5 pt-4 space-y-3.5">
+          {/* Bottom Sidebar area: Google & Supabase connection Integration */}
+          <div className="border-t border-white/5 pt-4 space-y-3">
+            
+            {/* Supabase SaaS Identity Center */}
+            <div className="p-3 rounded-xl border border-emerald-500/25 bg-slate-900/50 text-slate-300 select-none text-[11px] flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className={`font-bold ${sidebarCollapsed ? "md:hidden" : "block"}`}>Sessão SaaS Ativa</span>
+                </div>
+              </div>
+
+              {!sidebarCollapsed && (
+                <div className="text-[10px] font-mono tracking-tight truncate text-slate-400">
+                  {supabaseUser?.email}
+                </div>
+              )}
+
+              <button
+                onClick={handleSaaSSignOut}
+                className={`py-1.5 px-2 rounded-lg font-bold text-[10px] transition-all flex items-center justify-center gap-1.5 cursor-pointer bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 border border-rose-500/20 ${sidebarCollapsed ? "w-8 h-8 p-0" : "w-full"}`}
+                title="Sair da Plataforma"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                {!sidebarCollapsed && <span>Sair da Plataforma</span>}
+              </button>
+            </div>
+
+            {/* Google Workspace connection */}
             {googleConnected ? (
               <div className={`bg-emerald-950/25 border border-emerald-500/20 rounded-xl p-3 flex flex-col gap-2 select-none text-[11px] text-emerald-400 ${sidebarCollapsed ? "md:p-2 md:items-center" : ""}`}>
                 <div className="flex items-center gap-1.5">
@@ -402,14 +568,6 @@ export default function App() {
                 {!sidebarCollapsed && <span>Conectar Workspace</span>}
               </button>
             )}
-
-            {/* Sync status compact logs */}
-            {!sidebarCollapsed && (
-              <div className="bg-slate-900/40 p-2.5 rounded-xl border border-white/5 text-[9px] text-slate-500 space-y-1 font-mono md:block hidden">
-                <span className="text-slate-400 font-bold block">LOGS DE SINCRONISMO:</span>
-                <p className="truncate">{syncLogs[0] || "Sem logs registrados"}</p>
-              </div>
-            )}
           </div>
 
         </div>
@@ -438,6 +596,7 @@ export default function App() {
                activeTab === "calculator" ? "Modelagem Financeira e BDI de Licitações" :
                activeTab === "comparator" ? "Compatibilização Técnica de Especificações" :
                activeTab === "bot" ? "Simulador de Disputa de Lances Finais" :
+               activeTab === "sync" ? "Banco de Dados & Diretório de Arquivos na Nuvem" :
                "Auditoria Legal de Documentação de Concorrentes"}
             </p>
           </div>
@@ -478,6 +637,11 @@ export default function App() {
                 <LanceBotTab
                   activeEdital={activeEdital}
                 />
+              ) : activeTab === "sync" ? (
+                <CloudSyncTab
+                  companyData={companyData}
+                  activeEdital={activeEdital}
+                />
               ) : (
                 <CompetitorAnalyzerTab
                   activeEdital={activeEdital}
@@ -499,6 +663,239 @@ export default function App() {
         type={previewData.type}
         onAddLog={addLogMessage}
       />
+
+      {/* Supabase SaaS Authentication & Account Switcher Modal */}
+      {supabaseModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-md bg-[#0f1524] border border-white/10 rounded-2xl overflow-hidden shadow-2xl relative">
+            
+            {/* Header */}
+            <div className="p-5 border-b border-white/10 bg-gradient-to-r from-[#121c33] to-[#0f1524] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg border border-indigo-500/20">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-sm">Portal de Clientes SaaS</h3>
+                  <p className="text-[10px] text-slate-400 font-medium">Supabase Auth Multi-tenant</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setSupabaseModalOpen(false);
+                  setAuthMessage(null);
+                }}
+                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4.5 h-4.5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-5">
+              
+              {!supabaseConnected ? (
+                // Supabase not configured warning
+                <div className="space-y-4 text-center py-4">
+                  <div className="w-12 h-12 bg-amber-500/10 text-amber-400 rounded-full flex items-center justify-center mx-auto border border-amber-500/20">
+                    <CloudLightning className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="font-bold text-slate-200 text-sm">Credenciais não configuradas</h4>
+                    <p className="text-slate-400 text-xs leading-relaxed max-w-sm mx-auto">
+                      Para usar a Autenticação SaaS real e isolar dados de múltiplos usuários, configure sua <strong>URL</strong> e <strong>Anon Key</strong> do Supabase primeiro.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSupabaseModalOpen(false);
+                      setActiveTab("sync");
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                  >
+                    Configurar Conexão do Banco
+                  </button>
+                </div>
+              ) : supabaseUser ? (
+                // Active User Session panel
+                <div className="space-y-5">
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl space-y-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="font-bold text-emerald-300 text-xs">Sessão Ativa no Supabase</span>
+                    </div>
+                    
+                    <div className="space-y-1.5 font-mono text-[11px] text-slate-300">
+                      <div className="flex justify-between border-b border-white/5 pb-1 text-slate-400">
+                        <span>Usuário</span>
+                        <span className="font-bold text-white">{supabaseUser.email}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-white/5 pb-1 text-slate-400">
+                        <span>UUID</span>
+                        <span className="font-bold text-slate-400 truncate max-w-[180px]" title={supabaseUser.id}>
+                          {supabaseUser.id}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-slate-400">
+                        <span>Plano Escolhido</span>
+                        <span className="font-bold text-amber-400">{saasPlan}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Plan Switcher */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Escolha o Plano SaaS da Conta</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {["Free", "Pro", "Enterprise"].map((plan) => {
+                        const isActive = saasPlan === plan;
+                        return (
+                          <button
+                            key={plan}
+                            onClick={() => handleChangePlan(plan)}
+                            className={`py-2 px-1.5 rounded-xl text-[10px] font-bold border transition-all cursor-pointer ${
+                              isActive 
+                                ? "bg-amber-500/15 border-amber-500 text-amber-300" 
+                                : "bg-slate-950 border-white/5 text-slate-500 hover:text-slate-300"
+                            }`}
+                          >
+                            {plan === "Free" ? "Gratuito" : plan === "Pro" ? "SaaS Pro" : "Enterprise"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-slate-500 leading-normal">
+                      Ao trocar de plano, os limites e volume de análises são recalculados para este e-mail.
+                    </p>
+                  </div>
+
+                  <div className="border-t border-white/5 pt-4 flex flex-col gap-2">
+                    <button
+                      onClick={handleSaaSSignOut}
+                      className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Encerrar Sessão (Sign Out)
+                    </button>
+                    
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSupabaseUser(null);
+                        setAuthMode("signin");
+                        setAuthMessage(null);
+                      }}
+                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-white/5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      Entrar com Outro Usuário
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                // Authentication Form (Login / Register)
+                <form onSubmit={handleSaaSAuthAction} className="space-y-4">
+                  {/* Selector */}
+                  <div className="flex bg-slate-950 p-1 rounded-xl border border-white/5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("signin");
+                        setAuthMessage(null);
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        authMode === "signin"
+                          ? "bg-slate-800 text-white shadow"
+                          : "text-slate-500 hover:text-slate-300"
+                      }`}
+                    >
+                      Acessar Conta
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("signup");
+                        setAuthMessage(null);
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        authMode === "signup"
+                          ? "bg-slate-800 text-white shadow"
+                          : "text-slate-500 hover:text-slate-300"
+                      }`}
+                    >
+                      Criar Nova Conta
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Endereço de E-mail</label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="seu-email@exemplo.com"
+                        value={authEmail}
+                        onChange={(e) => setAuthEmail(e.target.value)}
+                        className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Senha Secreta</label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="••••••••"
+                        value={authPassword}
+                        onChange={(e) => setAuthPassword(e.target.value)}
+                        className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {authMessage && (
+                    <div className={`p-3 rounded-lg text-[11px] leading-relaxed border ${
+                      authMessage.success
+                        ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
+                        : "bg-rose-500/10 border-rose-500/20 text-rose-300"
+                    }`}>
+                      {authMessage.message}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-lg text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 border border-indigo-500/25 cursor-pointer"
+                  >
+                    {authLoading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Autenticando...
+                      </>
+                    ) : authMode === "signup" ? (
+                      <>
+                        <Users className="w-3.5 h-3.5" />
+                        Criar Conta SaaS
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="w-3.5 h-3.5" />
+                        Entrar na Plataforma
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
+
+              <div className="text-[10px] text-slate-500 bg-slate-950/40 p-3 rounded-lg border border-white/5 leading-relaxed">
+                ℹ️ <strong>Isolamento Multi-tenant:</strong> Ao logar com e-mails diferentes, o Supabase Auth atribui IDs únicos (UUIDs) para cada usuário. Suas análises e documentos são segregados automaticamente, permitindo simular perfeitamente um SaaS em produção!
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+      )}
 
       {/* Bottom Floating Interactive Chat popup */}
       <FloatingAiChat 

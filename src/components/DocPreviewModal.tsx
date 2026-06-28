@@ -30,14 +30,318 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
     const element = document.createElement("a");
     const file = new Blob([markdownText], { type: "text/markdown;charset=utf-8" });
     element.href = URL.createObjectURL(file);
-    element.download = title;
+    
+    // Ensure the filename ends with .md to prevent corruption
+    let cleanTitle = title;
+    if (cleanTitle.toLowerCase().endsWith(".pdf")) {
+      cleanTitle = cleanTitle.slice(0, -4) + ".md";
+    } else if (!cleanTitle.toLowerCase().endsWith(".md")) {
+      cleanTitle = cleanTitle + ".md";
+    }
+
+    element.download = cleanTitle;
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
   };
 
+  const handleDownloadHtml = () => {
+    const element = document.querySelector(".markdown-body");
+    const htmlContent = element ? element.innerHTML : "";
+    
+    // Create clean HTML title
+    let htmlTitle = title;
+    if (htmlTitle.toLowerCase().endsWith(".pdf")) {
+      htmlTitle = htmlTitle.slice(0, -4) + ".html";
+    } else if (htmlTitle.toLowerCase().endsWith(".md")) {
+      htmlTitle = htmlTitle.slice(0, -3) + ".html";
+    } else if (!htmlTitle.toLowerCase().endsWith(".html")) {
+      htmlTitle = htmlTitle + ".html";
+    }
+    
+    const fullHtml = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>${htmlTitle.replace(".html", "")}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.6;
+      color: #1a202c;
+      background-color: #ffffff;
+      padding: 2cm;
+      max-width: 21cm; /* A4 format width */
+      margin: 0 auto;
+    }
+    
+    /* Typography */
+    h1, h2, h3, h4, h5, h6 {
+      color: #1a202c;
+      font-weight: 700;
+      margin-top: 1.5em;
+      margin-bottom: 0.5em;
+      line-height: 1.25;
+    }
+    
+    h1 { font-size: 24px; border-bottom: 2px solid #cbd5e0; padding-bottom: 8px; text-align: center; margin-top: 0; }
+    h2 { font-size: 18px; border-bottom: 1px solid #cbd5e0; padding-bottom: 6px; }
+    h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+    
+    p { margin-top: 0; margin-bottom: 1em; text-align: justify; font-size: 13px; }
+    
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5em 0;
+      font-size: 12px;
+    }
+    
+    th, td {
+      border: 1px solid #cbd5e0;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    
+    th {
+      background-color: #f7fafc;
+      font-weight: 600;
+    }
+    
+    /* Blockquotes & lists */
+    blockquote {
+      border-left: 4px solid #cbd5e0;
+      padding-left: 15px;
+      margin-left: 0;
+      color: #4a5568;
+      font-style: italic;
+    }
+    
+    ul, ol {
+      margin-top: 0;
+      margin-bottom: 1em;
+      padding-left: 20px;
+      font-size: 13px;
+    }
+    
+    li { margin-bottom: 0.25em; }
+    
+    /* Dividers & horizontal lines */
+    hr {
+      border: 0;
+      border-top: 1px solid #e2e8f0;
+      margin: 2em 0;
+    }
+    
+    /* Signature and structural styling */
+    div {
+      font-size: 13px;
+    }
+    
+    /* CSS rules to style any dynamic elements that had styles injected */
+    div[style*="text-align: center"] {
+      text-align: center !important;
+    }
+    div[style*="border: 1px solid"] {
+      border: 1px solid #cbd5e0 !important;
+      background-color: #f7fafc !important;
+      padding: 15px !important;
+      border-radius: 8px !important;
+      margin: 20px 0 !important;
+    }
+    h2[style*="font-size: 18px"] {
+      border-bottom: none !important;
+      margin: 0 !important;
+    }
+    p[style*="color: #a0aec0"] {
+      color: #4a5568 !important;
+    }
+    
+    /* Floating action buttons for offline view */
+    .action-bar {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+      border: 1px solid #cbd5e0;
+      display: flex;
+      gap: 10px;
+    }
+    
+    .btn {
+      background-color: #3182ce;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn:hover {
+      background-color: #2b6cb0;
+    }
+    
+    @media print {
+      body {
+        padding: 0;
+        margin: 0;
+        width: 100%;
+      }
+      .action-bar {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="action-bar">
+    <button class="btn" onclick="window.print()">Imprimir / Salvar PDF</button>
+  </div>
+  ${htmlContent}
+</body>
+</html>`;
+
+    const blob = new Blob([fullHtml], { type: "text/html;charset=utf-8" });
+    const downloadLink = document.createElement("a");
+    downloadLink.href = URL.createObjectURL(blob);
+    downloadLink.download = htmlTitle;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+  };
+
   const handlePrint = () => {
-    window.print();
+    const element = document.querySelector(".markdown-body");
+    const htmlContent = element ? element.innerHTML : "";
+    
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      // Fallback to window.print if popup is blocked
+      window.print();
+      return;
+    }
+    
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>${title}</title>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+          
+          body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.6;
+            color: #1a202c;
+            background-color: #ffffff;
+            padding: 1.5cm;
+          }
+          
+          h1, h2, h3, h4, h5, h6 {
+            color: #1a202c;
+            font-weight: 700;
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+            line-height: 1.25;
+          }
+          
+          h1 { font-size: 24px; border-bottom: 2px solid #cbd5e0; padding-bottom: 8px; text-align: center; margin-top: 0; }
+          h2 { font-size: 18px; border-bottom: 1px solid #cbd5e0; padding-bottom: 6px; }
+          h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+          
+          p { margin-top: 0; margin-bottom: 1em; text-align: justify; font-size: 13px; }
+          
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5em 0;
+            font-size: 12px;
+          }
+          
+          th, td {
+            border: 1px solid #cbd5e0;
+            padding: 8px 12px;
+            text-align: left;
+          }
+          
+          th {
+            background-color: #f7fafc;
+            font-weight: 600;
+          }
+          
+          blockquote {
+            border-left: 4px solid #cbd5e0;
+            padding-left: 15px;
+            margin-left: 0;
+            color: #4a5568;
+            font-style: italic;
+          }
+          
+          ul, ol {
+            margin-top: 0;
+            margin-bottom: 1em;
+            padding-left: 20px;
+            font-size: 13px;
+          }
+          
+          li { margin-bottom: 0.25em; }
+          
+          hr {
+            border: 0;
+            border-top: 1px solid #e2e8f0;
+            margin: 2em 0;
+          }
+          
+          div { font-size: 13px; }
+          
+          /* Custom styles matching standard layout */
+          div[style*="text-align: center"] {
+            text-align: center !important;
+          }
+          div[style*="border: 1px solid"] {
+            border: 1px solid #cbd5e0 !important;
+            background-color: #f7fafc !important;
+            padding: 15px !important;
+            border-radius: 8px !important;
+            margin: 20px 0 !important;
+          }
+          h2[style*="font-size: 18px"] {
+            border-bottom: none !important;
+            margin: 0 !important;
+          }
+          p[style*="color: #a0aec0"] {
+            color: #4a5568 !important;
+          }
+          
+          @media print {
+            body {
+              padding: 0;
+              margin: 0;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        ${htmlContent}
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+              window.close();
+            }, 300);
+          };
+        </script>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   const handleGoogleDriveSync = async () => {
@@ -149,11 +453,21 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
             </button>
 
             <button
+              onClick={handleDownloadHtml}
+              className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 rounded-lg text-xs font-semibold text-indigo-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Baixar proposta formatada como arquivo HTML para abrir e imprimir no navegador"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              Baixar HTML (Navegador)
+            </button>
+
+            <button
               onClick={handleDownload}
               className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-medium text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Baixar código fonte em Markdown"
             >
               <HardDriveDownload className="w-3.5 h-3.5" />
-              Baixar .md
+              Baixar .md (Markdown)
             </button>
           </div>
         </div>

@@ -1,6 +1,11 @@
 import { useState, useEffect } from "react";
 import { Certificate, EditalAnalysis, CompanyData } from "../types";
 import { 
+  fetchCertificatesFromSupabase,
+  saveCertificateToSupabase,
+  deleteCertificateFromSupabase
+} from "../utils/supabaseClient";
+import { 
   FileText, Plus, Calendar, AlertTriangle, CheckCircle, Trash2, Edit2, ShieldCheck, 
   HelpCircle, RefreshCw, Layers, CheckSquare, Search, Building2, Landmark, Clock, FileWarning,
   FileUp, Loader2, GripVertical
@@ -276,9 +281,29 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     loading: boolean;
   } | null>(null);
 
+  // Load from Supabase on mount
+  useEffect(() => {
+    async function loadCerts() {
+      try {
+        const dbCerts = await fetchCertificatesFromSupabase();
+        if (dbCerts && dbCerts.length > 0) {
+          setCerts(dbCerts);
+        }
+      } catch (e) {
+        console.warn("Erro ao carregar certidões do Supabase:", e);
+      }
+    }
+    loadCerts();
+  }, []);
+
   // Persistence
   useEffect(() => {
     localStorage.setItem("aip_certificates", JSON.stringify(certs));
+    
+    // Sync to Supabase in background
+    certs.forEach(c => {
+      saveCertificateToSupabase(c).catch(e => console.warn("Erro de sincronismo de certidão:", e));
+    });
   }, [certs]);
 
   // Recalculate statuses on mount to ensure everything is perfectly in sync with the real current time
@@ -557,6 +582,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
 
   const deleteCert = (id: string) => {
     if (confirm("Tem certeza que deseja excluir esta certidão?")) {
+      deleteCertificateFromSupabase(id).catch(e => console.warn("Erro ao deletar certidão do Supabase:", e));
       setCerts(certs.filter(c => c.id !== id));
     }
   };

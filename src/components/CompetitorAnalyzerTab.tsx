@@ -1,5 +1,10 @@
 import { useState, useEffect } from "react";
 import { 
+  fetchCompetitorsFromSupabase,
+  saveCompetitorToSupabase,
+  deleteCompetitorFromSupabase
+} from "../utils/supabaseClient";
+import { 
   FileText, CheckCircle, AlertTriangle, Trash2, Loader2, Play, Sparkles, 
   Copy, Check, Scale, ShieldAlert, Users, Award, Download, ArrowRight, ClipboardPaste, Info, FileUp, ListTodo, History, Settings2, HelpCircle
 } from "lucide-react";
@@ -44,15 +49,32 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
     }
   });
 
-  // Competitor audit history
-  const [competitorHistory, setCompetitorHistory] = useState<CompetitorHistoryItem[]>(() => {
-    try {
-      const saved = localStorage.getItem("aip_competitors_history");
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
+  // Competitor audit history (Supabase with Local fallback)
+  const [competitorHistory, setCompetitorHistory] = useState<CompetitorHistoryItem[]>([]);
+
+  useEffect(() => {
+    async function loadCompetitorHistory() {
+      try {
+        const dbComps = await fetchCompetitorsFromSupabase();
+        if (dbComps && dbComps.length > 0) {
+          setCompetitorHistory(dbComps);
+          return;
+        }
+      } catch (e) {
+        console.warn("Falha ao buscar concorrentes do Supabase:", e);
+      }
+
+      try {
+        const saved = localStorage.getItem("aip_competitors_history");
+        if (saved) {
+          setCompetitorHistory(JSON.parse(saved));
+        }
+      } catch (e) {
+        setCompetitorHistory([]);
+      }
     }
-  });
+    loadCompetitorHistory();
+  }, []);
 
   // Initialize correct source based on editalHistory availability
   useEffect(() => {
@@ -187,7 +209,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
         setActiveAnalysis(analysisResult);
         confetti({ particleCount: 150, spread: 90, origin: { y: 0.85 } });
 
-        // Save to History
+        // Save to History (Supabase & Local)
         const newHistoryItem: CompetitorHistoryItem = {
           id: Date.now().toString(),
           competitorName: detectedName,
@@ -196,6 +218,8 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
           editalTitle,
           analysis: analysisResult
         };
+
+        saveCompetitorToSupabase(newHistoryItem).catch((e) => console.warn("Erro ao salvar concorrente no Supabase:", e));
 
         setCompetitorHistory(prev => {
           const updated = [newHistoryItem, ...prev];
@@ -241,6 +265,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
   const handleDeleteHistory = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm("Tem certeza que deseja excluir esta auditoria do histórico?")) {
+      deleteCompetitorFromSupabase(id).catch((err) => console.warn("Erro ao deletar concorrente do Supabase:", err));
       const updated = competitorHistory.filter(h => h.id !== id);
       setCompetitorHistory(updated);
       localStorage.setItem("aip_competitors_history", JSON.stringify(updated));

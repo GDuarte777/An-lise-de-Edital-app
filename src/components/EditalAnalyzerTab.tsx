@@ -1,13 +1,21 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { EditalAnalysis, CompanyData, SyncItem } from "../types";
 import { 
   FileUp, FileText, CheckCircle2, AlertTriangle, Clock, ArrowRight, Loader2, Play, 
   Sparkles, RefreshCw, ChevronRight, FileCode, CheckSquare, Edit3, Settings, ClipboardPaste, 
   Coins, HelpCircle, HardDriveDownload, MonitorCheck, Save, Send, Database, FileSpreadsheet, Eye,
-  Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge
+  Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge, Plus, X
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { addSyncedItem, syncAnalysisToGoogleSheets } from "../utils/googleSync";
+import { 
+  syncEditalToSupabase, 
+  syncDocumentToSupabase, 
+  callSupabaseGeminiEdgeFunction,
+  fetchEditaisFromSupabase,
+  saveEditalToSupabase,
+  deleteEditalFromSupabase
+} from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 
 // Portuguese demo data for instant simulation & testing convenience
@@ -68,21 +76,301 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   const [uploadedTemplateText, setUploadedTemplateText] = useState("");
   const [showCustomDocForm, setShowCustomDocForm] = useState(false);
   
+  // Custom Proposal Details Modal state
+  const [showProposalModal, setShowProposalModal] = useState(false);
+  const [proposalFileTitle, setProposalFileTitle] = useState("");
+  const [proposalDispensa, setProposalDispensa] = useState("");
+  const [proposalProcesso, setProposalProcesso] = useState("");
+  const [proposalOrgao, setProposalOrgao] = useState("");
+  const [proposalObject, setProposalObject] = useState("");
+  const [proposalItems, setProposalItems] = useState<any[]>([]);
+  const [valPrazo, setValPrazo] = useState("");
+  const [valPgto, setValPgto] = useState("");
+  const [valEntrega, setValEntrega] = useState("");
+  const [valLocal, setValLocal] = useState("");
+  const [proposalDate, setProposalDate] = useState("");
+
+  // Helper numbers to words (Português)
+  function numeroParaExtenso(valor: number): string {
+    const unidades = ["", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove"];
+    const dezenas = ["", "dez", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"];
+    const dezenaEspeciais = ["dez", "onze", "doze", "treze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"];
+    const centenas = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"];
+
+    function tresDigitos(num: number): string {
+      if (num === 0) return "";
+      let res = "";
+      const c = Math.floor(num / 100);
+      const d = Math.floor((num % 100) / 10);
+      const u = num % 10;
+
+      if (c > 0) {
+        if (c === 1 && d === 0 && u === 0) {
+          res += "cem";
+        } else {
+          res += centenas[c];
+        }
+      }
+
+      if (d > 0 || u > 0) {
+        if (res !== "") res += " e ";
+        if (d === 1) {
+          res += dezenaEspeciais[u];
+        } else {
+          if (d > 0) {
+            res += dezenas[d];
+            if (u > 0) res += " e " + unidades[u];
+          } else {
+            res += unidades[u];
+          }
+        }
+      }
+      return res;
+    }
+
+    if (valor === 0) return "zero reais";
+
+    const parteInteira = Math.floor(valor);
+    const parteDecimal = Math.round((valor - parteInteira) * 100);
+
+    let extensoInteiro = "";
+    if (parteInteira > 0) {
+      const bilhoes = Math.floor(parteInteira / 1000000000);
+      const milhoes = Math.floor((parteInteira % 1000000000) / 1000000);
+      const milhares = Math.floor((parteInteira % 1000000) / 1000);
+      const unidadesSimples = parteInteira % 1000;
+
+      let partes: string[] = [];
+
+      if (bilhoes > 0) {
+        partes.push(tresDigitos(bilhoes) + (bilhoes === 1 ? " bilhão" : " bilhões"));
+      }
+      if (milhoes > 0) {
+        partes.push(tresDigitos(milhoes) + (milhoes === 1 ? " milhão" : " milhões"));
+      }
+      if (milhares > 0) {
+        partes.push(tresDigitos(milhares) + " mil");
+      }
+      if (unidadesSimples > 0) {
+        partes.push(tresDigitos(unidadesSimples));
+      }
+
+      extensoInteiro = partes.join(", ");
+      
+      if (parteInteira === 1) {
+        extensoInteiro += " real";
+      } else {
+        if (parteInteira % 1000000 === 0 && parteInteira > 0) {
+          extensoInteiro += " de reais";
+        } else {
+          extensoInteiro += " reais";
+        }
+      }
+    }
+
+    let extensoDecimal = "";
+    if (parteDecimal > 0) {
+      extensoDecimal = tresDigitos(parteDecimal);
+      if (parteDecimal === 1) {
+        extensoDecimal += " centavo";
+      } else {
+        extensoDecimal += " centavos";
+      }
+    }
+
+    if (extensoInteiro && extensoDecimal) {
+      return extensoInteiro + " e " + extensoDecimal;
+    } else if (extensoInteiro) {
+      return extensoInteiro;
+    } else if (extensoDecimal) {
+      return extensoDecimal;
+    }
+    return "zero reais";
+  }
+
+  const formatCurrency = (val: number) => {
+    return val.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const getGlobalSum = () => {
+    let sum = 0;
+    proposalItems.forEach(it => {
+      const cleanVal = parseFloat(String(it.totalValue || "0").replace(/\s/g, "").replace(/\./g, "").replace(",", "."));
+      if (!isNaN(cleanVal)) {
+        sum += cleanVal;
+      }
+    });
+    return sum;
+  };
+
+  const handleOpenProposalModal = () => {
+    const dispensaDefault = activeEdital?.identificacaoCertame?.modalidade && activeEdital?.identificacaoCertame?.identificacaoNumerica
+      ? `${activeEdital.identificacaoCertame.modalidade} nº ${activeEdital.identificacaoCertame.identificacaoNumerica}`
+      : "Dispensa de Licitação nº 046/2026";
+
+    const processoDefault = "Processo Administrativo nº 209/2026";
+    const orgaoDefault = activeEdital?.identificacaoCertame?.orgaoComprador || "Secretaria Municipal de Educação de Juazeiro/BA";
+    const objetoDefault = activeEdital?.descricaoProduto || "fornecimento de equipamentos audiovisuais e tecnológicos destinados ao preenchimento integral das metas do Programa Educomunicativo Conexão Escola, sob coordenação da TV Escola Juazeiro";
+    
+    const defaultItems = [
+      {
+        description: activeEdital?.descricaoProduto || "PROJETOR MULTIMÍDIA INTERATIVO, BRILHO DE 4.000 LUMENS, RESOLUÇÃO NATIVA FULL HD, CONECTIVIDADE HDMI/USB",
+        quantity: 8,
+        brandModel: "Epson PowerLite L210SF",
+        unitValue: "2.500,00",
+        totalValue: "20.000,00"
+      }
+    ];
+
+    setProposalDispensa(dispensaDefault);
+    setProposalProcesso(processoDefault);
+    setProposalOrgao(orgaoDefault);
+    setProposalObject(objetoDefault);
+    setProposalItems(defaultItems);
+    
+    // Custom clean filename
+    const cleanNum = (activeEdital?.identificacaoCertame?.identificacaoNumerica || "046-2026").replace(/\//g, "-");
+    setProposalFileTitle(`Proposta Comercial - Dispensa ${cleanNum}.pdf`);
+    
+    setValPrazo("60 (sessenta) dias, a contar da data de apresentação deste documento.");
+    setValPgto(activeEdital?.viabilidadeFinanceira?.prazoPagamento || "Em até 30 (trinta) dias úteis, contados da finalização da regular liquidação da despesa pelo Município.");
+    setValEntrega(activeEdital?.logisticaCronograma?.prazoEntregaReal || "Até 15 (quinze) dias corridos, contados a partir do recebimento da Ordem de Fornecimento ou Nota de Empenho.");
+    setValLocal(activeEdital?.logisticaCronograma?.enderecoEntrega || "Secretaria Municipal de Educação de Juazeiro/BA, diretamente no Setor de TI. Sem custos logísticos para o órgão.");
+    
+    const formattedDate = `Alagoinhas - BA, ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })}`;
+    setProposalDate(formattedDate);
+
+    setShowProposalModal(true);
+  };
+
+  const handleItemChange = (index: number, field: string, val: any) => {
+    const updated = [...proposalItems];
+    updated[index][field] = val;
+    
+    if (field === "quantity" || field === "unitValue") {
+      const q = parseFloat(String(updated[index].quantity || "0"));
+      const uStr = String(updated[index].unitValue || "0")
+        .replace(/\s/g, "")
+        .replace(/\./g, "")
+        .replace(",", ".");
+      const u = parseFloat(uStr);
+      
+      if (!isNaN(q) && !isNaN(u)) {
+        const total = q * u;
+        updated[index].totalValue = formatCurrency(total);
+      }
+    }
+    setProposalItems(updated);
+  };
+
+  const handleAddProposalItem = () => {
+    setProposalItems([
+      ...proposalItems,
+      {
+        description: "",
+        quantity: 1,
+        brandModel: "",
+        unitValue: "0,00",
+        totalValue: "0,00"
+      }
+    ]);
+  };
+
+  const handleRemoveProposalItem = (index: number) => {
+    if (proposalItems.length === 1) {
+      alert("A proposta deve conter ao menos 1 item.");
+      return;
+    }
+    setProposalItems(proposalItems.filter((_, idx) => idx !== index));
+  };
+
+  const handleGenerateProposal = async () => {
+    setGeneratingDoc("proposal");
+    setShowProposalModal(false);
+    
+    const sum = getGlobalSum();
+    const sumStr = formatCurrency(sum);
+    const extensoStr = numeroParaExtenso(sum);
+
+    const details = {
+      proposalFileTitle,
+      proposalDispensa,
+      proposalProcesso,
+      proposalOrgao,
+      proposalObject,
+      proposalItems,
+      totalValueGlobal: sumStr,
+      totalValueExtenso: extensoStr,
+      valPrazo,
+      valPgto,
+      valEntrega,
+      valLocal,
+      proposalDate
+    };
+
+    try {
+      const response = await fetch("/api/generate-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          docType: "proposal",
+          analysisData: activeEdital,
+          companyData: companyData,
+          extraInstructions,
+          proposalDetails: details
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Erro de processamento.");
+      }
+
+      const data = await response.json();
+      if (data.markdown) {
+        const finalTitle = data.title || proposalFileTitle || "Proposta Comercial de Licitação.md";
+        onOpenDocPreview(finalTitle, data.markdown, "proposal");
+        addSyncedItem(finalTitle, "proposal", data.markdown);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Não foi possível gerar a proposta comercial automática. Tente novamente.");
+    } finally {
+      setGeneratingDoc(null);
+    }
+  };
+  
   // Document generation processing states
   const [generatingDoc, setGeneratingDoc] = useState<string | null>(null);
 
   // Sub-tabs for edital analysis view
   const [analysisActiveTab, setAnalysisActiveTab] = useState<"report" | "struc" | "checklist">("report");
 
-  // Histórico Local de Editais
-  const [history, setHistory] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem("aip_edital_history");
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
+  // Histórico de Editais (Supabase com fallback Local)
+  const [history, setHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const dbEditais = await fetchEditaisFromSupabase();
+        if (dbEditais && dbEditais.length > 0) {
+          setHistory(dbEditais);
+          return;
+        }
+      } catch (e) {
+        console.warn("Falha ao buscar editais do Supabase, tentando local:", e);
+      }
+
+      try {
+        const saved = localStorage.getItem("aip_edital_history");
+        if (saved) {
+          setHistory(JSON.parse(saved));
+        }
+      } catch (e) {
+        setHistory([]);
+      }
     }
-  });
+    loadHistory();
+  }, []);
 
   // Load Portuguese Demo text instantly to let user play immediately
   const handleLoadDemo = () => {
@@ -129,32 +417,76 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
     setLoading(true);
     try {
-      const response = await fetch("/api/analyze-edital", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          textInput: textInput,
-          fileBase64: fileBase64,
-          fileName: fileDetails?.name,
-          fileType: fileDetails?.type
-        })
-      });
+      const routeViaSupabase = localStorage.getItem("supabase_route_ai") === "true";
+      let data: any;
 
-      if (!response.ok) {
-        throw new Error("Erro na resposta do servidor.");
+      if (routeViaSupabase) {
+        console.log("[Analyzer] Routing analysis via Supabase Deno Edge Function...");
+        const systemInstruction = `Você é um Analista de Licitações Públicas sênior. Sua missão é ler o edital/termo de referência anexado e gerar uma análise completa estruturada rigidamente como um JSON com as chaves correspondentes.`;
+        
+        // Prepare a prompt that fits the requested JSON schema
+        const fullPrompt = `Analise o edital a seguir e retorne a resposta no formato JSON estruturado com os 6 pilares de inteligência.
+        
+        Edital de licitação:
+        ${textInput || "Conteúdo do arquivo anexado (Base64)"}
+        
+        Retorne exatamente no formato JSON com as seguintes chaves de dados:
+        - pontosPositivos (array de strings)
+        - pontosAlerta (array de strings)
+        - prazoEntrega (string)
+        - prazoPagamento (string)
+        - descricaoProduto (string)
+        - documentosExigidos (array de strings)
+        - identificacaoCertame (objeto com: orgaoComprador, modalidade, identificacaoNumerica, dataHoraSessao)
+        - especificacoesTecnicas (objeto com: exigenciasFisicas, pegadinhasOcultas)
+        - burocraciaBarreiras (objeto com: exigeAmostra, exigeCartaSolidariedade, exigenciaGarantia, consorcioSubcontratacao)
+        - logisticaCronograma (objeto com: prazoEntregaReal, classificacaoPrazo, enderecoEntrega, prazoGarantia)
+        - viabilidadeFinanceira (objeto com: valorEstimado, distorcoesPreco, prazoPagamento)
+        - parecerFinal (objeto com: veredito, grauRisco, estrategiaLances)
+        - reportMarkdown (string markdown formatada em 6 pilares com tabelas e bullet points)
+
+        Importante: Não coloque marcadores de código como \`\`\`json ou quebras estranhas. Retorne apenas a string JSON válida.`;
+
+        const edgeResultStr = await callSupabaseGeminiEdgeFunction(
+          fullPrompt,
+          systemInstruction,
+          "gemini-3.5-flash",
+          true // jsonMode
+        );
+
+        const cleanJsonStr = edgeResultStr.replace(/^```json/, "").replace(/```$/, "").trim();
+        const parsedJson = JSON.parse(cleanJsonStr);
+        data = { analysis: parsedJson };
+      } else {
+        const response = await fetch("/api/analyze-edital", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            textInput: textInput,
+            fileBase64: fileBase64,
+            fileName: fileDetails?.name,
+            fileType: fileDetails?.type
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error("Erro na resposta do servidor.");
+        }
+
+        data = await response.json();
       }
 
-      const data = await response.json();
-      if (data.analysis) {
+      if (data && data.analysis) {
         const analysisResult: EditalAnalysis = {
           ...data.analysis,
           rawText: textInput || `Arquivo: ${fileDetails?.name || "Edital Upload"}`
         };
         
         setActiveEdital(analysisResult);
+
         confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
 
-        // Salvar no Histórico Local
+        // Salvar no Histórico Local e no Supabase Privado
         const newHistoryItem = {
           id: Date.now().toString(),
           title: analysisResult.descricaoProduto 
@@ -163,6 +495,9 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           date: new Date().toLocaleString("pt-BR"),
           analysis: analysisResult
         };
+
+        saveEditalToSupabase(newHistoryItem).catch((e) => console.warn("Erro ao salvar edital no Supabase:", e));
+
         setHistory(prev => {
           const updated = [newHistoryItem, ...prev];
           localStorage.setItem("aip_edital_history", JSON.stringify(updated));
@@ -373,6 +708,10 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                   <button
                     onClick={() => {
                       if (confirm("Tem certeza que deseja apagar todo o histórico para liberar espaço?")) {
+                        // Delete all from Supabase
+                        history.forEach(item => {
+                          deleteEditalFromSupabase(item.id).catch(() => {});
+                        });
                         setHistory([]);
                         localStorage.removeItem("aip_edital_history");
                         setActiveEdital(null);
@@ -386,7 +725,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               </div>
 
               {history.length === 0 ? (
-                <p className="text-slate-500 text-center py-4 text-[11px]">Nenhuma análise armazenada localmente ainda.</p>
+                <p className="text-slate-500 text-center py-4 text-[11px]">Nenhuma análise armazenada no Supabase ainda.</p>
               ) : (
                 <div className="space-y-2 max-h-[170px] overflow-y-auto pr-1">
                   {history.map((item) => {
@@ -430,6 +769,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
+                            // Delete from Supabase
+                            deleteEditalFromSupabase(item.id).catch(() => {});
                             const updated = history.filter((h: any) => h.id !== item.id);
                             setHistory(updated);
                             localStorage.setItem("aip_edital_history", JSON.stringify(updated));
@@ -910,7 +1251,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               
               <button
                 disabled={generatingDoc !== null}
-                onClick={() => triggerDocumentGeneration("proposal")}
+                onClick={handleOpenProposalModal}
                 className="flex flex-col items-center justify-between p-4 bg-gradient-to-br from-indigo-950/30 to-indigo-900/20 hover:from-indigo-950/50 hover:to-indigo-900/40 border border-indigo-500/30 rounded-xl text-center transition-all cursor-pointer group text-white disabled:opacity-50 shadow-md shadow-indigo-950/50"
               >
                 <div className="bg-gradient-to-tr from-indigo-500 to-indigo-600 text-white p-2.5 rounded-lg group-hover:scale-105 transition-transform bg-indigo-600">
@@ -960,6 +1301,302 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
           </div>
 
+        </div>
+      )}
+
+      {/* PROPOSAL BUILDER MODAL */}
+      {showProposalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+            
+            {/* Modal Header */}
+            <div className="p-5 border-b border-white/10 flex items-center justify-between bg-slate-950/30 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="bg-indigo-500/10 text-indigo-400 p-2 rounded-lg border border-indigo-500/20">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">Configurar Valores e Dados da Proposta</h3>
+                  <p className="text-slate-400 text-xs">Preencha os valores solicitados pelo edital. O modelo PDF se adaptará automaticamente.</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowProposalModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors bg-white/5 border border-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-6 overflow-y-auto flex-1 font-sans text-xs">
+              
+              {/* File Title and Header Info */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-300 mb-1">Título do Documento PDF</label>
+                  <input 
+                    type="text"
+                    value={proposalFileTitle}
+                    onChange={(e) => setProposalFileTitle(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Ex: Proposta Comercial - Dispensa 046-2026.pdf"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">Este será o nome do arquivo quando você fizer o download ou imprimir.</p>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-300 mb-1">Identificação / Modalidade / Pregão</label>
+                  <input 
+                    type="text"
+                    value={proposalDispensa}
+                    onChange={(e) => setProposalDispensa(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Ex: Dispensa de Licitação nº 046/2026"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-300 mb-1">Número do Processo Administrativo</label>
+                  <input 
+                    type="text"
+                    value={proposalProcesso}
+                    onChange={(e) => setProposalProcesso(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Ex: Processo Administrativo nº 209/2026"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-300 mb-1">Órgão Público Destinatário</label>
+                  <input 
+                    type="text"
+                    value={proposalOrgao}
+                    onChange={(e) => setProposalOrgao(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Ex: Secretaria Municipal de Educação de Juazeiro/BA"
+                  />
+                </div>
+              </div>
+
+              {/* Proposal Object */}
+              <div>
+                <label className="block font-semibold text-slate-300 mb-1">Objeto da Proposta / Introdução</label>
+                <textarea 
+                  value={proposalObject}
+                  onChange={(e) => setProposalObject(e.target.value)}
+                  rows={2}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg p-3 text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  placeholder="Escreva breve resumo do fornecimento..."
+                />
+              </div>
+
+              {/* Editable Items Table */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                  <h4 className="font-bold text-white text-sm flex items-center gap-1.5">
+                    <Coins className="w-4 h-4 text-indigo-400" />
+                    Itens, Quantidades e Preços (Planilha Orçamentária)
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={handleAddProposalItem}
+                    className="px-3 py-1.5 bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-600/30 rounded-md font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Adicionar Item
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-950/30 max-h-[250px] overflow-y-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-slate-950 sticky top-0 border-b border-white/10">
+                      <tr>
+                        <th className="p-3 text-slate-400 font-semibold w-12">#</th>
+                        <th className="p-3 text-slate-400 font-semibold w-1/2">Descrição Detalhada do Item</th>
+                        <th className="p-3 text-slate-400 font-semibold w-20">Qtd</th>
+                        <th className="p-3 text-slate-400 font-semibold">Marca / Modelo</th>
+                        <th className="p-3 text-slate-400 font-semibold w-28">Val. Unitário</th>
+                        <th className="p-3 text-slate-400 font-semibold w-28">Val. Total</th>
+                        <th className="p-3 text-slate-400 font-semibold w-12">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {proposalItems.map((item, index) => (
+                        <tr key={index} className="hover:bg-white/5 transition-colors">
+                          <td className="p-3 text-slate-400 font-mono font-semibold">{index + 1}</td>
+                          <td className="p-3">
+                            <textarea
+                              rows={2}
+                              value={item.description}
+                              onChange={(e) => handleItemChange(index, "description", e.target.value)}
+                              className="w-full bg-slate-900 border border-white/10 rounded-md p-1.5 text-[11px] text-white focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                              placeholder="Ex: Fone de ouvido profissional USB com cancelador..."
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input
+                              type="number"
+                              min="1"
+                              value={item.quantity}
+                              onChange={(e) => handleItemChange(index, "quantity", parseInt(e.target.value) || 1)}
+                              className="w-full bg-slate-900 border border-white/10 rounded-md p-1.5 text-center text-white focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input
+                              type="text"
+                              value={item.brandModel}
+                              onChange={(e) => handleItemChange(index, "brandModel", e.target.value)}
+                              className="w-full bg-slate-900 border border-white/10 rounded-md p-1.5 text-white focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                              placeholder="Ex: Epson L210"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <div className="relative">
+                              <span className="absolute left-1.5 top-2 text-slate-500 text-[10px]">R$</span>
+                              <input
+                                type="text"
+                                value={item.unitValue}
+                                onChange={(e) => handleItemChange(index, "unitValue", e.target.value)}
+                                className="w-full bg-slate-900 border border-white/10 rounded-md py-1.5 pl-6 pr-1.5 text-white focus:ring-1 focus:ring-indigo-500 focus:outline-none font-mono"
+                                placeholder="0,00"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            <div className="relative">
+                              <span className="absolute left-1.5 top-2 text-slate-500 text-[10px]">R$</span>
+                              <input
+                                type="text"
+                                value={item.totalValue}
+                                onChange={(e) => handleItemChange(index, "totalValue", e.target.value)}
+                                className="w-full bg-slate-900 border border-white/10 rounded-md py-1.5 pl-6 pr-1.5 text-white focus:ring-1 focus:ring-indigo-500 focus:outline-none font-mono font-bold bg-slate-900/40"
+                                placeholder="0,00"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveProposalItem(index)}
+                              className="p-1.5 text-rose-400 hover:bg-rose-500/20 rounded-md transition-all cursor-pointer border border-transparent hover:border-rose-500/30"
+                              title="Remover Item"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Subtotals & Extenso Display Box */}
+                <div className="bg-slate-950/40 border border-white/10 rounded-xl p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <span className="text-slate-400 font-mono text-[10px] uppercase tracking-wider block">Valor Total Global (Soma de Itens)</span>
+                    <span className="text-xl font-bold text-emerald-400 font-mono">R$ {formatCurrency(getGlobalSum())}</span>
+                  </div>
+                  <div className="flex-1 md:text-right">
+                    <span className="text-slate-400 font-mono text-[10px] uppercase tracking-wider block">Total por Extenso</span>
+                    <span className="text-slate-200 font-semibold italic">"{numeroParaExtenso(getGlobalSum())}"</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Conditions / Condições Comerciais */}
+              <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-4">
+                <h4 className="font-bold text-white text-xs uppercase tracking-wider flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-indigo-400" />
+                  3. Condições Comerciais Obrigatórias
+                </h4>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block font-semibold text-slate-300 mb-1">Prazo de Validade da Proposta</label>
+                    <input 
+                      type="text"
+                      value={valPrazo}
+                      onChange={(e) => setValPrazo(e.target.value)}
+                      className="w-full bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-300 mb-1">Condições de Pagamento</label>
+                    <input 
+                      type="text"
+                      value={valPgto}
+                      onChange={(e) => setValPgto(e.target.value)}
+                      className="w-full bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-300 mb-1">Prazo de Entrega</label>
+                    <input 
+                      type="text"
+                      value={valEntrega}
+                      onChange={(e) => setValEntrega(e.target.value)}
+                      className="w-full bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-300 mb-1">Local de Entrega</label>
+                    <input 
+                      type="text"
+                      value={valLocal}
+                      onChange={(e) => setValLocal(e.target.value)}
+                      className="w-full bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Data da Proposta */}
+              <div>
+                <label className="block font-semibold text-slate-300 mb-1">Local e Data de Emissão</label>
+                <input 
+                  type="text"
+                  value={proposalDate}
+                  onChange={(e) => setProposalDate(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans"
+                />
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-5 border-t border-white/10 flex items-center justify-end gap-3 bg-slate-950/30 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowProposalModal(false)}
+                className="px-4 py-2 border border-white/10 text-slate-300 rounded-lg font-semibold hover:bg-white/5 hover:text-white transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleGenerateProposal}
+                className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-500 shadow-lg shadow-indigo-600/20 flex items-center gap-1.5 transition-all cursor-pointer border border-indigo-500/30"
+              >
+                {generatingDoc === "proposal" ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Gerando Proposta...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-indigo-200 animate-pulse" />
+                    Gerar Proposta Oficial PDF
+                  </>
+                )}
+              </button>
+            </div>
+
+          </div>
         </div>
       )}
 

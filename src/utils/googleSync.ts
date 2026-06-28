@@ -1,8 +1,24 @@
+import { initializeApp, getApps } from "firebase/app";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from "firebase/auth";
+import firebaseConfig from "../../firebase-applet-config.json";
 import { SyncItem } from "../types";
+import { syncDocumentToSupabase } from "./supabaseClient";
+
+// Initialize Firebase only if not already initialized
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+export const auth = getAuth(app);
+
+const provider = new GoogleAuthProvider();
+provider.addScope("https://www.googleapis.com/auth/drive.file");
+provider.addScope("https://www.googleapis.com/auth/spreadsheets");
 
 // Local storage keys
 const SYNCED_ITEMS_KEY = "aip_synced_items";
-const GOOGLE_AUTH_TOKEN_KEY = "aip_google_access_token";
+
+// Flag to indicate if we are in the middle of a sign-in flow.
+let isSigningIn = false;
+// Cache the access token in memory.
+let cachedAccessToken: string | null = null;
 
 // Default initial mock Drive folder items to represent initial files on Drive
 const INITIAL_DRIVE_ITEMS: SyncItem[] = [];
@@ -18,6 +34,65 @@ export function getSyncedItems(): SyncItem[] {
 
 export function saveSyncedItems(items: SyncItem[]) {
   localStorage.setItem(SYNCED_ITEMS_KEY, JSON.stringify(items));
+}
+
+// Initialize auth state listener. Call this on app load.
+export const initAuth = (
+  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthFailure?: () => void
+) => {
+  return onAuthStateChanged(auth, async (user: User | null) => {
+    if (user) {
+      if (cachedAccessToken) {
+        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+      } else if (!isSigningIn) {
+        cachedAccessToken = null;
+        if (onAuthFailure) onAuthFailure();
+      }
+    } else {
+      cachedAccessToken = null;
+      if (onAuthFailure) onAuthFailure();
+    }
+  });
+};
+
+// Google sign-in using Firebase Auth
+export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  try {
+    isSigningIn = true;
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (!credential?.accessToken) {
+      throw new Error("Failed to get access token from Firebase Auth");
+    }
+
+    cachedAccessToken = credential.accessToken;
+    window.dispatchEvent(new CustomEvent("gdrive-sync-updated"));
+    return { user: result.user, accessToken: cachedAccessToken };
+  } catch (error: any) {
+    console.error("Sign in error:", error);
+    throw error;
+  } finally {
+    isSigningIn = false;
+  }
+};
+
+export const logout = async () => {
+  await auth.signOut();
+  cachedAccessToken = null;
+  window.dispatchEvent(new CustomEvent("gdrive-sync-updated"));
+};
+
+export function getGoogleAccessToken(): string | null {
+  return cachedAccessToken;
+}
+
+export function isGoogleConnected(): boolean {
+  return !!cachedAccessToken;
+}
+
+export function getConnectedUserEmail(): string | null {
+  return auth.currentUser?.email || null;
 }
 
 export function addSyncedItem(name: string, type: "document" | "sheet" | "proposal" | "declaration", content: string, pathPrefix = "Analisador_Pregões/") {
@@ -39,29 +114,24 @@ export function addSyncedItem(name: string, type: "document" | "sheet" | "propos
   const updated = [newItem, ...items];
   saveSyncedItems(updated);
 
+  // Attempt Supabase Sync
+  syncDocumentToSupabase({
+    id: newItem.id,
+    name: newItem.name,
+    type: newItem.type,
+    path: newItem.path,
+    timestamp: newItem.timestamp,
+    content: content
+  }).catch(err => {
+    console.warn("Falha no sync Supabase do documento:", err);
+  });
+
   // Attempt real Google Sync if token exists
   uploadToGoogleAPIsIfConnected(finalName, type, content, finalPath).catch(err => {
     console.warn("Falha no sync real (usuário não autenticado ou escopos pendentes):", err);
   });
 
   return newItem;
-}
-
-// Check if user is connected via GIS
-export function getGoogleAccessToken(): string | null {
-  return localStorage.getItem(GOOGLE_AUTH_TOKEN_KEY);
-}
-
-export function setGoogleAccessToken(token: string | null) {
-  if (token) {
-    localStorage.setItem(GOOGLE_AUTH_TOKEN_KEY, token);
-  } else {
-    localStorage.removeItem(GOOGLE_AUTH_TOKEN_KEY);
-  }
-}
-
-export function isGoogleConnected(): boolean {
-  return !!getGoogleAccessToken();
 }
 
 /**

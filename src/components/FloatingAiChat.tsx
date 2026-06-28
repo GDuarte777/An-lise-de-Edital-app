@@ -1,10 +1,17 @@
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 import { ChatMessage, ChatSession, CompanyData, EditalAnalysis, Attachment } from "../types";
 import { 
   MessageSquare, X, Send, Bot, User, Sparkles, Loader2, Plus, Trash2, 
-  Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight 
+  Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw 
 } from "lucide-react";
 import confetti from "canvas-confetti";
+import { 
+  callSupabaseGeminiEdgeFunction,
+  fetchChatSessionsFromSupabase,
+  saveChatSessionToSupabase,
+  deleteChatSessionFromSupabase
+} from "../utils/supabaseClient";
 
 interface FloatingAiChatProps {
   companyData: CompanyData;
@@ -93,9 +100,93 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Sync sessions with localStorage and update scroll
+  // Resizing configuration & state
+  const DEFAULT_WIDTH = 860;
+  const DEFAULT_HEIGHT = 580;
+  const [width, setWidth] = useState(() => {
+    const saved = localStorage.getItem("aip_chat_width");
+    return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
+  });
+  const [height, setHeight] = useState(() => {
+    const saved = localStorage.getItem("aip_chat_height");
+    return saved ? parseInt(saved, 10) : DEFAULT_HEIGHT;
+  });
+  const [isDesktop, setIsDesktop] = useState(false);
+
+  useEffect(() => {
+    const checkIsDesktop = () => setIsDesktop(window.innerWidth >= 768);
+    checkIsDesktop();
+    window.addEventListener("resize", checkIsDesktop);
+    return () => window.removeEventListener("resize", checkIsDesktop);
+  }, []);
+
+  const handleResizeStart = (e: React.MouseEvent, direction: "top" | "left" | "top-left") => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startWidth = width;
+    const startHeight = height;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (direction === "left" || direction === "top-left") {
+        const deltaX = startX - moveEvent.clientX;
+        const newWidth = Math.max(400, Math.min(1600, startWidth + deltaX));
+        setWidth(newWidth);
+        localStorage.setItem("aip_chat_width", String(newWidth));
+      }
+      if (direction === "top" || direction === "top-left") {
+        const deltaY = startY - moveEvent.clientY;
+        const newHeight = Math.max(300, Math.min(1200, startHeight + deltaY));
+        setHeight(newHeight);
+        localStorage.setItem("aip_chat_height", String(newHeight));
+      }
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  };
+
+  const extractLocalTitle = (text: string): string => {
+    if (!text) return "Conversa Rápida";
+    const clean = text.replace(/[^\w\sÀ-ÿ]/g, "").trim();
+    const words = clean.split(/\s+/).filter(w => w.length > 0);
+    if (words.length === 0) return "Conversa Rápida";
+    const titleWords = words.slice(0, 3).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+    return titleWords.join(" ");
+  };
+
+  // Load from Supabase on mount
+  useEffect(() => {
+    async function loadChatSessions() {
+      try {
+        const dbSessions = await fetchChatSessionsFromSupabase();
+        if (dbSessions && dbSessions.length > 0) {
+          setSessions(dbSessions);
+          setActiveSessionId(dbSessions[0].id);
+        }
+      } catch (e) {
+        console.warn("Erro ao carregar sessões de chat do Supabase:", e);
+      }
+    }
+    loadChatSessions();
+  }, []);
+
+  // Sync sessions with localStorage, Supabase and update scroll
   useEffect(() => {
     localStorage.setItem("aip_chat_sessions", JSON.stringify(sessions));
+    
+    // Sync to Supabase in background
+    sessions.forEach(session => {
+      saveChatSessionToSupabase(session).catch(e => console.warn("Erro de sincronismo de chat no Supabase:", e));
+    });
+
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
@@ -139,6 +230,7 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   const handleDeleteChat = (e: React.MouseEvent, idToDelete: string) => {
     e.stopPropagation();
     
+    deleteChatSessionFromSupabase(idToDelete).catch((err) => console.warn("Erro ao deletar sessão de chat do Supabase:", err));
     const updated = sessions.filter(s => s.id !== idToDelete);
     
     if (updated.length === 0) {
@@ -201,13 +293,47 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
     attachmentInputRef.current?.click();
   };
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.indexOf("image") !== -1) {
+        const file = item.getAsFile();
+        if (!file) continue;
+
+        // Reject files larger than 100MB
+        if (file.size > 100 * 1024 * 1024) {
+          alert("A imagem colada excede o limite de 100MB.");
+          continue;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const base64Data = event.target?.result as string;
+          setSelectedAttachment({
+            name: file.name || `imagem-colada-${Date.now()}.png`,
+            type: file.type || "image/png",
+            data: base64Data
+          });
+        };
+        reader.readAsDataURL(file);
+        
+        // Prevent default pasting of text (since we handled it as an image)
+        e.preventDefault();
+        break;
+      }
+    }
+  };
+
   const handleFileAttachmentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Reject files larger than 12MB to protect local storage
-    if (file.size > 12 * 1024 * 1024) {
-      alert("O arquivo excede o limite recomendado de 12MB. Selecione uma imagem ou arquivo menor.");
+    // Reject files larger than 100MB to support larger documents
+    if (file.size > 100 * 1024 * 1024) {
+      alert("O arquivo excede o limite de 100MB. Por favor, selecione uma imagem ou documento menor.");
       return;
     }
 
@@ -235,12 +361,20 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
       attachment: selectedAttachment || undefined
     };
 
-    // Update active session messages immediately
+    // Detect if this is the first user message in this session to auto-generate a title
+    const isFirstUserMsg = activeSession.messages.filter(m => m.role === "user").length === 0;
+    const initialLocalTitle = isFirstUserMsg ? extractLocalTitle(text) : "";
+
+    // Update active session messages immediately (and set initial local title if applicable)
     const updatedMessages = [...(activeSession.messages || []), userMsg];
     
     setSessions(prev => prev.map(s => {
       if (s.id === activeSessionId) {
-        return { ...s, messages: updatedMessages };
+        return { 
+          ...s, 
+          messages: updatedMessages,
+          title: isFirstUserMsg ? initialLocalTitle : s.title
+        };
       }
       return s;
     }));
@@ -249,28 +383,75 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
     setSelectedAttachment(null);
     setLoading(true);
 
-    try {
-      const selectedEditalObj = getSelectedEditalObject(activeSession.selectedEditalId);
-      
-      const response = await fetch("/api/chat", {
+    // Asynchronously request a beautiful AI-generated title for the thread
+    if (isFirstUserMsg) {
+      fetch("/api/chat/title", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: updatedMessages,
-          companyData: companyData,
-          activeEditalAnalysis: selectedEditalObj
-        })
-      });
+        body: JSON.stringify({ message: text })
+      })
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error();
+      })
+      .then(data => {
+        if (data && data.title) {
+          setSessions(prev => prev.map(s => {
+            if (s.id === activeSessionId) {
+              return { ...s, title: data.title };
+            }
+            return s;
+          }));
+        }
+      })
+      .catch(err => console.warn("Erro ao obter título da IA, mantendo provisório:", err));
+    }
 
-      if (!response.ok) {
-        throw new Error("Erro na rede.");
+    try {
+      const selectedEditalObj = getSelectedEditalObject(activeSession.selectedEditalId);
+      const routeViaSupabase = localStorage.getItem("supabase_route_ai") === "true";
+      let replyText = "";
+
+      if (routeViaSupabase) {
+        console.log("[Chat] Routing chat question via Supabase Edge Function...");
+        
+        // Build systemic context instruction
+        const systemInstruction = `Você é o Assessor Inteligente Especialista do "Analisador de Editais". Seu papel é ajudar o usuário a triunfar em licitações públicas. Forneça respostas diretas, úteis e estrategicamente polidas em Markdown.
+        
+        Informações da Empresa:
+        ${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyData.cnpj}\n- Representante: ${companyData.representativeName}` : "Não fornecida."}
+        
+        Edital Ativo:
+        ${selectedEditalObj ? JSON.stringify(selectedEditalObj, null, 2) : "Nenhum edital selecionado."}`;
+
+        // Format conversational history as simple string for standard prompt if Edge function is general
+        const conversationalHistoryText = updatedMessages.map(m => `${m.role === "assistant" ? "Assistente" : "Usuário"}: ${m.content}`).join("\n");
+        const prompt = `Histórico de Conversa:\n${conversationalHistoryText}\n\nResponda ao último comentário do Usuário com base no histórico acima e nas instruções do sistema.`;
+
+        replyText = await callSupabaseGeminiEdgeFunction(prompt, systemInstruction, "gemini-3.5-flash", false);
+      } else {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: updatedMessages,
+            companyData: companyData,
+            activeEditalAnalysis: selectedEditalObj
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error("Erro na rede.");
+        }
+
+        const data = await response.json();
+        replyText = data.reply || "";
       }
 
-      const data = await response.json();
       const assistantMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
         role: "assistant",
-        content: data.reply || "Desculpe, não consegui obter uma resposta para essa pergunta. Tente novamente.",
+        content: replyText || "Desculpe, não consegui obter uma resposta para essa pergunta. Tente novamente.",
         timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
       };
 
@@ -326,7 +507,34 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
         <div 
           id="chat-popup-container"
           className="bg-slate-900/40 border border-white/10 backdrop-blur-xl rounded-2xl shadow-2xl fixed inset-4 md:inset-auto md:bottom-6 md:right-6 w-auto md:w-[780px] lg:w-[860px] h-auto md:h-[580px] flex flex-row overflow-hidden animate-scale-up z-50"
+          style={{
+            width: isDesktop ? `${width}px` : undefined,
+            height: isDesktop ? `${height}px` : undefined,
+          }}
         >
+          {/* Resize handles */}
+          {isDesktop && (
+            <>
+              {/* Left Edge Handle */}
+              <div
+                className="absolute left-0 top-1 bottom-1 w-1.5 cursor-ew-resize hover:bg-indigo-500/40 active:bg-indigo-500 transition-colors z-50"
+                onMouseDown={(e) => handleResizeStart(e, "left")}
+                title="Arraste para redimensionar largura"
+              />
+              {/* Top Edge Handle */}
+              <div
+                className="absolute top-0 left-1 right-1 h-1.5 cursor-ns-resize hover:bg-indigo-500/40 active:bg-indigo-500 transition-colors z-50"
+                onMouseDown={(e) => handleResizeStart(e, "top")}
+                title="Arraste para redimensionar altura"
+              />
+              {/* Top-Left Corner Handle */}
+              <div
+                className="absolute left-0 top-0 w-3.5 h-3.5 cursor-nwse-resize hover:bg-indigo-500/50 active:bg-indigo-500 transition-colors z-50 border-t-2 border-l-2 border-slate-500/40 rounded-tl"
+                onMouseDown={(e) => handleResizeStart(e, "top-left")}
+                title="Arraste para redimensionar"
+              />
+            </>
+          )}
           {/* LEFT SIDEBAR VIEW - CHATS CATALOG */}
           <div className={`
             ${showSidebarMobile ? "flex w-full" : "hidden md:flex"} 
@@ -464,12 +672,30 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
                 </div>
               </div>
               
-              <button
-                onClick={() => setIsOpen(false)}
-                className="text-slate-400 hover:text-white p-1.5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                {isDesktop && (width !== DEFAULT_WIDTH || height !== DEFAULT_HEIGHT) && (
+                  <button
+                    onClick={() => {
+                      setWidth(DEFAULT_WIDTH);
+                      setHeight(DEFAULT_HEIGHT);
+                      localStorage.removeItem("aip_chat_width");
+                      localStorage.removeItem("aip_chat_height");
+                    }}
+                    className="text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-500/20 hover:border-indigo-500/40 bg-indigo-500/10 px-2 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                    title="Restaurar o tamanho padrão da janela do chat"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Tamanho Padrão</span>
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setIsOpen(false)}
+                  className="text-slate-400 hover:text-white p-1.5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Edital Selection Context Ribbon */}
@@ -504,7 +730,7 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
             {/* Scrollable Messages Area */}
             <div 
               ref={scrollRef}
-              className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/10"
+              className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/10 select-text"
             >
               {activeSession.messages.map((m) => (
                 <div
@@ -520,7 +746,7 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
                   )}
                   
                   <div
-                    className={`max-w-[80%] rounded-2xl p-3 leading-normal border shadow-sm ${
+                    className={`max-w-[80%] rounded-2xl p-3 leading-normal border shadow-sm select-text ${
                       m.role === "user"
                         ? "bg-indigo-600/80 border-indigo-500/30 text-white rounded-tr-none"
                         : "bg-white/5 text-slate-100 border-white/10 rounded-tl-none"
@@ -559,9 +785,20 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
                       </div>
                     )}
 
-                    <p className="whitespace-pre-wrap font-normal prose text-xs prose-invert leading-normal">
-                      {m.content}
-                    </p>
+                    <div className="text-xs leading-normal select-text">
+                      <ReactMarkdown 
+                        components={{
+                          p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 select-text whitespace-pre-wrap leading-normal font-sans" {...props} />,
+                          strong: ({node, ...props}) => <strong className={`font-bold select-text ${m.role === 'user' ? 'text-white font-black' : 'text-indigo-200 font-extrabold'}`} {...props} />,
+                          ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                          ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                          li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap" {...props} />,
+                          code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono select-text" {...props} />,
+                        }}
+                      >
+                        {m.content}
+                      </ReactMarkdown>
+                    </div>
                     <span className={`text-[9px] block text-right mt-1.5 ${
                       m.role === "user" ? "text-indigo-200" : "text-slate-400"
                     }`}>
@@ -663,7 +900,8 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
                 type="text"
                 value={inputVal}
                 onChange={(e) => setInputVal(e.target.value)}
-                placeholder="Escreva sua dúvida técnica, fiscal, ou anexe um arquivo..."
+                onPaste={handlePaste}
+                placeholder="Escreva sua dúvida, cole uma imagem (Ctrl+V) ou anexe arquivos..."
                 className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs md:text-sm text-white placeholder-slate-400 focus:outline-none focus:bg-slate-950/60 focus:ring-1 focus:ring-indigo-500"
               />
 
