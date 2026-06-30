@@ -17,7 +17,7 @@ serve(async (req) => {
   }
 
   try {
-    const { prompt, systemInstruction, model = "gemini-3.5-flash", jsonMode = false } = await req.json();
+    const { prompt, systemInstruction, model = "gemini-1.5-flash", jsonMode = false } = await req.json();
 
     if (!prompt) {
       return new Response(

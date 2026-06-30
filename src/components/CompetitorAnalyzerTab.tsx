@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import confetti from "canvas-confetti";
+import { getActiveAiConfig } from "../utils/aiClientHelper";
 import { CompetitorAnalysis, CompetitorHistoryItem, EditalAnalysis } from "../types";
 
 interface CompetitorAnalyzerTabProps {
@@ -182,6 +183,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
 
     setLoading(true);
     try {
+      const aiConfig = getActiveAiConfig();
       const response = await fetch("/api/analyze-competitor", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -190,7 +192,8 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
           competitorDocumentText,
           files: competitorFiles,
           editalText: editalTextToAnalyze,
-          focusItems
+          focusItems,
+          aiConfig
         })
       });
 

@@ -17,6 +17,7 @@ import {
   deleteEditalFromSupabase
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
+import { getActiveAiConfig } from "../utils/aiClientHelper";
 
 // Portuguese demo data for instant simulation & testing convenience
 const DEMO_EDITAL_TEXT = `
@@ -309,6 +310,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     };
 
     try {
+      const aiConfig = getActiveAiConfig();
       const response = await fetch("/api/generate-document", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -317,7 +319,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           analysisData: activeEdital,
           companyData: companyData,
           extraInstructions,
-          proposalDetails: details
+          proposalDetails: details,
+          aiConfig
         })
       });
 
@@ -420,8 +423,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       const routeViaSupabase = localStorage.getItem("supabase_route_ai") === "true";
       let data: any;
 
-      if (routeViaSupabase) {
-        console.log("[Analyzer] Routing analysis via Supabase Deno Edge Function...");
+      console.log("[Analyzer] Routing analysis...");
         const systemInstruction = `Você é um Analista de Licitações Públicas sênior. Sua missão é ler o edital/termo de referência anexado e gerar uma análise completa estruturada rigidamente como um JSON com as chaves correspondentes.`;
         
         // Prepare a prompt that fits the requested JSON schema
@@ -447,27 +449,32 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
         Importante: Não coloque marcadores de código como \`\`\`json ou quebras estranhas. Retorne apenas a string JSON válida.`;
 
-        const edgeResultStr = await callSupabaseGeminiEdgeFunction(
-          fullPrompt,
-          systemInstruction,
-          "gemini-3.5-flash",
-          true // jsonMode
-        );
+        const aiConfig = getActiveAiConfig();
+        const useLocal = !!aiConfig.apiKey || !routeViaSupabase;
 
-        const cleanJsonStr = edgeResultStr.replace(/^```json/, "").replace(/```$/, "").trim();
-        const parsedJson = JSON.parse(cleanJsonStr);
-        data = { analysis: parsedJson };
-      } else {
-        const response = await fetch("/api/analyze-edital", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            textInput: textInput,
-            fileBase64: fileBase64,
-            fileName: fileDetails?.name,
-            fileType: fileDetails?.type
-          })
-        });
+        if (!useLocal) {
+          const edgeResultStr = await callSupabaseGeminiEdgeFunction(
+            fullPrompt,
+            systemInstruction,
+            "gemini-3.5-flash",
+            true // jsonMode
+          );
+
+          const cleanJsonStr = edgeResultStr.replace(/^```json/, "").replace(/```$/, "").trim();
+          const parsedJson = JSON.parse(cleanJsonStr);
+          data = { analysis: parsedJson };
+        } else {
+          const response = await fetch("/api/analyze-edital", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              textInput: textInput,
+              fileBase64: fileBase64,
+              fileName: fileDetails?.name,
+              fileType: fileDetails?.type,
+              aiConfig
+            })
+          });
 
         if (!response.ok) {
           throw new Error("Erro na resposta do servidor.");
@@ -525,6 +532,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
     setGeneratingDoc(docType);
     try {
+      const aiConfig = getActiveAiConfig();
       const response = await fetch("/api/generate-document", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -533,7 +541,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           analysisData: activeEdital,
           companyData: companyData,
           extraInstructions,
-          uploadedTemplateText: docType === "custom_declaration" ? (uploadedTemplateText || DEMO_CUSTOM_TEMPLATE) : undefined
+          uploadedTemplateText: docType === "custom_declaration" ? (uploadedTemplateText || DEMO_CUSTOM_TEMPLATE) : undefined,
+          aiConfig
         })
       });
 

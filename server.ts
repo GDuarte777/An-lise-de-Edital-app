@@ -26,10 +26,19 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
+function cleanAndParseJson(text: string): any {
+  if (!text) return {};
+  let cleaned = text.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\n/, "").replace(/```$/, "").trim();
+  }
+  return JSON.parse(cleaned);
+}
+
 // Robust content generation helper with automatic fallback for high demand/503 errors
 async function generateContentWithFallback(params: any): Promise<any> {
   const client = getAiClient();
-  const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+  const modelsToTry = ["gemini-3.5-flash", "gemini-3.5-pro", "gemini-3.1-pro", "gemini-3.1-flash-lite", "gemini-1.5-flash"];
   
   if (params.model) {
     const idx = modelsToTry.indexOf(params.model);
@@ -73,6 +82,205 @@ async function generateContentWithFallback(params: any): Promise<any> {
     }
   }
   throw lastError;
+}
+
+// Dynamic Multi-Provider AI Routing Helper
+async function generateAiResponse(params: {
+  contents: any[];
+  systemInstruction?: string;
+  aiConfig?: {
+    provider: string;
+    apiKey: string;
+    model?: string;
+  };
+  jsonMode?: boolean;
+  model?: string;
+  responseSchema?: any;
+  tools?: any;
+}): Promise<any> {
+  const { contents, systemInstruction, aiConfig, jsonMode, model, responseSchema, tools } = params;
+
+  if (aiConfig && aiConfig.provider && aiConfig.apiKey) {
+    const { provider, apiKey, model: configModel } = aiConfig;
+    const activeModel = configModel || model;
+    console.log(`[Dynamic AI Router] Routing via ${provider} | Model: ${activeModel}`);
+
+    // Pre-process contents if they contain inlineData (binary files/images) and provider is not Gemini.
+    // We use the default Gemini client (via the server's GEMINI_API_KEY) to extract the text from the files/images.
+    let processedContents = [...contents];
+    const hasInlineData = contents.some(c => 
+      c.parts && c.parts.some((p: any) => p.inlineData)
+    );
+
+    if (hasInlineData && provider !== "gemini") {
+      console.log(`[Dynamic AI Router] Extracting text from binary file via Gemini helper for ${provider}...`);
+      for (let i = 0; i < processedContents.length; i++) {
+        const c = processedContents[i];
+        if (c.parts) {
+          const newParts = [];
+          for (const p of c.parts) {
+            if (p.inlineData) {
+              try {
+                const extractionResponse = await generateContentWithFallback({
+                  contents: [{ parts: [p, { text: "Extraia todo o texto contido neste documento na íntegra de forma exata, mantendo a estrutura original e tabelas se houver. Não faça comentários ou introduções, apenas retorne o texto do documento." }] }],
+                  model: "gemini-3.5-flash"
+                });
+                const extractedText = extractionResponse.text || "";
+                newParts.push({ text: `[Conteúdo extraído do arquivo]:\n${extractedText}` });
+              } catch (err: any) {
+                console.error("Erro ao extrair texto do arquivo via Gemini:", err.message);
+                newParts.push({ text: `[Erro na extração do arquivo: ${err.message}]` });
+              }
+            } else {
+              newParts.push(p);
+            }
+          }
+          processedContents[i] = { ...c, parts: newParts };
+        }
+      }
+    }
+
+    // Map Gemini contents format to standard OpenAI/Anthropic messages format
+    const messages = processedContents.map(c => {
+      const role = c.role === "model" || c.role === "assistant" ? "assistant" : "user";
+      let content = "";
+      if (typeof c === "string") {
+        content = c;
+      } else if (c.text) {
+        content = c.text;
+      } else if (c.parts) {
+        content = c.parts.map((p: any) => p.text || "").join("\n");
+      }
+      return { role, content };
+    });
+
+    // Ensure we don't have empty content messages
+    const validMessages = messages.filter(m => m.content.trim() !== "");
+
+    if (provider === "openai") {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: activeModel || "gpt-4o",
+          messages: [
+            ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+            ...validMessages
+          ],
+          response_format: jsonMode ? { type: "json_object" } : undefined
+        })
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenAI Error: ${response.status} - ${errorText}`);
+      }
+      const data = await response.json();
+      const text = data.choices?.[0]?.message?.content || "";
+      return {
+        text,
+        candidates: [{ content: { parts: [{ text }] } }]
+      };
+    }
+
+    if (provider === "anthropic") {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify({
+          model: activeModel || "claude-3-7-sonnet-20250219",
+          max_tokens: 4096,
+          system: systemInstruction,
+          messages: validMessages
+        })
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Anthropic Error: ${response.status} - ${errorText}`);
+      }
+      const data = await response.json();
+      const text = data.content?.[0]?.text || "";
+      return {
+        text,
+        candidates: [{ content: { parts: [{ text }] } }]
+      };
+    }
+
+    if (provider === "deepseek") {
+      const response = await fetch("https://api.deepseek.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: activeModel || "deepseek-chat",
+          messages: [
+            ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+            ...validMessages
+          ],
+          response_format: jsonMode ? { type: "json_object" } : undefined
+        })
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`DeepSeek Error: ${response.status} - ${errorText}`);
+      }
+      const data = await response.json();
+      const text = data.choices?.[0]?.message?.content || "";
+      return {
+        text,
+        candidates: [{ content: { parts: [{ text }] } }]
+      };
+    }
+
+    if (provider === "gemini") {
+      const geminiModelName = activeModel || "gemini-3.5-flash";
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelName}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents,
+          generationConfig: {
+            systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+            responseMimeType: jsonMode ? "application/json" : undefined,
+            responseSchema: responseSchema
+          },
+          tools: tools
+        })
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Gemini Error: ${response.status} - ${errorText}`);
+      }
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      return {
+        text,
+        candidates: data.candidates || [],
+        groundingMetadata: data.candidates?.[0]?.groundingMetadata || null
+      };
+    }
+  }
+
+  // Fallback default env configured Gemini
+  const response = await generateContentWithFallback({
+    contents,
+    config: {
+      systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+      responseMimeType: jsonMode ? "application/json" : undefined,
+      responseSchema: responseSchema
+    },
+    model: model
+  });
+  return response;
 }
 
 // --- LOCAL FALLBACK EMULATORS IN CASE OF GEMINI QUOTA LIMITS (RESOURCE_EXHAUSTED / 429) ---
@@ -554,7 +762,7 @@ async function startServer() {
   // API Route: Analyze Edital
   app.post("/api/analyze-edital", async (req, res): Promise<any> => {
     try {
-      const { textInput, fileBase64, fileName, fileType } = req.body;
+      const { textInput, fileBase64, fileName, fileType, aiConfig } = req.body;
 
       if (!textInput && !fileBase64) {
         return res.status(400).json({ error: "Nenhum conteúdo de edital enviado." });
@@ -616,13 +824,13 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
           : basePrompt
       });
 
-      console.log("Chamando Gemini API para análise de edital com 6 pilares de inteligência...");
-      const response = await generateContentWithFallback({
+      console.log("Chamando AI Router para análise de edital...");
+      const response = await generateAiResponse({
         model: "gemini-3.5-flash",
         contents: contentParts,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
+        aiConfig,
+        jsonMode: true,
+        responseSchema: {
             type: Type.OBJECT,
             properties: {
               pontosPositivos: {
@@ -719,11 +927,10 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
               "reportMarkdown"
             ]
           }
-        }
       });
 
       const rawJson = response.text || "{}";
-      const parsedData = JSON.parse(rawJson);
+      const parsedData = cleanAndParseJson(rawJson);
       return res.json({ analysis: parsedData });
     } catch (error: any) {
       console.error("Erro na análise do edital, aplicando fallback inteligente local...", error);
@@ -740,7 +947,7 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
   // API Route: Analyze Competitor Documents
   app.post("/api/analyze-competitor", async (req, res): Promise<any> => {
     try {
-      const { competitorName, competitorDocumentText, fileBase64, fileType, files, editalText, focusItems } = req.body;
+      const { competitorName, competitorDocumentText, fileBase64, fileType, files, editalText, focusItems, aiConfig } = req.body;
 
       if (!competitorDocumentText && !fileBase64 && (!files || files.length === 0)) {
         return res.status(400).json({ error: "Nenhum documento do concorrente enviado." });
@@ -801,13 +1008,13 @@ O formato de retorno DEVE ser obrigatoriamente um objeto JSON com o esquema defi
           : basePrompt
       });
 
-      console.log("Chamando Gemini API para auditoria jurídica do concorrente com extração automática...");
-      const response = await generateContentWithFallback({
+      console.log("Chamando AI Router para auditoria jurídica do concorrente...");
+      const response = await generateAiResponse({
         model: "gemini-3.5-flash",
         contents: contentParts,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
+        aiConfig,
+        jsonMode: true,
+        responseSchema: {
             type: Type.OBJECT,
             properties: {
               competitorName: {
@@ -851,11 +1058,10 @@ O formato de retorno DEVE ser obrigatoriamente um objeto JSON com o esquema defi
               "competitorName", "isCompliant", "irregularidadesEncontradas", "pontosFortesConcorrente", "modeloRecurso", "analiseEstiloMarkdown"
             ]
           }
-        }
       });
 
       const rawJson = response.text || "{}";
-      const parsedData = JSON.parse(rawJson);
+      const parsedData = cleanAndParseJson(rawJson);
       return res.json({ analysis: parsedData });
     } catch (error: any) {
       console.error("Erro na análise do concorrente, aplicando fallback...", error);
@@ -934,7 +1140,7 @@ Identificamos **2 irregularidades de gravidade ALTA** que servem como fundamenta
   // API Route: Analyze Certificate / Document
   app.post("/api/analyze-cert", async (req, res): Promise<any> => {
     try {
-      const { fileBase64, fileName, fileType, docName } = req.body;
+      const { fileBase64, fileName, fileType, docName, aiConfig } = req.body;
 
       if (!fileBase64 && !fileName) {
         return res.status(400).json({ error: "Nenhum arquivo ou nome de arquivo enviado para análise." });
@@ -980,13 +1186,13 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
         text: basePrompt
       });
 
-      console.log(`Chamando Gemini API para análise da certidão com verificação de tipo: ${docName || fileName}...`);
-      const response = await generateContentWithFallback({
+      console.log(`Chamando AI Router para análise da certidão: ${docName || fileName}...`);
+      const response = await generateAiResponse({
         model: "gemini-3.5-flash",
         contents: contentParts,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
+        aiConfig,
+        jsonMode: true,
+        responseSchema: {
             type: Type.OBJECT,
             properties: {
               expirationDate: {
@@ -1017,11 +1223,10 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
             },
             required: ["expirationDate", "documentMatchesRow", "validationFeedback", "extractedCompanyData"]
           }
-        }
       });
 
       const rawJson = response.text || "{}";
-      const parsedData = JSON.parse(rawJson);
+      const parsedData = cleanAndParseJson(rawJson);
       return res.json({ result: parsedData });
     } catch (error: any) {
       console.error("Erro na análise da certidão, aplicando fallback inteligente local...", error);
@@ -1038,7 +1243,7 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
   // API Route: Generate Document (Proposals, Declarations, etc.)
   app.post("/api/generate-document", async (req, res): Promise<any> => {
     try {
-      const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText, proposalDetails } = req.body;
+      const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText, proposalDetails, aiConfig } = req.body;
 
       let prompt = "";
 
@@ -1145,10 +1350,11 @@ Manter a redação original do modelo fornecido pelo usuário, apenas aprimorand
         return res.status(400).json({ error: "Tipo de documento inválido." });
       }
 
-      console.log(`Chamando Gemini API para gerar documento (${docType})...`);
-      const response = await generateContentWithFallback({
+      console.log(`Chamando AI Router para gerar documento (${docType})...`);
+      const response = await generateAiResponse({
         model: "gemini-3.5-flash",
-        contents: prompt,
+        contents: [{ text: prompt }],
+        aiConfig,
       });
 
       return res.json({ 
@@ -1173,7 +1379,7 @@ Manter a redação original do modelo fornecido pelo usuário, apenas aprimorand
   // API Route: Compare candidate products with edital product specifications using Google Search grounding
   app.post("/api/compare-products", async (req, res): Promise<any> => {
     try {
-      const { requiredSpecs, candidateProducts } = req.body;
+      const { requiredSpecs, candidateProducts, aiConfig } = req.body;
 
       if (!requiredSpecs || !candidateProducts || !Array.isArray(candidateProducts)) {
         return res.status(400).json({ error: "Parâmetros 'requiredSpecs' ou 'candidateProducts' inválidos ou ausentes." });
@@ -1223,16 +1429,15 @@ Retorne sua resposta estritamente no seguinte formato JSON, sem comentários nem
 
 Retorne exclusivamente o JSON bruto estruturado e validável.`;
 
-            const response = await generateContentWithFallback({
+            const response = await generateAiResponse({
               model: "gemini-3.5-flash",
-              contents: prompt,
-              config: {
-                tools: [{ googleSearch: {} }],
-                responseMimeType: "application/json"
-              }
+              contents: [{ text: prompt }],
+              aiConfig,
+              jsonMode: true,
+              tools: [{ googleSearch: {} }]
             });
 
-            const parsedResult = JSON.parse(response.text.trim());
+            const parsedResult = cleanAndParseJson(response.text);
             return {
               originalName: productModel,
               success: true,
@@ -1265,7 +1470,7 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
   // API Route: Floating Gemini AI Chat Router
   app.post("/api/chat", async (req, res): Promise<any> => {
     try {
-      const { messages, companyData, activeEditalAnalysis } = req.body;
+      const { messages, companyData, activeEditalAnalysis, aiConfig } = req.body;
 
       if (!messages || !Array.isArray(messages)) {
         return res.status(400).json({ error: "Mensagens inválidas ou ausentes." });
@@ -1316,12 +1521,11 @@ Escreva suas respostas de forma polida e profissional utilizando formatação Ma
       // Prepend context to the first message, or use it systemInstruction
       // We can invoke with a specific system instruction.
       console.log("Chamando Gemini API Chat...");
-      const response = await generateContentWithFallback({
+      const response = await generateAiResponse({
         model: "gemini-3.5-flash",
         contents: formattedHistory,
-        config: {
-          systemInstruction: contextPrefix,
-        }
+        systemInstruction: contextPrefix,
+        aiConfig,
       });
 
       return res.json({ reply: response.text });
@@ -1340,7 +1544,7 @@ Escreva suas respostas de forma polida e profissional utilizando formatação Ma
   // API Route: Generate Chat Title based on first message
   app.post("/api/chat/title", async (req, res): Promise<any> => {
     try {
-      const { message } = req.body;
+      const { message, aiConfig } = req.body;
       if (!message || typeof message !== "string") {
         return res.status(400).json({ error: "Mensagem ausente ou inválida." });
       }
@@ -1350,9 +1554,10 @@ Escreva suas respostas de forma polida e profissional utilizando formatação Ma
 Dúvida do usuário: "${message.substring(0, 500)}"`;
 
       console.log("Chamando Gemini API para gerar título de conversa...");
-      const response = await generateContentWithFallback({
+      const response = await generateAiResponse({
         model: "gemini-3.5-flash",
         contents: [{ role: "user", parts: [{ text: prompt }] }],
+        aiConfig,
       });
 
       let generatedTitle = response.text ? response.text.trim() : "";

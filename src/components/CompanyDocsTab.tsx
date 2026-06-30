@@ -11,6 +11,7 @@ import {
   FileUp, Loader2, GripVertical
 } from "lucide-react";
 import confetti from "canvas-confetti";
+import { getActiveAiConfig } from "../utils/aiClientHelper";
 
 // Dynamic real-time date extraction for comparative analysis (timezone-safe)
 const getLocalTodayStr = (): string => {
@@ -336,6 +337,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     reader.onload = async (e) => {
       try {
         const base64String = (e.target?.result as string).split(",")[1];
+        const aiConfig = getActiveAiConfig();
         
         const response = await fetch("/api/analyze-cert", {
           method: "POST",
@@ -344,7 +346,8 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
             fileBase64: base64String,
             fileName: file.name,
             fileType: file.type || "application/pdf",
-            docName: certs.find(c => c.id === certId)?.name || ""
+            docName: certs.find(c => c.id === certId)?.name || "",
+            aiConfig
           })
         });
 

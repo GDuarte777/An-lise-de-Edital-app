@@ -6,6 +6,7 @@ import {
   Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw 
 } from "lucide-react";
 import confetti from "canvas-confetti";
+import { getActiveAiConfig } from "../utils/aiClientHelper";
 import { 
   callSupabaseGeminiEdgeFunction,
   fetchChatSessionsFromSupabase,
@@ -385,10 +386,11 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
 
     // Asynchronously request a beautiful AI-generated title for the thread
     if (isFirstUserMsg) {
+      const aiConfig = getActiveAiConfig();
       fetch("/api/chat/title", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text })
+        body: JSON.stringify({ message: text, aiConfig })
       })
       .then(res => {
         if (res.ok) return res.json();
@@ -409,10 +411,12 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
 
     try {
       const selectedEditalObj = getSelectedEditalObject(activeSession.selectedEditalId);
+      const aiConfig = getActiveAiConfig();
       const routeViaSupabase = localStorage.getItem("supabase_route_ai") === "true";
+      const useLocal = !!aiConfig.apiKey || !routeViaSupabase;
       let replyText = "";
-
-      if (routeViaSupabase) {
+ 
+      if (!useLocal) {
         console.log("[Chat] Routing chat question via Supabase Edge Function...");
         
         // Build systemic context instruction
@@ -436,7 +440,8 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
           body: JSON.stringify({
             messages: updatedMessages,
             companyData: companyData,
-            activeEditalAnalysis: selectedEditalObj
+            activeEditalAnalysis: selectedEditalObj,
+            aiConfig
           })
         });
 

@@ -12,6 +12,7 @@ import ProductComparatorTab from "./components/ProductComparatorTab";
 import LanceBotTab from "./components/LanceBotTab";
 import CompetitorAnalyzerTab from "./components/CompetitorAnalyzerTab";
 import CloudSyncTab from "./components/CloudSyncTab";
+import AiConfigTab from "./components/AiConfigTab";
 import FloatingAiChat from "./components/FloatingAiChat";
 import DocPreviewModal from "./components/DocPreviewModal";
 import { 
@@ -22,7 +23,10 @@ import {
   getSupabaseClient,
   signUpWithSupabase,
   signInWithSupabase,
-  signOutWithSupabase
+  signOutWithSupabase,
+  fetchCompanyDataFromSupabase,
+  fetchUserConfigFromSupabase,
+  saveCompanyDataToSupabase
 } from "./utils/supabaseClient";
 import SupabaseLoginScreen from "./components/SupabaseLoginScreen";
 
@@ -39,7 +43,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "sync">("analyzer");
+  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "sync" | "aiConfig">("analyzer");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
@@ -98,6 +102,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [authLoading, setAuthLoading] = useState(false);
   const [authMessage, setAuthMessage] = useState<{ success: boolean; message: string } | null>(null);
+  const [activeProvider, setActiveProvider] = useState<string>("gemini");
 
   // Sync Log list
   const [syncLogs, setSyncLogs] = useState<string[]>([
@@ -117,10 +122,119 @@ export default function App() {
     type: "proposal"
   });
 
-  // Load persistence
+  // Clean any remnant test/fictional keys from local storage
   useEffect(() => {
-    localStorage.setItem("aip_company_data", JSON.stringify(companyData));
-  }, [companyData]);
+    const keysToCheck = ["ai_gemini_key", "ai_openai_key", "ai_anthropic_key", "ai_deepseek_key"];
+    keysToCheck.forEach(key => {
+      const val = localStorage.getItem(key);
+      if (val && (
+        val === "AIzaSy..." || 
+        val.startsWith("AIzaSy-placeholder") || 
+        val === "sk-proj-..." || 
+        val === "sk-ant-..." || 
+        val === "sk-..." || 
+        val.includes("placeholder")
+      )) {
+        localStorage.removeItem(key);
+      }
+    });
+  }, []);
+
+  // Sync provider state on load and config updates
+  useEffect(() => {
+    const syncActiveProvider = () => {
+      setActiveProvider(localStorage.getItem("ai_active_provider") || "gemini");
+    };
+    syncActiveProvider();
+    window.addEventListener("user-config-loaded", syncActiveProvider);
+    return () => {
+      window.removeEventListener("user-config-loaded", syncActiveProvider);
+    };
+  }, []);
+
+  const handleGlobalProviderChange = async (newProvider: string) => {
+    setActiveProvider(newProvider);
+    localStorage.setItem("ai_active_provider", newProvider);
+    addLogMessage(`Provedor de IA ativo alterado para: ${newProvider}`);
+    window.dispatchEvent(new Event("user-config-loaded"));
+
+    // Persist to Supabase dynamically
+    if (supabaseUser) {
+      try {
+        const { saveUserConfigToSupabase, fetchUserConfigFromSupabase } = await import("./utils/supabaseClient");
+        const currentConfig = await fetchUserConfigFromSupabase();
+        
+        await saveUserConfigToSupabase({
+          activeProvider: newProvider,
+          geminiKey: currentConfig?.gemini_key || localStorage.getItem("ai_gemini_key") || "",
+          geminiModel: currentConfig?.gemini_model || localStorage.getItem("ai_gemini_model") || "gemini-3.5-flash",
+          openaiKey: currentConfig?.openai_key || localStorage.getItem("ai_openai_key") || "",
+          openaiModel: currentConfig?.openai_model || localStorage.getItem("ai_openai_model") || "gpt-4o",
+          anthropicKey: currentConfig?.anthropic_key || localStorage.getItem("ai_anthropic_key") || "",
+          anthropicModel: currentConfig?.anthropic_model || localStorage.getItem("ai_anthropic_model") || "claude-3-7-sonnet-20250219",
+          deepseekKey: currentConfig?.deepseek_key || localStorage.getItem("ai_deepseek_key") || "",
+          deepseekModel: currentConfig?.deepseek_model || localStorage.getItem("ai_deepseek_model") || "deepseek-chat"
+        });
+      } catch (err) {
+        console.warn("Erro ao salvar mudança global de provedor no Supabase:", err);
+      }
+    }
+  };
+
+  const loadUserDataFromSupabase = async (user: any) => {
+    if (!user) return;
+    try {
+      addLogMessage(`Carregando dados específicos do usuário do Supabase...`);
+      
+      // 1. Fetch Company Data
+      const dbCompany = await fetchCompanyDataFromSupabase();
+      if (dbCompany) {
+        const loadedCompany: CompanyData = {
+          razonSocial: dbCompany.razon_social || "",
+          cnpj: dbCompany.cnpj || "",
+          address: dbCompany.address || "",
+          phone: dbCompany.phone || "",
+          email: dbCompany.email || "",
+          representativeName: dbCompany.representative_name || "",
+          representativeCpf: dbCompany.representative_cpf || "",
+          bankDetails: dbCompany.bank_details || ""
+        };
+        setCompanyData(loadedCompany);
+        localStorage.setItem("aip_company_data", JSON.stringify(loadedCompany));
+        addLogMessage("Perfil corporativo do usuário carregado com sucesso.");
+      }
+
+      // 2. Fetch User AI Config / Keys
+      const dbConfig = await fetchUserConfigFromSupabase();
+      if (dbConfig) {
+        localStorage.setItem("ai_active_provider", dbConfig.active_provider || "gemini");
+        localStorage.setItem("ai_gemini_key", dbConfig.gemini_key || "");
+        localStorage.setItem("ai_gemini_model", dbConfig.gemini_model || "gemini-3.5-flash");
+        localStorage.setItem("ai_openai_key", dbConfig.openai_key || "");
+        localStorage.setItem("ai_openai_model", dbConfig.openai_model || "gpt-4o");
+        localStorage.setItem("ai_anthropic_key", dbConfig.anthropic_key || "");
+        localStorage.setItem("ai_anthropic_model", dbConfig.anthropic_model || "claude-3-7-sonnet-20250219");
+        localStorage.setItem("ai_deepseek_key", dbConfig.deepseek_key || "");
+        localStorage.setItem("ai_deepseek_model", dbConfig.deepseek_model || "deepseek-chat");
+        addLogMessage("Configurações de chaves de API do usuário carregadas.");
+      }
+      window.dispatchEvent(new Event("user-config-loaded"));
+    } catch (e: any) {
+      console.error("Erro ao carregar dados do usuário do Supabase:", e);
+    }
+  };
+
+  // Load persistence and sync profile to Supabase
+  useEffect(() => {
+    if (companyData && companyData !== DEFAULT_COMPANY_DATA) {
+      localStorage.setItem("aip_company_data", JSON.stringify(companyData));
+      if (supabaseUser) {
+        saveCompanyDataToSupabase(companyData).catch((e) =>
+          console.warn("Erro ao salvar perfil corporativo no Supabase:", e)
+        );
+      }
+    }
+  }, [companyData, supabaseUser]);
 
   useEffect(() => {
     if (activeEdital) {
@@ -172,6 +286,7 @@ export default function App() {
           if (data?.user) {
             setSupabaseUser(data.user);
             addLogMessage(`Sessão SaaS Supabase carregada: ${data.user.email}`);
+            loadUserDataFromSupabase(data.user);
           }
         }).catch(() => {});
 
@@ -179,6 +294,7 @@ export default function App() {
         const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
           if (session?.user) {
             setSupabaseUser(session.user);
+            loadUserDataFromSupabase(session.user);
           } else {
             setSupabaseUser(null);
           }
@@ -244,6 +360,7 @@ export default function App() {
         setAuthMessage(res);
         if (res.success && res.session?.user) {
           setSupabaseUser(res.session.user);
+          loadUserDataFromSupabase(res.session.user);
           addLogMessage(`Sessão SaaS Supabase autenticada: ${res.session.user.email}`);
           setTimeout(() => setSupabaseModalOpen(false), 1500);
         }
@@ -258,8 +375,34 @@ export default function App() {
   const handleSaaSSignOut = async () => {
     try {
       await signOutWithSupabase();
+      
+      // Clear user-specific data from localStorage for complete multi-user privacy
+      localStorage.removeItem("aip_company_data");
+      localStorage.removeItem("aip_active_edital");
+      localStorage.removeItem("aip_certificates");
+      localStorage.removeItem("aip_edital_history");
+      localStorage.removeItem("aip_competitors_history");
+      localStorage.removeItem("aip_chat_sessions");
+      localStorage.removeItem("ai_active_provider");
+      localStorage.removeItem("ai_gemini_key");
+      localStorage.removeItem("ai_gemini_model");
+      localStorage.removeItem("ai_openai_key");
+      localStorage.removeItem("ai_openai_model");
+      localStorage.removeItem("ai_anthropic_key");
+      localStorage.removeItem("ai_anthropic_model");
+      localStorage.removeItem("ai_deepseek_key");
+      localStorage.removeItem("ai_deepseek_model");
+      localStorage.removeItem("aip_comprasnet_token");
+      localStorage.removeItem("aip_comprasnet_cookie");
+      localStorage.removeItem("aip_pricing_simulations");
+      
+      // Reset state variables
+      setCompanyData(DEFAULT_COMPANY_DATA);
+      setActiveEdital(null);
+      setSyncedItems([]);
       setSupabaseUser(null);
-      addLogMessage("Sessão SaaS encerrada.");
+
+      addLogMessage("Sessão SaaS encerrada. Todos os dados locais e cache foram apagados.");
       setSupabaseModalOpen(false);
     } catch (err: any) {
       console.error(err);
@@ -286,6 +429,7 @@ export default function App() {
           setSupabaseUser(user);
           setSupabaseConnected(true);
           addLogMessage(`Sessão SaaS autenticada: ${user.email}`);
+          loadUserDataFromSupabase(user);
         }} 
       />
     );
@@ -505,10 +649,47 @@ export default function App() {
               <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Banco de Dados & Drive</span>
             </button>
 
+            {/* Nav item: IA & Modelos */}
+            <button
+              id="tab-btn-ai-config"
+              onClick={() => {
+                setActiveTab("aiConfig");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "aiConfig"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="IA & Modelos"
+            >
+              <Settings className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>IA & Modelos</span>
+            </button>
+
           </nav>
 
           {/* Bottom Sidebar area: Google & Supabase connection Integration */}
           <div className="border-t border-white/5 pt-4 space-y-3">
+            
+            {/* Active AI Selector */}
+            <div className="p-3 rounded-xl border border-white/10 bg-[#0c101e]/80 text-slate-300 select-none text-[11px] flex flex-col gap-1.5">
+              <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
+                Inteligência Artificial Ativa
+              </label>
+              <select
+                value={activeProvider}
+                onChange={(e) => handleGlobalProviderChange(e.target.value)}
+                className="w-full bg-slate-950 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+              >
+                <option value="gemini">Google Gemini 3.5</option>
+                <option value="openai">OpenAI ChatGPT (GPT-4o)</option>
+                <option value="anthropic">Anthropic Claude 3.7</option>
+                <option value="deepseek">DeepSeek (V3/R1)</option>
+              </select>
+            </div>
             
             {/* Supabase SaaS Identity Center */}
             <div className="p-3 rounded-xl border border-emerald-500/25 bg-slate-900/50 text-slate-300 select-none text-[11px] flex flex-col gap-1.5">
@@ -597,6 +778,7 @@ export default function App() {
                activeTab === "comparator" ? "Compatibilização Técnica de Especificações" :
                activeTab === "bot" ? "Simulador de Disputa de Lances Finais" :
                activeTab === "sync" ? "Banco de Dados & Diretório de Arquivos na Nuvem" :
+               activeTab === "aiConfig" ? "Configurações de Provedores e Modelos de IA" :
                "Auditoria Legal de Documentação de Concorrentes"}
             </p>
           </div>
@@ -642,6 +824,8 @@ export default function App() {
                   companyData={companyData}
                   activeEdital={activeEdital}
                 />
+              ) : activeTab === "aiConfig" ? (
+                <AiConfigTab />
               ) : (
                 <CompetitorAnalyzerTab
                   activeEdital={activeEdital}

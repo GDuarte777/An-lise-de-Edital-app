@@ -691,3 +691,126 @@ export async function callSupabaseGeminiEdgeFunction(
   return data.text || "";
 }
 
+// Fetch user AI configurations (API Keys & Active Models)
+export async function fetchUserConfigFromSupabase(): Promise<any | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  try {
+    const user = await getActiveUser();
+    if (!user) return null;
+    const { data, error } = await client
+      .from("configuracoes_usuario")
+      .select("*")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (error) {
+      console.warn("Error fetching user config:", error.message);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error(err);
+    return null;
+  }
+}
+
+// Save user AI configurations
+export async function saveUserConfigToSupabase(config: {
+  activeProvider: string;
+  geminiKey?: string;
+  geminiModel?: string;
+  openaiKey?: string;
+  openaiModel?: string;
+  anthropicKey?: string;
+  anthropicModel?: string;
+  deepseekKey?: string;
+  deepseekModel?: string;
+}): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  try {
+    const user = await getActiveUser();
+    if (!user) return { success: false, message: "Usuário não autenticado." };
+
+    const record = {
+      user_id: user.id,
+      active_provider: config.activeProvider,
+      gemini_key: config.geminiKey || "",
+      gemini_model: config.geminiModel || "gemini-3.5-flash",
+      openai_key: config.openaiKey || "",
+      openai_model: config.openaiModel || "gpt-4o",
+      anthropic_key: config.anthropicKey || "",
+      anthropic_model: config.anthropicModel || "claude-3-7-sonnet-20250219",
+      deepseek_key: config.deepseekKey || "",
+      deepseek_model: config.deepseekModel || "deepseek-chat",
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("configuracoes_usuario")
+      .upsert([record], { onConflict: "user_id" });
+
+    if (error) throw error;
+    return { success: true, message: "Configurações de chaves salvas com sucesso no Supabase!" };
+  } catch (err: any) {
+    console.error("saveUserConfigToSupabase error:", err);
+    return { success: false, message: err.message || "Erro ao salvar chaves." };
+  }
+}
+
+// Fetch user company profile
+export async function fetchCompanyDataFromSupabase(): Promise<any | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  try {
+    const user = await getActiveUser();
+    if (!user) return null;
+    const { data, error } = await client
+      .from("dados_empresa")
+      .select("*")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (error) {
+      console.warn("Error fetching company data:", error.message);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error(err);
+    return null;
+  }
+}
+
+// Save user company profile
+export async function saveCompanyDataToSupabase(companyData: any): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  try {
+    const user = await getActiveUser();
+    if (!user) return { success: false, message: "Usuário não autenticado." };
+
+    const record = {
+      user_id: user.id,
+      razon_social: companyData.razonSocial || "",
+      cnpj: companyData.cnpj || "",
+      address: companyData.address || "",
+      phone: companyData.phone || "",
+      email: companyData.email || "",
+      representative_name: companyData.representativeName || "",
+      representative_cpf: companyData.representativeCpf || "",
+      bank_details: companyData.bankDetails || "",
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("dados_empresa")
+      .upsert([record], { onConflict: "user_id" });
+
+    if (error) throw error;
+    return { success: true, message: "Dados da empresa salvos com sucesso no Supabase!" };
+  } catch (err: any) {
+    console.error("saveCompanyDataToSupabase error:", err);
+    return { success: false, message: err.message || "Erro ao salvar dados de empresa." };
+  }
+}
+
