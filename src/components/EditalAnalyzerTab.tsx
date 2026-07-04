@@ -417,7 +417,6 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
     setLoading(true);
     try {
-      const routeViaSupabase = localStorage.getItem("supabase_route_ai") === "true";
       let data: any;
 
       console.log("[Analyzer] Routing analysis...");
@@ -446,22 +445,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
         Importante: Não coloque marcadores de código como \`\`\`json ou quebras estranhas. Retorne apenas a string JSON válida.`;
 
-        const aiConfig = getActiveAiConfig();
-        const useLocal = !!aiConfig.apiKey || !routeViaSupabase;
-
-        if (!useLocal) {
-          const edgeResultStr = await callSupabaseGeminiEdgeFunction(
-            fullPrompt,
-            systemInstruction,
-            "gemini-3.5-flash",
-            true // jsonMode
-          );
-
-          const cleanJsonStr = edgeResultStr.replace(/^```json/, "").replace(/```$/, "").trim();
-          const parsedJson = JSON.parse(cleanJsonStr);
-          data = { analysis: parsedJson };
-        } else {
-          const response = await apiFetch("/api/analyze-edital", {
+        const response = await apiFetch("/api/analyze-edital", {
             method: "POST",
             body: {
               textInput: textInput,
@@ -476,7 +460,6 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         }
 
         data = await response.json();
-      }
 
       if (data && data.analysis) {
         const analysisResult: EditalAnalysis = {
