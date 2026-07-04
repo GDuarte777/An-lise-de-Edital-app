@@ -17,7 +17,7 @@ import {
   deleteEditalFromSupabase
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
 
 // Portuguese demo data for instant simulation & testing convenience
 const DEMO_EDITAL_TEXT = `
@@ -310,18 +310,15 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     };
 
     try {
-      const aiConfig = getActiveAiConfig();
-      const response = await fetch("/api/generate-document", {
+      const response = await apiFetch("/api/generate-document", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           docType: "proposal",
           analysisData: activeEdital,
           companyData: companyData,
           extraInstructions,
-          proposalDetails: details,
-          aiConfig
-        })
+          proposalDetails: details
+        }
       });
 
       if (!response.ok) {
@@ -464,16 +461,14 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           const parsedJson = JSON.parse(cleanJsonStr);
           data = { analysis: parsedJson };
         } else {
-          const response = await fetch("/api/analyze-edital", {
+          const response = await apiFetch("/api/analyze-edital", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+            body: {
               textInput: textInput,
               fileBase64: fileBase64,
               fileName: fileDetails?.name,
-              fileType: fileDetails?.type,
-              aiConfig
-            })
+              fileType: fileDetails?.type
+            }
           });
 
         if (!response.ok) {
@@ -532,18 +527,15 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
     setGeneratingDoc(docType);
     try {
-      const aiConfig = getActiveAiConfig();
-      const response = await fetch("/api/generate-document", {
+      const response = await apiFetch("/api/generate-document", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           docType,
           analysisData: activeEdital,
           companyData: companyData,
           extraInstructions,
-          uploadedTemplateText: docType === "custom_declaration" ? (uploadedTemplateText || DEMO_CUSTOM_TEMPLATE) : undefined,
-          aiConfig
-        })
+          uploadedTemplateText: docType === "custom_declaration" ? (uploadedTemplateText || DEMO_CUSTOM_TEMPLATE) : undefined
+        }
       });
 
       if (!response.ok) {

@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronUp, FileText, List, Eye, Info, RefreshCw, Layers, Gauge, ExternalLink
 } from "lucide-react";
 import { EditalAnalysis } from "../types";
-import { getActiveAiConfig } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
 
 interface ProductComparatorTabProps {
   activeEdital: EditalAnalysis | null;
@@ -127,17 +127,12 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
     setResults([]);
 
     try {
-      const aiConfig = getActiveAiConfig();
-      const response = await fetch("/api/compare-products", {
+      const response = await apiFetch("/api/compare-products", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        body: {
           requiredSpecs,
-          candidateProducts: candidateModels,
-          aiConfig
-        })
+          candidateProducts: candidateModels
+        }
       });
 
       if (!response.ok) {

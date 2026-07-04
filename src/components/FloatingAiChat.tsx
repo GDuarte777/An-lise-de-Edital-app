@@ -6,7 +6,7 @@ import {
   Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw 
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
 import { 
   callSupabaseGeminiEdgeFunction,
   fetchChatSessionsFromSupabase,
@@ -386,11 +386,9 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
 
     // Asynchronously request a beautiful AI-generated title for the thread
     if (isFirstUserMsg) {
-      const aiConfig = getActiveAiConfig();
-      fetch("/api/chat/title", {
+      apiFetch("/api/chat/title", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, aiConfig })
+        body: { message: text }
       })
       .then(res => {
         if (res.ok) return res.json();
@@ -411,47 +409,23 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
 
     try {
       const selectedEditalObj = getSelectedEditalObject(activeSession.selectedEditalId);
-      const aiConfig = getActiveAiConfig();
-      const routeViaSupabase = localStorage.getItem("supabase_route_ai") === "true";
-      const useLocal = !!aiConfig.apiKey || !routeViaSupabase;
       let replyText = "";
- 
-      if (!useLocal) {
-        console.log("[Chat] Routing chat question via Supabase Edge Function...");
-        
-        // Build systemic context instruction
-        const systemInstruction = `Você é o Assessor Inteligente Especialista do "Analisador de Editais". Seu papel é ajudar o usuário a triunfar em licitações públicas. Forneça respostas diretas, úteis e estrategicamente polidas em Markdown.
-        
-        Informações da Empresa:
-        ${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyData.cnpj}\n- Representante: ${companyData.representativeName}` : "Não fornecida."}
-        
-        Edital Ativo:
-        ${selectedEditalObj ? JSON.stringify(selectedEditalObj, null, 2) : "Nenhum edital selecionado."}`;
 
-        // Format conversational history as simple string for standard prompt if Edge function is general
-        const conversationalHistoryText = updatedMessages.map(m => `${m.role === "assistant" ? "Assistente" : "Usuário"}: ${m.content}`).join("\n");
-        const prompt = `Histórico de Conversa:\n${conversationalHistoryText}\n\nResponda ao último comentário do Usuário com base no histórico acima e nas instruções do sistema.`;
-
-        replyText = await callSupabaseGeminiEdgeFunction(prompt, systemInstruction, "gemini-3.5-flash", false);
-      } else {
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: updatedMessages,
-            companyData: companyData,
-            activeEditalAnalysis: selectedEditalObj,
-            aiConfig
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error("Erro na rede.");
+      const response = await apiFetch("/api/chat", {
+        method: "POST",
+        body: {
+          messages: updatedMessages,
+          companyData: companyData,
+          activeEditalAnalysis: selectedEditalObj
         }
+      });
 
-        const data = await response.json();
-        replyText = data.reply || "";
+      if (!response.ok) {
+        throw new Error("Erro na rede.");
       }
+
+      const data = await response.json();
+      replyText = data.reply || "";
 
       const assistantMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
