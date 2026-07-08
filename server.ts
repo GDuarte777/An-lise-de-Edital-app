@@ -11,8 +11,13 @@ dotenv.config();
 async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: any): Promise<{ provider: string; apiKey: string; model: string } | null> {
   // 1. If client sent a valid aiConfig (with a real key), trust it immediately
   if (clientAiConfig?.apiKey && clientAiConfig.apiKey.trim().length > 10) {
+    const trimmedKey = clientAiConfig.apiKey.trim();
     console.log(`[AI Config] Using client-provided aiConfig (provider: ${clientAiConfig.provider})`);
-    return clientAiConfig;
+    return {
+      provider: clientAiConfig.provider,
+      apiKey: trimmedKey,
+      model: clientAiConfig.model || ""
+    };
   }
 
   // 2. Otherwise, fetch from Supabase using the user's JWT
@@ -66,8 +71,9 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
       deepseek: row.deepseek_model || "deepseek-chat"
     };
 
-    const apiKey = keyMap[provider] || "";
-    if (!apiKey || apiKey.trim().length < 10) {
+    const rawKey = keyMap[provider] || "";
+    const apiKey = rawKey.trim();
+    if (!apiKey || apiKey.length < 10) {
       console.warn(`[AI Config] User has no valid API key for provider "${provider}" in Supabase.`);
       return null;
     }
@@ -316,31 +322,42 @@ async function generateAiResponse(params: {
 
     if (provider === "gemini") {
       const geminiModelName = activeModel || "gemini-3.5-flash";
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelName}:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          generationConfig: {
-            systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
-            responseMimeType: jsonMode ? "application/json" : undefined,
-            responseSchema: responseSchema
+      console.log(`[Dynamic AI Router] Routing via user-configured Gemini SDK Client | Model: ${geminiModelName}`);
+      
+      const userClient = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
           },
-          tools: tools
-        })
+        },
       });
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Gemini Error: ${response.status} - ${errorText}`);
+
+      try {
+        const response = await userClient.models.generateContent({
+          model: geminiModelName,
+          contents,
+          config: {
+            systemInstruction,
+            responseMimeType: jsonMode ? "application/json" : undefined,
+            responseSchema: responseSchema,
+            tools: tools,
+          },
+        });
+
+        return {
+          text: response.text,
+          candidates: response.candidates || [],
+          groundingMetadata: response.candidates?.[0]?.groundingMetadata || null
+        };
+      } catch (err: any) {
+        console.error(`[Gemini SDK Error]:`, err);
+        let msg = err.message || "";
+        if (msg.includes("API key not valid") || msg.includes("API_KEY_INVALID") || msg.includes("key not valid") || msg.includes("INVALID_ARGUMENT")) {
+          throw new Error("Chave de API do Gemini inválida ou não ativa. Obtenha uma chave em https://aistudio.google.com/ e salve na aba 'IA & Modelos'. Se criou no Google Cloud, certifique-se de ativar a API 'Generative Language API'.");
+        }
+        throw err;
       }
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      return {
-        text,
-        candidates: data.candidates || [],
-        groundingMetadata: data.candidates?.[0]?.groundingMetadata || null
-      };
     }
   }
 
@@ -848,6 +865,61 @@ async function startServer() {
       model: resolved.model,
       message: `IA configurada: ${resolved.provider} / ${resolved.model}`
     });
+  });
+
+  // API Route: Test AI Connection - tests a specific provider/key configuration
+  app.post("/api/test-ai-connection", async (req, res): Promise<any> => {
+    try {
+      const { aiConfig: clientAiConfig } = req.body;
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+      
+      if (!aiConfig) {
+        return res.status(400).json({
+          success: false,
+          error: "Nenhuma configuração ou chave de API foi fornecida para teste."
+        });
+      }
+
+      const { provider, apiKey, model: configModel } = aiConfig;
+      const testModel = configModel || (provider === "gemini" ? "gemini-3.5-flash" : provider === "openai" ? "gpt-4o-mini" : provider === "anthropic" ? "claude-3-5-haiku-20241022" : "deepseek-chat");
+
+      console.log(`[Test AI Connection] Testing provider: ${provider} | Model: ${testModel}`);
+
+      const testResponse = await generateAiResponse({
+        contents: [{ parts: [{ text: "Responda apenas 'Conexão ativa!' em uma frase curta." }] }],
+        aiConfig,
+        systemInstruction: "Seja extremamente direto.",
+        jsonMode: false,
+        model: testModel
+      });
+
+      return res.json({
+        success: true,
+        message: `Conexão bem-sucedida! O provedor ${provider} respondeu perfeitamente.`,
+        response: testResponse.text
+      });
+    } catch (error: any) {
+      console.error("[Test AI Connection] Error testing provider:", error);
+      let errorMsg = error.message || "";
+      
+      if (!errorMsg && typeof error === 'object') {
+        try {
+          errorMsg = JSON.stringify(error);
+        } catch (_) {}
+      }
+      
+      let friendlyError = errorMsg;
+      if (errorMsg.includes("API key not valid") || errorMsg.includes("API_KEY_INVALID") || errorMsg.includes("INVALID_ARGUMENT") || errorMsg.includes("key not valid")) {
+        friendlyError = "Chave de API inválida. Certifique-se de que a chave inserida é válida para este provedor. Se for o Gemini, garanta que foi gerada no Google AI Studio (https://aistudio.google.com/) e não no Google Cloud Console (onde a 'Generative Language API' precisaria estar habilitada).";
+      } else if (errorMsg.includes("quota") || errorMsg.includes("Quota exceeded") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
+        friendlyError = "Limite de cota excedido para este provedor/chave. Verifique os limites da sua conta.";
+      }
+      
+      return res.status(500).json({
+        success: false,
+        error: friendlyError || "Erro desconhecido ao se comunicar com o provedor de IA."
+      });
+    }
   });
 
   // API Route: Analyze Edital
@@ -1566,7 +1638,7 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
   // API Route: Floating Gemini AI Chat Router
   app.post("/api/chat", async (req, res): Promise<any> => {
     try {
-      const { messages, companyData, activeEditalAnalysis, aiConfig: clientAiConfig } = req.body;
+      const { messages, companyData, activeEditalAnalysis, systemCertificates, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
 
       if (!messages || !Array.isArray(messages)) {
@@ -1579,16 +1651,28 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
         const parts: any[] = [];
         
         if (m.attachment && m.attachment.data) {
-          let base64Data = m.attachment.data;
-          if (base64Data.includes("base64,")) {
-            base64Data = base64Data.split("base64,")[1];
-          }
-          parts.push({
-            inlineData: {
-              mimeType: m.attachment.type || "image/png",
-              data: base64Data
+          const isTextDoc = m.attachment.type === "application/system-doc" || 
+                            m.attachment.type === "text/plain" || 
+                            m.attachment.type === "application/json" ||
+                            m.attachment.type === "text/markdown";
+
+          if (isTextDoc) {
+            // Text-based system document
+            const docContextText = `\n\n[CONTEÚDO DO DOCUMENTO DO SISTEMA ANEXADO "${m.attachment.name}":]\n${m.attachment.data}\n[FIM DO DOCUMENTO DO SISTEMA]\n\n`;
+            parts.push({ text: docContextText });
+          } else {
+            // Binary data (images/PDFs)
+            let base64Data = m.attachment.data;
+            if (base64Data.includes("base64,")) {
+              base64Data = base64Data.split("base64,")[1];
             }
-          });
+            parts.push({
+              inlineData: {
+                mimeType: m.attachment.type || "image/png",
+                data: base64Data
+              }
+            });
+          }
         }
         
         parts.push({ text: m.content || "Analise o arquivo ou imagem anexada acima." });
@@ -1599,6 +1683,10 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
         };
       });
 
+      const certsListText = systemCertificates && Array.isArray(systemCertificates) && systemCertificates.length > 0 
+        ? systemCertificates.map((c: any) => `- Certidão/Documento: ${c.name} (${c.id})\n  Status: ${c.status === "valid" ? "VÁLIDA" : c.status === "expiring_soon" ? "EXPIRANDO EM BREVE" : "EXPIRADA/PENDENTE"}\n  Vencimento: ${c.expirationDate || "Não informado"}\n  Arquivo enviado pelo usuário: ${c.fileUploaded ? "Sim (" + (c.fileName || "doc") + ")" : "Não"}\n  Feedback de validação: ${c.validationFeedback || "Nenhum"}`).join("\n")
+        : "Nenhuma certidão cadastrada no sistema ainda.";
+
       // In the system instruction (or prepended context), we provide info about the company certs and active edital analysis if present!
       const contextPrefix = `
 Você é o Assessor Inteligente Especialista do "Analisador de Editais".
@@ -1608,16 +1696,30 @@ Você é consultivo, estratégico e focado em produtividade. Forneça respostas 
 Informações sobre a Empresa do Usuário:
 ${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyData.cnpj}\n- Representante: ${companyData.representativeName}` : "Não fornecida ainda."}
 
+Certidões e Documentos Cadastrados no Sistema da Empresa:
+${certsListText}
+
 Análise de Edital Ativo em Memória:
 ${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum edital analisado nesta sessão."}
 
 Se o usuário perguntar sobre editais, propostas ou conformidade ("minha empresa se encaixa?"), analise se as certidões e documentos cadastrados atendem às obrigatoriedades listadas no edital atual.
+
+--- GERAÇÃO DE DOCUMENTOS (PROPOSTAS, DECLARAÇÕES, RECURSOS) ---
+Se o usuário solicitar a geração de um documento completo (ex: proposta comercial de preços, declaração conjunta de regularidade, modelo de recurso administrativo, impugnação de edital, etc.), você DEVE gerar o documento completo em formato Markdown e envolvê-lo em uma tag XML especial:
+<generated_document title="Nome_do_Documento.md">
+[CONTEÚDO DO DOCUMENTO EM MARKDOWN AQUI]
+</generated_document>
+
+Isso é CRÍTICO. Quando você envolve o documento nesta tag, a interface gráfica do chat exibirá um card interativo especial que permite ao usuário visualizar o documento formatado para impressão, baixar o arquivo (.md) diretamente ou importá-lo para a base de dados sincronizada com o Google Drive/Supabase.
+Escolha sempre um nome de arquivo descritivo para o atributo 'title', como "proposta_pregao_12_2026.md" ou "declaracao_trabalho_infantil.md".
+Sempre redija documentos com extrema qualidade, formalidade, sem economizar seções, incluindo todos os detalhes da empresa fornecidos e os dados do edital em foco.
+
 Escreva suas respostas de forma polida e profissional utilizando formatação Markdown adequada.
 `;
 
       // Prepend context to the first message, or use it systemInstruction
       // We can invoke with a specific system instruction.
-      console.log("Chamando Gemini API Chat...");
+      console.log("Chamando Gemini API Chat com contexto atualizado...");
       const response = await generateAiResponse({
         model: "gemini-3.5-flash",
         contents: formattedHistory,

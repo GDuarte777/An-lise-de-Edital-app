@@ -6,6 +6,13 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 }
 
+html, body {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
+  height: 100%;
+}
+
 body {
   font-family: var(--font-sans);
   background-color: #0b0f19;

@@ -207,15 +207,28 @@ export default function App() {
       // 2. Fetch User AI Config / Keys
       const dbConfig = await fetchUserConfigFromSupabase();
       if (dbConfig) {
-        localStorage.setItem("ai_active_provider", dbConfig.active_provider || "gemini");
-        localStorage.setItem("ai_gemini_key", dbConfig.gemini_key || "");
-        localStorage.setItem("ai_gemini_model", dbConfig.gemini_model || "gemini-3.5-flash");
-        localStorage.setItem("ai_openai_key", dbConfig.openai_key || "");
-        localStorage.setItem("ai_openai_model", dbConfig.openai_model || "gpt-4o");
-        localStorage.setItem("ai_anthropic_key", dbConfig.anthropic_key || "");
-        localStorage.setItem("ai_anthropic_model", dbConfig.anthropic_model || "claude-3-7-sonnet-20250219");
-        localStorage.setItem("ai_deepseek_key", dbConfig.deepseek_key || "");
-        localStorage.setItem("ai_deepseek_model", dbConfig.deepseek_model || "deepseek-chat");
+        if (dbConfig.active_provider) localStorage.setItem("ai_active_provider", dbConfig.active_provider);
+        
+        if (dbConfig.gemini_key && dbConfig.gemini_key.trim().length > 5) {
+          localStorage.setItem("ai_gemini_key", dbConfig.gemini_key);
+        }
+        if (dbConfig.gemini_model) localStorage.setItem("ai_gemini_model", dbConfig.gemini_model);
+
+        if (dbConfig.openai_key && dbConfig.openai_key.trim().length > 5) {
+          localStorage.setItem("ai_openai_key", dbConfig.openai_key);
+        }
+        if (dbConfig.openai_model) localStorage.setItem("ai_openai_model", dbConfig.openai_model);
+
+        if (dbConfig.anthropic_key && dbConfig.anthropic_key.trim().length > 5) {
+          localStorage.setItem("ai_anthropic_key", dbConfig.anthropic_key);
+        }
+        if (dbConfig.anthropic_model) localStorage.setItem("ai_anthropic_model", dbConfig.anthropic_model);
+
+        if (dbConfig.deepseek_key && dbConfig.deepseek_key.trim().length > 5) {
+          localStorage.setItem("ai_deepseek_key", dbConfig.deepseek_key);
+        }
+        if (dbConfig.deepseek_model) localStorage.setItem("ai_deepseek_model", dbConfig.deepseek_model);
+
         addLogMessage("Configurações de chaves de API do usuário carregadas.");
       }
       window.dispatchEvent(new Event("user-config-loaded"));
@@ -436,14 +449,14 @@ export default function App() {
   }
 
   return (
-    <div id="application-container" className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col md:flex-row font-sans select-none relative overflow-x-hidden">
+    <div id="application-container" className="min-h-screen lg:h-screen lg:overflow-hidden bg-[#0b0f19] text-slate-100 flex flex-col lg:flex-row font-sans select-text relative overflow-x-hidden">
       
       {/* Glowing Frosted blur background elements */}
       <div className="absolute top-[-10%] right-[-15%] w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[110px] -z-10 pointer-events-none"></div>
       <div className="absolute bottom-[-10%] left-[10%] w-[400px] h-[400px] bg-indigo-600/10 rounded-full blur-[90px] -z-10 pointer-events-none"></div>
 
       {/* Mobile Sticky Navbar Header */}
-      <header className="md:hidden bg-white/5 border-b border-white/10 backdrop-blur-xl text-white sticky top-0 z-40 px-4 py-3 flex items-center justify-between shadow-lg">
+      <header className="lg:hidden bg-white/5 border-b border-white/10 backdrop-blur-xl text-white sticky top-0 z-40 px-4 py-3 flex items-center justify-between shadow-lg">
         <div className="flex items-center gap-2">
           <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-1.5 rounded-lg">
             <ShieldCheck className="w-5 h-5" />
@@ -463,9 +476,9 @@ export default function App() {
       {/* Desktop Sidebar (Persistent) & Mobile Sidebar Drawer */}
       <aside 
         className={`
-          fixed inset-y-0 left-0 z-50 md:sticky md:top-0 h-screen bg-[#0c101e]/95 md:bg-[#0c101e]/60 border-r border-white/10 p-5 flex flex-col justify-between shadow-2xl backdrop-blur-xl md:backdrop-blur-md transition-all duration-300 ease-in-out md:translate-x-0
-          ${sidebarCollapsed ? "md:w-20 md:p-3" : "md:w-72 w-72"}
-          ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+          fixed inset-y-0 left-0 z-50 lg:sticky lg:top-0 h-screen bg-[#0c101e]/95 lg:bg-[#0c101e]/60 border-r border-white/10 p-5 flex flex-col justify-between shadow-2xl backdrop-blur-xl lg:backdrop-blur-md transition-all duration-300 ease-in-out lg:translate-x-0
+          ${sidebarCollapsed ? "lg:w-20 lg:p-3" : "lg:w-72 w-72"}
+          ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
         `}
       >
         <div className="flex flex-col h-full gap-6">
@@ -476,7 +489,7 @@ export default function App() {
               <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-2 rounded-xl shadow-lg shadow-indigo-600/20 shrink-0">
                 <ShieldCheck className="w-6 h-6 animate-pulse" />
               </div>
-              {!sidebarCollapsed && (
+              {(!sidebarCollapsed || mobileMenuOpen) && (
                 <div className="transition-opacity duration-200">
                   <h1 className="text-sm font-bold tracking-tight text-white leading-tight truncate">
                     Analisador de Editais
@@ -491,7 +504,7 @@ export default function App() {
             {/* Collapse toggle button for desktop */}
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="hidden md:flex p-1.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer shrink-0"
+              className="hidden lg:flex p-1.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer shrink-0"
               title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}
             >
               {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -500,7 +513,7 @@ export default function App() {
             {/* Close button for Mobile drawer only */}
             <button
               onClick={() => setMobileMenuOpen(false)}
-              className="md:hidden p-1 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              className="lg:hidden p-1 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -517,7 +530,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "analyzer"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -526,7 +539,7 @@ export default function App() {
               title="Análise de Edital"
             >
               <FileText className="w-4 h-4 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Análise de Edital</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Análise de Edital</span>
             </button>
 
             {/* Nav item: Gestão de Certidões */}
@@ -537,7 +550,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "documents"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -546,7 +559,7 @@ export default function App() {
               title="Gestão de Certidões"
             >
               <ListTodo className="w-4 h-4 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Gestão de Certidões</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Gestão de Certidões</span>
             </button>
 
             {/* Nav item: Calculadora */}
@@ -557,7 +570,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "calculator"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -566,7 +579,7 @@ export default function App() {
               title="Calculadora de Preços"
             >
               <Calculator className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Calculadora de Preços</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Calculadora de Preços</span>
             </button>
 
             {/* Nav item: Comparador de Produtos */}
@@ -577,7 +590,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "comparator"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -586,7 +599,7 @@ export default function App() {
               title="Comparador de Produtos"
             >
               <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Comparador de Produtos</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Comparador de Produtos</span>
             </button>
 
             {/* Nav item: Robô de Lances */}
@@ -597,7 +610,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "bot"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -606,7 +619,7 @@ export default function App() {
               title="Robô de Lances"
             >
               <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Robô de Lances</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Robô de Lances</span>
             </button>
 
             {/* Nav item: Analisar Concorrentes */}
@@ -617,7 +630,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "competitors"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -626,7 +639,7 @@ export default function App() {
               title="Analisar Concorrentes"
             >
               <Users className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Analisar Concorrentes</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Analisar Concorrentes</span>
             </button>
 
             {/* Nav item: Banco de Dados & Sincronismo */}
@@ -637,7 +650,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "sync"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -646,7 +659,7 @@ export default function App() {
               title="Banco de Dados & Drive"
             >
               <Database className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>Banco de Dados & Drive</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Banco de Dados & Drive</span>
             </button>
 
             {/* Nav item: IA & Modelos */}
@@ -657,7 +670,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "md:justify-center md:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
               } ${
                 activeTab === "aiConfig"
                   ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
@@ -666,13 +679,13 @@ export default function App() {
               title="IA & Modelos"
             >
               <Settings className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "md:hidden" : "block"}`}>IA & Modelos</span>
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>IA & Modelos</span>
             </button>
 
           </nav>
 
           {/* Bottom Sidebar area: Google & Supabase connection Integration */}
-          <div className="border-t border-white/5 pt-4 space-y-3">
+          <div className={`border-t border-white/5 pt-4 space-y-3 ${sidebarCollapsed ? "lg:hidden block" : "block"}`}>
             
             {/* Active AI Selector */}
             <div className="p-3 rounded-xl border border-white/10 bg-[#0c101e]/80 text-slate-300 select-none text-[11px] flex flex-col gap-1.5">
@@ -696,57 +709,51 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className={`font-bold ${sidebarCollapsed ? "md:hidden" : "block"}`}>Sessão SaaS Ativa</span>
+                  <span className="font-bold block">Sessão SaaS Ativa</span>
                 </div>
               </div>
 
-              {!sidebarCollapsed && (
-                <div className="text-[10px] font-mono tracking-tight truncate text-slate-400">
-                  {supabaseUser?.email}
-                </div>
-              )}
+              <div className="text-[10px] font-mono tracking-tight truncate text-slate-400">
+                {supabaseUser?.email}
+              </div>
 
               <button
                 onClick={handleSaaSSignOut}
-                className={`py-1.5 px-2 rounded-lg font-bold text-[10px] transition-all flex items-center justify-center gap-1.5 cursor-pointer bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 border border-rose-500/20 ${sidebarCollapsed ? "w-8 h-8 p-0" : "w-full"}`}
+                className="py-1.5 px-2 rounded-lg font-bold text-[10px] transition-all flex items-center justify-center gap-1.5 cursor-pointer bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 border border-rose-500/20 w-full"
                 title="Sair da Plataforma"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                {!sidebarCollapsed && <span>Sair da Plataforma</span>}
+                <span>Sair da Plataforma</span>
               </button>
             </div>
 
             {/* Google Workspace connection */}
             {googleConnected ? (
-              <div className={`bg-emerald-950/25 border border-emerald-500/20 rounded-xl p-3 flex flex-col gap-2 select-none text-[11px] text-emerald-400 ${sidebarCollapsed ? "md:p-2 md:items-center" : ""}`}>
+              <div className="bg-emerald-950/25 border border-emerald-500/20 rounded-xl p-3 flex flex-col gap-2 select-none text-[11px] text-emerald-400">
                 <div className="flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  <p className={`font-bold ${sidebarCollapsed ? "md:hidden" : "block"}`}>Workspace Conectado</p>
+                  <p className="font-bold block">Workspace Conectado</p>
                 </div>
-                {!sidebarCollapsed && (
-                  <p className="text-[10px] text-slate-400 font-mono tracking-tight truncate">
-                    {userEmail || "gabrieltrafego7@gmail.com"}
-                  </p>
-                )}
+                <p className="text-[10px] text-slate-400 font-mono tracking-tight truncate">
+                  {userEmail || "gabrieltrafego7@gmail.com"}
+                </p>
                 <button
                   onClick={handleGoogleLogout}
-                  className={`bg-rose-950/30 hover:bg-rose-950/50 border border-rose-500/20 hover:border-rose-500/30 py-1.5 rounded-lg text-rose-400 text-[10px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${sidebarCollapsed ? "w-8 h-8 p-0" : "w-full"}`}
+                  className="bg-rose-950/30 hover:bg-rose-950/50 border border-rose-500/20 hover:border-rose-500/30 py-1.5 rounded-lg text-rose-400 text-[10px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 w-full"
                   title="Desconectar Google"
                 >
                   <LogOut className="w-3 h-3" />
-                  {!sidebarCollapsed && <span>Desconectar Google</span>}
+                  <span>Desconectar Google</span>
                 </button>
               </div>
             ) : (
               <button
                 onClick={handleGoogleLogin}
-                className={`bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition-all cursor-pointer shadow-lg shadow-indigo-600/10 border border-white/10 flex items-center justify-center ${
-                  sidebarCollapsed ? "md:w-8 md:h-8 md:p-0 w-full py-2.5 px-3 rounded-xl text-[10px] gap-1.5" : "w-full py-2.5 px-3 rounded-xl text-[10px] gap-1.5"
-                }`}
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition-all cursor-pointer shadow-lg shadow-indigo-600/10 border border-white/10 flex items-center justify-center w-full py-2.5 px-3 rounded-xl text-[10px] gap-1.5"
                 title="Conectar Workspace"
               >
                 <LogIn className="w-3.5 h-3.5" />
-                {!sidebarCollapsed && <span>Conectar Workspace</span>}
+                <span>Conectar Workspace</span>
               </button>
             )}
           </div>
@@ -758,15 +765,15 @@ export default function App() {
       {mobileMenuOpen && (
         <div 
           onClick={() => setMobileMenuOpen(false)}
-          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-40 md:hidden"
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-40 lg:hidden"
         />
       )}
 
       {/* Main Content Pane */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 lg:h-screen lg:max-h-screen">
         
         {/* Top bar header only for desktop to show page details & header spacing */}
-        <header className="hidden md:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-10">
+        <header className="hidden lg:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-10">
           <div>
             <h2 className="text-sm font-bold text-white tracking-wide uppercase">
               Painel Operacional
@@ -788,7 +795,7 @@ export default function App() {
         </header>
 
         {/* Content Scrolling Stage Area */}
-        <main className="flex-1 p-4 md:p-8 overflow-y-auto relative z-10">
+        <main className="flex-1 p-4 lg:p-8 overflow-y-visible lg:overflow-y-auto relative z-10">
           <div className="max-w-7xl mx-auto w-full">
             
             {/* Active Render Stage Tab Component */}

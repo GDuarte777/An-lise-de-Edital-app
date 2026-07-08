@@ -2,7 +2,7 @@ import { getSupabaseClient } from "./supabaseClient";
 
 export function getActiveAiConfig() {
   const provider = localStorage.getItem("ai_active_provider") || "gemini";
-  const apiKey = localStorage.getItem(`ai_${provider}_key`) || "";
+  const apiKey = (localStorage.getItem(`ai_${provider}_key`) || "").trim();
   const model = localStorage.getItem(`ai_${provider}_model`) || "";
   return { provider, apiKey, model };
 }
@@ -33,9 +33,10 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  // Merge aiConfig into body
+  // Merge aiConfig into body if not already present
   const bodyObj = options.body || {};
-  const body = JSON.stringify({ ...bodyObj, aiConfig });
+  const finalAiConfig = bodyObj.aiConfig || aiConfig;
+  const body = JSON.stringify({ ...bodyObj, aiConfig: finalAiConfig });
 
   return fetch(url, {
     method: options.method || "GET",
