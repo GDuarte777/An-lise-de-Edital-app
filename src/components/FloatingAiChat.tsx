@@ -3,10 +3,12 @@ import ReactMarkdown from "react-markdown";
 import { ChatMessage, ChatSession, CompanyData, EditalAnalysis, Attachment } from "../types";
 import { 
   MessageSquare, X, Send, Bot, User, Sparkles, Loader2, Plus, Trash2, 
-  Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw 
+  Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw,
+  FolderOpen, FileCheck, Download, Eye, ClipboardCopy, CheckSquare, Globe, Database, Printer
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
+import { addSyncedItem } from "../utils/googleSync";
 import { 
   callSupabaseGeminiEdgeFunction,
   fetchChatSessionsFromSupabase,
@@ -93,6 +95,176 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   const [inputVal, setInputVal] = useState("");
   const [loading, setLoading] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
+
+  // System document selector & document preview state variables
+  const [showSystemDocSelector, setShowSystemDocSelector] = useState(false);
+  const [systemCerts, setSystemCerts] = useState<any[]>([]);
+  const [previewDocTitle, setPreviewDocTitle] = useState<string | null>(null);
+  const [previewDocContent, setPreviewDocContent] = useState<string | null>(null);
+
+  // Load certificates from localStorage
+  const loadSystemCertificates = () => {
+    const saved = localStorage.getItem("aip_certificates");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [];
+  };
+
+  // Helper to count words
+  const getWordCount = (text: string) => {
+    if (!text) return 0;
+    return text.trim().split(/\s+/).filter(w => w.length > 0).length;
+  };
+
+  // Parse message content into text blocks and generated_document blocks
+  const parseMessageContent = (content: string) => {
+    const parts: { type: "text" | "document"; content: string; title?: string }[] = [];
+    const regex = /<generated_document\s+title="([^"]+)">([\s\S]*?)<\/generated_document>/gi;
+    
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = regex.exec(content)) !== null) {
+      const matchIndex = match.index;
+      
+      if (matchIndex > lastIndex) {
+        parts.push({
+          type: "text",
+          content: content.substring(lastIndex, matchIndex)
+        });
+      }
+      
+      parts.push({
+        type: "document",
+        title: match[1],
+        content: match[2]
+      });
+      
+      lastIndex = regex.lastIndex;
+    }
+    
+    if (lastIndex < content.length) {
+      parts.push({
+        type: "text",
+        content: content.substring(lastIndex)
+      });
+    }
+    
+    if (parts.length === 0) {
+      return [{ type: "text", content }];
+    }
+    
+    return parts;
+  };
+
+  // Helper to format certificate context
+  const formatCertificateText = (cert: any) => {
+    return `==========================================
+DOCUMENTO DO SISTEMA: ${cert.name}
+==========================================
+ID do Registro: ${cert.id}
+Tipo / Nome: ${cert.name}
+Status Atual no Sistema: ${cert.status === 'valid' ? 'VÁLIDA (Regular)' : cert.status === 'expiring_soon' ? 'VENCENDO EM BREVE' : 'VENCIDA OU PENDENTE'}
+Data de Emissão: ${cert.emissionDate || 'Não informada'}
+Data de Validade: ${cert.expirationDate || 'Não informada'}
+Arquivo físico enviado: ${cert.fileUploaded ? 'Sim (' + (cert.fileName || 'Anexo') + ')' : 'Não'}
+Resultado da Verificação: ${cert.validationFeedback || 'Documento carregado no perfil da empresa. Em conformidade.'}
+Notas Adicionais: ${cert.notes || 'Nenhuma.'}`;
+  };
+
+  // Helper to format edital context
+  const formatEditalText = (edital: any) => {
+    const organ = edital.identificacaoCertame?.orgaoComprador || "Órgão Não Identificado";
+    const mod = edital.identificacaoCertame?.modalidade || "Modalidade Geral";
+    const num = edital.identificacaoCertame?.identificacaoNumerica || "Nº Não Identificado";
+    
+    return `==========================================
+EDITAL DO SISTEMA: ${organ} - ${num}
+==========================================
+Órgão Licitante: ${organ}
+Modalidade: ${mod}
+Identificação Numérica: ${num}
+Sessão / Abertura: ${edital.identificacaoCertame?.dataHoraSessao || 'Não especificada'}
+
+CRONOGRAMA E LOGÍSTICA:
+- Prazo de Entrega: ${edital.prazoEntrega || 'Não informado'}
+- Endereço de Entrega: ${edital.logisticaCronograma?.enderecoEntrega || 'Não especificado'}
+- Prazo de Garantia: ${edital.logisticaCronograma?.prazoGarantia || 'Não informado'}
+
+VIABILIDADE E ORÇAMENTO:
+- Prazo de Pagamento: ${edital.prazoPagamento || 'Não informado'}
+- Valor Estimado: ${edital.viabilidadeFinanceira?.valorEstimado || 'Não informado'}
+- Distorções de Preço / Pegadinhas: ${edital.viabilidadeFinanceira?.distorcoesPreco || 'Nenhuma identificada'}
+
+BUROCRACIA E BARREIRAS:
+- Exige Amostra: ${edital.burocraciaBarreiras?.exigeAmostra || 'Não'}
+- Exige Carta de Solidariedade: ${edital.burocraciaBarreiras?.exigeCartaSolidariedade || 'Não'}
+- Exigência de Garantia contratual: ${edital.burocraciaBarreiras?.exigenciaGarantia || 'Não'}
+- Consórcio / Subcontratação: ${edital.burocraciaBarreiras?.consorcioSubcontratacao || 'Não'}
+
+ESPECIFICAÇÕES DO PRODUTO:
+${edital.descricaoProduto || 'Não informado'}
+
+DOCUMENTOS E CERTIDÕES EXIGIDAS NO EDITAL:
+${edital.documentosExigidos?.map((doc: string) => `- ${doc}`).join('\n') || 'Nenhum listado'}
+
+PONTOS DE ATENÇÃO (ALERTAS):
+${edital.pontosAlerta?.map((p: string) => `- ${p}`).join('\n') || 'Nenhum'}
+
+PONTOS POSITIVOS:
+${edital.pontosPositivos?.map((p: string) => `- ${p}`).join('\n') || 'Nenhum'}
+
+PARECER E ESTRATÉGIA:
+- Veredito: ${edital.parecerFinal?.veredito || 'Sem parecer'}
+- Grau de Risco: ${edital.parecerFinal?.grauRisco || 'Médio'}
+- Estratégia Recomendada: ${edital.parecerFinal?.estrategiaLances || 'Competir de forma regular'}`;
+  };
+
+  const handleOpenSystemDocSelector = () => {
+    reloadEditalHistory();
+    const saved = localStorage.getItem("aip_certificates");
+    if (saved) {
+      try {
+        setSystemCerts(JSON.parse(saved));
+      } catch (e) {
+        console.error("Erro ao carregar certidões do sistema:", e);
+      }
+    } else {
+      setSystemCerts([]);
+    }
+    setShowSystemDocSelector(true);
+  };
+
+  const handleSelectSystemCert = (cert: any) => {
+    const textContent = formatCertificateText(cert);
+    setSelectedAttachment({
+      name: `Certidão_${cert.id}.txt`,
+      type: "application/system-doc",
+      data: textContent
+    });
+    setShowSystemDocSelector(false);
+    confetti({ particleCount: 15, spread: 30, colors: ["#6366f1", "#4f46e5"] });
+  };
+
+  const handleSelectSystemEdital = (editalItem: any) => {
+    const edital = editalItem.analysis || editalItem;
+    const organName = edital.identificacaoCertame?.orgaoComprador || "OrgaoLicitante";
+    const cleanOrganName = organName.replace(/[^a-zA-Z0-0]/g, "_").substring(0, 15);
+    const title = editalItem.title || `Edital_${cleanOrganName}.txt`;
+    const textContent = formatEditalText(edital);
+    setSelectedAttachment({
+      name: title.endsWith(".txt") ? title : `${title}.txt`,
+      type: "application/system-doc",
+      data: textContent
+    });
+    setShowSystemDocSelector(false);
+    confetti({ particleCount: 15, spread: 30, colors: ["#6366f1", "#4f46e5"] });
+  };
 
   // Editing session title states
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -416,7 +588,8 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
         body: {
           messages: updatedMessages,
           companyData: companyData,
-          activeEditalAnalysis: selectedEditalObj
+          activeEditalAnalysis: selectedEditalObj,
+          systemCertificates: loadSystemCertificates()
         }
       });
 
@@ -741,7 +914,21 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
                     {/* Render attachment if any */}
                     {m.attachment && (
                       <div className="mb-2.5 bg-slate-950/40 p-2 rounded-xl border border-white/10 text-slate-300 flex items-center gap-2 max-w-sm">
-                        {m.attachment.type.startsWith("image/") ? (
+                        {m.attachment.type === "application/system-doc" ? (
+                          <div className="flex items-center gap-2 w-full">
+                            <div className="bg-indigo-500/15 text-indigo-400 p-1.5 rounded-lg border border-indigo-500/30">
+                              <FolderOpen className="w-5 h-5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold truncate text-indigo-200">
+                                {m.attachment.name}
+                              </p>
+                              <p className="text-[9px] text-indigo-300 uppercase font-mono font-bold">
+                                Documento do Sistema
+                              </p>
+                            </div>
+                          </div>
+                        ) : m.attachment.type.startsWith("image/") ? (
                           <div className="flex flex-col gap-1 w-full">
                             <img 
                               src={m.attachment.data} 
@@ -771,19 +958,145 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
                       </div>
                     )}
 
-                    <div className="text-xs leading-normal select-text">
-                      <ReactMarkdown 
-                        components={{
-                          p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 select-text whitespace-pre-wrap leading-normal font-sans" {...props} />,
-                          strong: ({node, ...props}) => <strong className={`font-bold select-text ${m.role === 'user' ? 'text-white font-black' : 'text-indigo-200 font-extrabold'}`} {...props} />,
-                          ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
-                          ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
-                          li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap" {...props} />,
-                          code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono select-text" {...props} />,
-                        }}
-                      >
-                        {m.content}
-                      </ReactMarkdown>
+                    <div className="text-xs leading-normal select-text space-y-3">
+                      {m.role === "assistant" ? (
+                        parseMessageContent(m.content).map((part, pIdx) => {
+                          if (part.type === "document") {
+                            const docTitle = part.title || "documento.md";
+                            const docContent = part.content;
+                            const wordCount = getWordCount(docContent);
+
+                            return (
+                              <div 
+                                key={pIdx} 
+                                className="my-3 bg-slate-950/60 rounded-xl border border-indigo-500/35 overflow-hidden shadow-xl"
+                              >
+                                {/* Doc Card Header */}
+                                <div className="bg-indigo-950/50 px-3.5 py-2.5 border-b border-indigo-500/25 flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className="p-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-indigo-400">
+                                      <FileText className="w-4 h-4" />
+                                    </div>
+                                    <div>
+                                      <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-400">Documento Oficial Gerado</p>
+                                      <p className="text-xs font-bold text-slate-100 truncate max-w-[180px] sm:max-w-xs">{docTitle}</p>
+                                    </div>
+                                  </div>
+                                  <span className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/25 px-2 py-0.5 rounded-full text-[9px] font-mono">
+                                    {wordCount} palavras
+                                  </span>
+                                </div>
+
+                                {/* Doc Card Body with Actions */}
+                                <div className="p-3.5 flex flex-col gap-2 bg-slate-900/10">
+                                  <p className="text-[11px] text-slate-300 flex items-center gap-1.5">
+                                    <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                    Pronto para impressão, exportação ou download.
+                                  </p>
+                                  
+                                  <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/5">
+                                    {/* Action: Preview */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setPreviewDocTitle(docTitle);
+                                        setPreviewDocContent(docContent);
+                                      }}
+                                      className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      title="Visualizar documento em tela cheia para impressão"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>Visualizar</span>
+                                    </button>
+
+                                    {/* Action: Copy */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(docContent);
+                                        alert("Documento copiado para a área de transferência!");
+                                      }}
+                                      className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      title="Copiar texto em formato Markdown"
+                                    >
+                                      <ClipboardCopy className="w-3.5 h-3.5" />
+                                      <span>Copiar</span>
+                                    </button>
+
+                                    {/* Action: Download */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const blob = new Blob([docContent], { type: "text/markdown;charset=utf-8;" });
+                                        const url = URL.createObjectURL(blob);
+                                        const link = document.createElement("a");
+                                        link.href = url;
+                                        link.setAttribute("download", docTitle);
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        document.body.removeChild(link);
+                                      }}
+                                      className="flex-1 bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/20 hover:border-indigo-500 text-indigo-300 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      title="Baixar arquivo Markdown (.md)"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                      <span>Baixar</span>
+                                    </button>
+
+                                    {/* Action: Sync/Save to GDrive */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        let docType: "document" | "sheet" | "proposal" | "declaration" = "document";
+                                        if (docTitle.toLowerCase().includes("proposta")) docType = "proposal";
+                                        else if (docTitle.toLowerCase().includes("declara")) docType = "declaration";
+                                        
+                                        addSyncedItem(docTitle.replace(".md", ""), docType, docContent);
+                                        confetti({ particleCount: 50, spread: 60, colors: ["#10b981", "#059669"] });
+                                        alert(`Sucesso! "${docTitle}" foi importado para sua central de sincronismo (Google Drive & Supabase).`);
+                                      }}
+                                      className="flex-1 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      title="Salvar na Central de Sincronismo"
+                                    >
+                                      <Database className="w-3.5 h-3.5" />
+                                      <span>Importar</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <ReactMarkdown 
+                                key={pIdx}
+                                components={{
+                                  p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 select-text whitespace-pre-wrap leading-normal font-sans" {...props} />,
+                                  strong: ({node, ...props}) => <strong className="font-bold select-text text-indigo-200 font-extrabold" {...props} />,
+                                  ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                                  ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                                  li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap" {...props} />,
+                                  code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono select-text" {...props} />,
+                                }}
+                              >
+                                {part.content}
+                              </ReactMarkdown>
+                            );
+                          }
+                        })
+                      ) : (
+                        <ReactMarkdown 
+                          components={{
+                            p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 select-text whitespace-pre-wrap leading-normal font-sans" {...props} />,
+                            strong: ({node, ...props}) => <strong className="font-bold select-text text-white font-black" {...props} />,
+                            ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                            ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                            li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap" {...props} />,
+                            code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono select-text" {...props} />,
+                          }}
+                        >
+                          {m.content}
+                        </ReactMarkdown>
+                      )}
                     </div>
                     <span className={`text-[9px] block text-right mt-1.5 ${
                       m.role === "user" ? "text-indigo-200" : "text-slate-400"
@@ -877,9 +1190,18 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
                 type="button"
                 onClick={handleFileAttachmentClick}
                 className="bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 p-2 rounded-xl transition-all h-9 w-9 flex items-center justify-center cursor-pointer shrink-0"
-                title="Anexar Imagem ou Arquivo de Edital"
+                title="Anexar Imagem ou Arquivo Local"
               >
                 <Paperclip className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleOpenSystemDocSelector}
+                className="bg-indigo-600/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-600/20 p-2 rounded-xl transition-all h-9 w-9 flex items-center justify-center cursor-pointer shrink-0"
+                title="Anexar documento ou edital do sistema"
+              >
+                <FolderOpen className="w-4 h-4" />
               </button>
 
               <input 
@@ -900,6 +1222,276 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
               </button>
             </form>
 
+          </div>
+        </div>
+      )}
+
+      {/* SYSTEM DOCUMENTS SELECTOR MODAL */}
+      {showSystemDocSelector && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in select-text">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-lg h-auto max-h-[80vh] flex flex-col shadow-2xl overflow-hidden select-text">
+            
+            {/* Header */}
+            <div className="bg-slate-950/60 p-4 border-b border-white/10 flex items-center justify-between select-none">
+              <div className="flex items-center gap-2">
+                <FolderOpen className="w-5 h-5 text-indigo-400" />
+                <div className="text-left">
+                  <h4 className="text-sm font-bold text-white">Documentos do Sistema</h4>
+                  <p className="text-[10px] text-slate-400">Selecione um arquivo já presente na plataforma para anexar ao chat</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSystemDocSelector(false)}
+                className="text-slate-400 hover:text-white p-1.5 hover:bg-white/10 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Content List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 select-text">
+              
+              {/* 1. Editais section */}
+              <div className="space-y-2 select-text">
+                <h5 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider text-left select-none">📄 Editais e Análises</h5>
+                <div className="space-y-1.5">
+                  {/* Active edital option */}
+                  {activeEdital ? (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectSystemEdital({ title: "Edital_Ativo.txt", analysis: activeEdital })}
+                      className="w-full text-left bg-indigo-500/10 hover:bg-indigo-500/25 border border-indigo-500/30 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-200 truncate">★ Edital Ativo em Memória</p>
+                        <p className="text-[9px] text-indigo-300 truncate">
+                          {activeEdital.identificacaoCertame?.orgaoComprador || "Órgão Licitante"}
+                        </p>
+                      </div>
+                      <span className="bg-indigo-500/20 text-indigo-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-indigo-400/25">Anexar</span>
+                    </button>
+                  ) : (
+                    <p className="text-[10px] text-slate-500 italic px-2 text-left select-none">Nenhum edital ativo em foco no momento.</p>
+                  )}
+
+                  {/* Historical editais options */}
+                  {editalHistory.length > 0 && (
+                    <div className="pt-1.5 space-y-1">
+                      <p className="text-[9px] text-slate-400 font-bold text-left select-none font-mono">Histórico de Editais Analisados:</p>
+                      {editalHistory.map((item, idx) => {
+                        const ed = item.analysis || item;
+                        const organ = ed.identificacaoCertame?.orgaoComprador || "Histórico";
+                        const title = item.title || `Pregão de ${organ.substring(0, 15)}`;
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => handleSelectSystemEdital(item)}
+                            className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/10 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-slate-300 truncate">{title}</p>
+                              <p className="text-[9px] text-slate-500 truncate">{organ}</p>
+                            </div>
+                            <span className="bg-slate-800 text-slate-400 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/5">Anexar</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Certificados/Documentos section */}
+              <div className="space-y-2 select-text">
+                <h5 className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider text-left select-none">💼 Certidões e Documentos da Empresa</h5>
+                <div className="space-y-1.5">
+                  {systemCerts.length > 0 ? (
+                    systemCerts.map((cert) => (
+                      <button
+                        key={cert.id}
+                        type="button"
+                        onClick={() => handleSelectSystemCert(cert)}
+                        className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/10 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-300 truncate">{cert.name}</p>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className={`w-1.5 h-1.5 rounded-full ${cert.status === "valid" ? "bg-emerald-400" : cert.status === "expiring_soon" ? "bg-amber-400 animate-pulse" : "bg-rose-400"}`} />
+                            <p className="text-[9px] text-slate-500">
+                              {cert.status === "valid" ? "Válida" : cert.status === "expiring_soon" ? "Próxima ao Vencimento" : "Vencida/Pendente"}
+                              {cert.expirationDate ? ` • Vencimento: ${cert.expirationDate}` : ""}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="bg-slate-800 text-slate-400 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/5">Anexar</span>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="text-[10px] text-slate-500 italic px-2 text-left select-none">Nenhuma certidão ou documento cadastrado no momento.</p>
+                  )}
+                </div>
+              </div>
+
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-950/40 p-3 border-t border-white/10 flex justify-end select-none">
+              <button
+                type="button"
+                onClick={() => setShowSystemDocSelector(false)}
+                className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FULLSCREEN DOCUMENT PREVIEW MODAL */}
+      {previewDocContent && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto select-text">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up select-text">
+            
+            {/* Modal Header */}
+            <div className="bg-slate-950/60 p-4 border-b border-white/10 flex items-center justify-between select-none">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-indigo-400" />
+                <div className="text-left">
+                  <h4 className="text-sm font-bold text-white">Visualizador de Documento Oficial</h4>
+                  <p className="text-[10px] text-slate-400">{previewDocTitle}</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                {/* Print button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const printWindow = window.open("", "_blank");
+                    if (printWindow) {
+                      // Clean and replace markdown formatting into HTML block
+                      let htmlContent = previewDocContent;
+                      
+                      // Very basic markdown to simple HTML parser for print window
+                      htmlContent = htmlContent
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/\n\n/g, "<p></p>")
+                        .replace(/#{4}\s+(.*?)(?=<br>|<p>|<\/p>|\n)/g, "<h4>$1</h4>")
+                        .replace(/#{3}\s+(.*?)(?=<br>|<p>|<\/p>|\n)/g, "<h3>$1</h3>")
+                        .replace(/#{2}\s+(.*?)(?=<br>|<p>|<\/p>|\n)/g, "<h2>$1</h2>")
+                        .replace(/#{1}\s+(.*?)(?=<br>|<p>|<\/p>|\n)/g, "<h1>$1</h1>")
+                        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+                        .replace(/\*(.*?)\*/g, "<em>$1</em>")
+                        .replace(/`([^`]+)`/g, "<code>$1</code>")
+                        .replace(/\n/g, "<br>");
+
+                      printWindow.document.write(`
+                        <html>
+                          <head>
+                            <title>${previewDocTitle || "Documento"}</title>
+                            <style>
+                              @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+                              body { font-family: 'Inter', sans-serif; padding: 50px; color: #1e293b; line-height: 1.65; background-color: #ffffff; }
+                              .sheet { max-width: 800px; margin: 0 auto; background: #ffffff; }
+                              pre, code { font-family: monospace; background: #f1f5f9; padding: 2px 4px; border-radius: 4px; font-size: 0.9em; }
+                              table { border-collapse: collapse; width: 100%; margin: 24px 0; font-size: 0.9em; }
+                              th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }
+                              th { background-color: #f8fafc; font-weight: 600; }
+                              h1 { font-size: 1.8em; font-weight: 700; color: #0f172a; border-b: 1px solid #e2e8f0; padding-bottom: 12px; margin-top: 0; margin-bottom: 24px; text-align: center; }
+                              h2 { font-size: 1.3em; font-weight: 600; color: #1e293b; margin-top: 30px; margin-bottom: 14px; border-bottom: 1px solid #f1f5f9; padding-bottom: 6px; }
+                              h3 { font-size: 1.1em; font-weight: 600; color: #334155; margin-top: 20px; margin-bottom: 10px; }
+                              p { margin-bottom: 16px; text-align: justify; }
+                              ul, ol { margin-bottom: 16px; padding-left: 20px; }
+                              li { margin-bottom: 6px; }
+                            </style>
+                          </head>
+                          <body>
+                            <div class="sheet">
+                              ${htmlContent}
+                            </div>
+                            <script>
+                              window.onload = function() { 
+                                setTimeout(function() {
+                                  window.print(); 
+                                }, 500);
+                              }
+                            </script>
+                          </body>
+                        </html>
+                      `);
+                      printWindow.document.close();
+                    } else {
+                      alert("Por favor, permita popups para poder imprimir o documento.");
+                    }
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Imprimir</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewDocTitle(null);
+                    setPreviewDocContent(null);
+                  }}
+                  className="text-slate-400 hover:text-white p-2 hover:bg-white/10 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Document Sheet Canvas */}
+            <div className="flex-1 overflow-y-auto p-8 bg-slate-950/25 flex justify-center select-text">
+              <div className="w-full max-w-2xl bg-white text-slate-900 shadow-xl rounded-xl p-8 sm:p-12 border border-slate-200 select-text overflow-y-auto font-sans text-xs md:text-sm text-left">
+                <ReactMarkdown
+                  components={{
+                    p: ({node, ...props}) => <p className="mb-4 select-text leading-relaxed font-sans text-slate-800 text-justify" {...props} />,
+                    strong: ({node, ...props}) => <strong className="font-bold select-text text-slate-950" {...props} />,
+                    h1: ({node, ...props}) => <h1 className="text-base md:text-lg font-bold border-b pb-2 mb-4 text-slate-900 tracking-tight text-center uppercase" {...props} />,
+                    h2: ({node, ...props}) => <h2 className="text-xs md:text-sm font-bold mb-3 text-slate-900 mt-6 border-b pb-1 border-slate-100" {...props} />,
+                    h3: ({node, ...props}) => <h3 className="text-[11px] md:text-xs font-bold mb-2 text-slate-800 mt-4" {...props} />,
+                    ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-1 select-text text-slate-700" {...props} />,
+                    ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-1 select-text text-slate-700" {...props} />,
+                    li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap leading-relaxed" {...props} />,
+                    table: ({node, ...props}) => (
+                      <div className="overflow-x-auto my-4 border border-slate-150 rounded-lg">
+                        <table className="min-w-full divide-y divide-slate-200" {...props} />
+                      </div>
+                    ),
+                    thead: ({node, ...props}) => <thead className="bg-slate-55" {...props} />,
+                    tbody: ({node, ...props}) => <tbody className="divide-y divide-slate-100" {...props} />,
+                    tr: ({node, ...props}) => <tr className="hover:bg-slate-50/50" {...props} />,
+                    th: ({node, ...props}) => <th className="px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-wider text-slate-600 border-b bg-slate-50" {...props} />,
+                    td: ({node, ...props}) => <td className="px-3 py-1.5 text-[11px] text-slate-700 border-b select-text whitespace-pre-wrap" {...props} />,
+                    code: ({node, ...props}) => <code className="bg-slate-100 text-slate-800 px-1 py-0.5 rounded text-[11px] font-mono" {...props} />,
+                  }}
+                >
+                  {previewDocContent}
+                </ReactMarkdown>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="bg-slate-950/40 p-4 border-t border-white/10 flex justify-end gap-2 select-none">
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewDocTitle(null);
+                  setPreviewDocContent(null);
+                }}
+                className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Fechar Visualizador
+              </button>
+            </div>
           </div>
         </div>
       )}
