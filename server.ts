@@ -7,17 +7,31 @@ import dotenv from "dotenv";
 dotenv.config();
 
 // Helper: resolve the active AI config for a user from Supabase using their JWT
+// Helper: resolve the active AI config for a user from Supabase using their JWT
 // This is the authoritative source – does NOT rely on localStorage from the client
 async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: any): Promise<{ provider: string; apiKey: string; model: string } | null> {
+  console.log(`[AI Config] resolveAiConfig called. clientAiConfig present: ${!!clientAiConfig}, apiKey length: ${clientAiConfig?.apiKey?.length || 0}`);
+
   // 1. If client sent a valid aiConfig (with a real key), trust it immediately
   if (clientAiConfig?.apiKey && clientAiConfig.apiKey.trim().length > 10) {
-    console.log(`[AI Config] Using client-provided aiConfig (provider: ${clientAiConfig.provider})`);
-    return clientAiConfig;
+    const maskedKey = clientAiConfig.apiKey.substring(0, 8) + "...";
+    console.log(`[AI Config] ✅ Using client-provided key | provider: ${clientAiConfig.provider} | model: ${clientAiConfig.model} | key: ${maskedKey}`);
+    return {
+      provider: clientAiConfig.provider || "gemini",
+      apiKey: clientAiConfig.apiKey.trim(),
+      model: clientAiConfig.model || ""
+    };
   }
+
+  console.log(`[AI Config] No valid client key received. clientAiConfig was: ${JSON.stringify({
+    provider: clientAiConfig?.provider,
+    apiKey: clientAiConfig?.apiKey ? `(${clientAiConfig.apiKey.length} chars)` : "EMPTY",
+    model: clientAiConfig?.model
+  })}`);
 
   // 2. Otherwise, fetch from Supabase using the user's JWT
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.log("[AI Config] No auth header present - no user config available.");
+    console.log("[AI Config] ❌ No auth header present - cannot fetch from Supabase.");
     return null;
   }
 
@@ -26,7 +40,7 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
   const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    console.log("[AI Config] Supabase env vars missing on server.");
+    console.log("[AI Config] ❌ Supabase env vars missing on server.");
     return null;
   }
 
@@ -41,13 +55,14 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
     });
 
     if (!resp.ok) {
-      console.warn(`[AI Config] Supabase fetch failed: ${resp.status}`);
+      const errText = await resp.text();
+      console.warn(`[AI Config] ❌ Supabase fetch failed: ${resp.status} - ${errText}`);
       return null;
     }
 
     const rows: any[] = await resp.json();
     if (!rows || rows.length === 0) {
-      console.log("[AI Config] No config row found for this user in Supabase.");
+      console.log("[AI Config] ❌ No config row found for this user in Supabase. Table may not exist or user has no config.");
       return null;
     }
 
@@ -68,17 +83,18 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
 
     const apiKey = keyMap[provider] || "";
     if (!apiKey || apiKey.trim().length < 10) {
-      console.warn(`[AI Config] User has no valid API key for provider "${provider}" in Supabase.`);
+      console.warn(`[AI Config] ❌ User has no valid API key for provider "${provider}" in Supabase.`);
       return null;
     }
 
-    console.log(`[AI Config] Resolved from Supabase: provider=${provider}, model=${modelMap[provider]}`);
+    console.log(`[AI Config] ✅ Resolved from Supabase: provider=${provider}, model=${modelMap[provider]}`);
     return { provider, apiKey, model: modelMap[provider] };
   } catch (err: any) {
     console.error("[AI Config] Error fetching config from Supabase:", err.message);
     return null;
   }
 }
+
 
 // Lazy initialization of Gemini Client to prevent crash on startup if key is missing
 let aiClient: GoogleGenAI | null = null;
@@ -315,20 +331,24 @@ async function generateAiResponse(params: {
     }
 
     if (provider === "gemini") {
-      const geminiModelName = activeModel || "gemini-3.5-flash";
+      const geminiModelName = activeModel || "gemini-1.5-flash";
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelName}:generateContent?key=${apiKey}`;
+      const payload: any = {
+        contents: processedContents,
+        generationConfig: {
+          responseMimeType: jsonMode ? "application/json" : undefined,
+          responseSchema: responseSchema
+        },
+        tools: tools
+      };
+      // systemInstruction must be at ROOT level, not inside generationConfig
+      if (systemInstruction) {
+        payload.systemInstruction = { parts: [{ text: systemInstruction }] };
+      }
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          generationConfig: {
-            systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
-            responseMimeType: jsonMode ? "application/json" : undefined,
-            responseSchema: responseSchema
-          },
-          tools: tools
-        })
+        body: JSON.stringify(payload)
       });
       if (!response.ok) {
         const errorText = await response.text();
@@ -835,11 +855,13 @@ async function startServer() {
 
   // API Route: AI Status - lets users check if their API key is configured and working
   app.get("/api/ai-status", async (req, res): Promise<any> => {
+    const clientAiConfig = req.query;
     const resolved = await resolveAiConfig(req.headers.authorization);
     if (!resolved) {
       return res.json({
         configured: false,
-        message: "Nenhuma chave de API configurada. Acesse 'IA & Modelos' e salve sua chave."
+        message: "Nenhuma chave de API configurada. Acesse 'IA & Modelos' e salve sua chave.",
+        hint: "A chave deve ser salva no localStorage via 'Salvar Configurações'. Verifique se o provedor ativo está correto."
       });
     }
     return res.json({
@@ -850,11 +872,84 @@ async function startServer() {
     });
   });
 
+  // API Route: Setup DB - creates the configuracoes_usuario table if it doesn't exist
+  // This is called once to initialize the Supabase schema.
+  app.post("/api/setup-db", async (req, res): Promise<any> => {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+    const supabaseServiceKey = req.body?.serviceKey || "";
+    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
+    
+    if (!supabaseUrl) {
+      return res.status(400).json({ error: "Supabase URL não configurada no servidor." });
+    }
+
+    const key = supabaseServiceKey || supabaseAnonKey;
+    
+    const sql = `
+      create table if not exists configuracoes_usuario (
+        user_id uuid references auth.users(id) on delete cascade not null primary key,
+        active_provider text not null default 'gemini',
+        gemini_key text default '',
+        gemini_model text default 'gemini-1.5-flash',
+        openai_key text default '',
+        openai_model text default 'gpt-4o',
+        anthropic_key text default '',
+        anthropic_model text default 'claude-3-7-sonnet-20250219',
+        deepseek_key text default '',
+        deepseek_model text default 'deepseek-chat',
+        updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+      );
+      alter table configuracoes_usuario enable row level security;
+      do $$ begin
+        if not exists (select 1 from pg_policies where tablename = 'configuracoes_usuario' and policyname = 'Usuarios acessam suas configuracoes') then
+          create policy "Usuarios acessam suas configuracoes" on configuracoes_usuario
+            for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+        end if;
+      end $$;
+    `;
+
+    try {
+      // Try via Supabase management API
+      const resp = await fetch(`${supabaseUrl}/rest/v1/rpc/exec_sql`, {
+        method: "POST",
+        headers: {
+          "apikey": key,
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ sql })
+      });
+      
+      if (resp.ok) {
+        return res.json({ success: true, message: "Tabela configuracoes_usuario criada com sucesso!" });
+      }
+      
+      // This endpoint may not exist, that's OK - the table may already exist
+      return res.json({ 
+        success: true, 
+        message: "Execute o SQL manualmente no Supabase Dashboard > SQL Editor:\n\n" + sql 
+      });
+    } catch (err: any) {
+      return res.json({ 
+        success: false, 
+        message: "Execute o SQL manualmente no Supabase Dashboard > SQL Editor:\n\n" + sql,
+        sql
+      });
+    }
+  });
+
   // API Route: Analyze Edital
   app.post("/api/analyze-edital", async (req, res): Promise<any> => {
     try {
       const { textInput, fileBase64, fileName, fileType, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
 
       if (!textInput && !fileBase64) {
         return res.status(400).json({ error: "Nenhum conteúdo de edital enviado." });
@@ -1041,6 +1136,13 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
     try {
       const { competitorName, competitorDocumentText, fileBase64, fileType, files, editalText, focusItems, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
 
       if (!competitorDocumentText && !fileBase64 && (!files || files.length === 0)) {
         return res.status(400).json({ error: "Nenhum documento do concorrente enviado." });
@@ -1236,6 +1338,13 @@ Identificamos **2 irregularidades de gravidade ALTA** que servem como fundamenta
       const { fileBase64, fileName, fileType, docName, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
 
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
+
       if (!fileBase64 && !fileName) {
         return res.status(400).json({ error: "Nenhum arquivo ou nome de arquivo enviado para análise." });
       }
@@ -1339,6 +1448,13 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
     try {
       const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText, proposalDetails, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
 
       let prompt = "";
 
@@ -1477,6 +1593,13 @@ Manter a redação original do modelo fornecido pelo usuário, apenas aprimorand
       const { requiredSpecs, candidateProducts, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
 
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
+
       if (!requiredSpecs || !candidateProducts || !Array.isArray(candidateProducts)) {
         return res.status(400).json({ error: "Parâmetros 'requiredSpecs' ou 'candidateProducts' inválidos ou ausentes." });
       }
@@ -1568,6 +1691,13 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
     try {
       const { messages, companyData, activeEditalAnalysis, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
 
       if (!messages || !Array.isArray(messages)) {
         return res.status(400).json({ error: "Mensagens inválidas ou ausentes." });

@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { Cpu, Key, CheckCircle, RefreshCw, AlertTriangle, Sparkles, ExternalLink, ShieldCheck } from "lucide-react";
+import { Cpu, Key, CheckCircle, RefreshCw, AlertTriangle, Sparkles, ExternalLink, ShieldCheck, Zap, Loader2, XCircle } from "lucide-react";
 import confetti from "canvas-confetti";
 import { saveUserConfigToSupabase } from "../utils/supabaseClient";
+import { apiFetch } from "../utils/aiClientHelper";
 
 export default function AiConfigTab() {
   const [activeProvider, setActiveProvider] = useState<string>("gemini");
@@ -21,6 +22,10 @@ export default function AiConfigTab() {
 
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // AI test states
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   // Supabase sync states
   const [syncingSecrets, setSyncingSecrets] = useState(false);
@@ -118,6 +123,45 @@ export default function AiConfigTab() {
       console.error(err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestAi = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      // First save to localStorage
+      localStorage.setItem("ai_active_provider", activeProvider);
+      localStorage.setItem(`ai_${activeProvider}_key`, 
+        activeProvider === "gemini" ? geminiKey : 
+        activeProvider === "openai" ? openaiKey :
+        activeProvider === "anthropic" ? anthropicKey : deepseekKey
+      );
+      localStorage.setItem(`ai_${activeProvider}_model`,
+        activeProvider === "gemini" ? geminiModel :
+        activeProvider === "openai" ? openaiModel :
+        activeProvider === "anthropic" ? anthropicModel : deepseekModel
+      );
+
+      const response = await apiFetch("/api/chat", {
+        method: "POST",
+        body: {
+          messages: [{ role: "user", content: "Responda apenas: 'IA funcionando!' em português." }]
+        }
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setTestResult({ ok: false, message: data?.error || "Erro desconhecido." });
+      } else {
+        setTestResult({ ok: true, message: `✅ IA respondeu: "${data.reply?.substring(0, 80) || "OK"}"` });
+        confetti({ particleCount: 80, spread: 60, origin: { y: 0.8 } });
+      }
+    } catch (err: any) {
+      setTestResult({ ok: false, message: err?.message || "Erro de rede." });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -463,7 +507,7 @@ export default function AiConfigTab() {
             >
               {saving ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   Salvando...
                 </>
               ) : (
@@ -473,7 +517,41 @@ export default function AiConfigTab() {
                 </>
               )}
             </button>
+
+            <button
+              type="button"
+              onClick={handleTestAi}
+              disabled={testing}
+              className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-emerald-600/20 border border-white/10 flex items-center gap-2 transition-all cursor-pointer select-none disabled:opacity-60"
+            >
+              {testing ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Testando...
+                </>
+              ) : (
+                <>
+                  <Zap className="w-3.5 h-3.5" />
+                  Testar IA Agora
+                </>
+              )}
+            </button>
           </div>
+
+          {/* Test Result Banner */}
+          {testResult && (
+            <div className={`mt-3 p-3 rounded-xl text-xs font-medium flex items-start gap-2 border ${
+              testResult.ok 
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300" 
+                : "bg-red-500/10 border-red-500/30 text-red-300"
+            }`}>
+              {testResult.ok 
+                ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                : <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              }
+              <span>{testResult.message}</span>
+            </div>
+          )}
 
         </form>
 

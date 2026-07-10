@@ -420,11 +420,14 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
         }
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error("Erro na rede.");
+        // Show server error message clearly to the user
+        const errMsg = data?.error || "Erro na comunicação com a IA.";
+        throw new Error(errMsg);
       }
 
-      const data = await response.json();
       replyText = data.reply || "";
 
       const assistantMsg: ChatMessage = {
@@ -440,14 +443,18 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
         }
         return s;
       }));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Erro no chat:", error);
+      const errorText = error?.message || String(error);
       const errMessage: ChatMessage = {
         id: `msg-err-${Date.now()}`,
         role: "assistant",
-        content: "❌ *Instabilidade na comunicação*: Não consegui contatar o servidor central do Gemini. Por favor, certifique-se de que o backend está online ou tente novamente em instantes.",
+        content: errorText.startsWith("❌") 
+          ? errorText 
+          : `❌ **Erro na comunicação com a IA:** ${errorText}\n\nVerifique se sua chave de API está configurada corretamente em **IA & Modelos**.`,
         timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
       };
+
 
       setSessions(prev => prev.map(s => {
         if (s.id === activeSessionId) {
