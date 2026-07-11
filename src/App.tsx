@@ -11,7 +11,6 @@ import PricingCalculatorTab from "./components/PricingCalculatorTab";
 import ProductComparatorTab from "./components/ProductComparatorTab";
 import LanceBotTab from "./components/LanceBotTab";
 import CompetitorAnalyzerTab from "./components/CompetitorAnalyzerTab";
-import CloudSyncTab from "./components/CloudSyncTab";
 import AiConfigTab from "./components/AiConfigTab";
 import FloatingAiChat from "./components/FloatingAiChat";
 import DocPreviewModal from "./components/DocPreviewModal";
@@ -43,7 +42,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "sync" | "aiConfig">("analyzer");
+  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
@@ -642,26 +641,6 @@ export default function App() {
               <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Analisar Concorrentes</span>
             </button>
 
-            {/* Nav item: Banco de Dados & Sincronismo */}
-            <button
-              id="tab-btn-sync"
-              onClick={() => {
-                setActiveTab("sync");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "sync"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Banco de Dados & Drive"
-            >
-              <Database className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Banco de Dados & Drive</span>
-            </button>
-
             {/* Nav item: IA & Modelos */}
             <button
               id="tab-btn-ai-config"
@@ -784,7 +763,6 @@ export default function App() {
                activeTab === "calculator" ? "Modelagem Financeira e BDI de Licitações" :
                activeTab === "comparator" ? "Compatibilização Técnica de Especificações" :
                activeTab === "bot" ? "Simulador de Disputa de Lances Finais" :
-               activeTab === "sync" ? "Banco de Dados & Diretório de Arquivos na Nuvem" :
                activeTab === "aiConfig" ? "Configurações de Provedores e Modelos de IA" :
                "Auditoria Legal de Documentação de Concorrentes"}
             </p>
@@ -824,11 +802,6 @@ export default function App() {
                 />
               ) : activeTab === "bot" ? (
                 <LanceBotTab
-                  activeEdital={activeEdital}
-                />
-              ) : activeTab === "sync" ? (
-                <CloudSyncTab
-                  companyData={companyData}
                   activeEdital={activeEdital}
                 />
               ) : activeTab === "aiConfig" ? (
@@ -900,11 +873,11 @@ export default function App() {
                   <button
                     onClick={() => {
                       setSupabaseModalOpen(false);
-                      setActiveTab("sync");
+                      setActiveTab("aiConfig");
                     }}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
                   >
-                    Configurar Conexão do Banco
+                    Configurar Provedores de IA
                   </button>
                 </div>
               ) : supabaseUser ? (
