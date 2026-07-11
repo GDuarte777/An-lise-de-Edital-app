@@ -176,34 +176,36 @@ export default function AiConfigTab() {
     setSyncMessage("");
 
     try {
-      // Supabase Management API call
       const projectRef = "cghlfhndoqohmrrvppjj";
       const accessToken = "sbp_e02c61f0dc45290154598e70b63c3ac3535f45dc";
       
-      const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/secrets`, {
+      const response = await fetch("/api/supabase/sync-secrets", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${accessToken}`
+          "Content-Type": "application/json"
         },
-        body: JSON.stringify([
-          {
-            name: "GEMINI_API_KEY",
-            value: geminiKey
-          }
-        ])
+        body: JSON.stringify({
+          geminiKey,
+          projectRef,
+          accessToken
+        })
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(errorText || "Falha ao atualizar segredos no Supabase.");
+        let parsedError = errorText;
+        try {
+          const jsonErr = JSON.parse(errorText);
+          parsedError = jsonErr.error || jsonErr.message || errorText;
+        } catch (_) {}
+        throw new Error(parsedError || "Falha ao atualizar segredos no Supabase.");
       }
 
       setSyncSuccess(true);
       setSyncMessage("Chave do Gemini (GEMINI_API_KEY) sincronizada com sucesso na nuvem do Supabase!");
       confetti({ particleCount: 50, colors: ["#3ecf8e", "#10b981"] });
     } catch (err: any) {
-      console.error(err);
+      console.warn("Erro ao sincronizar chaves com Supabase (pode ser uma reinicialização de servidor ou indisponibilidade temporária):", err?.message || err);
       setSyncSuccess(false);
       setSyncMessage(err.message || "Erro desconhecido ao sincronizar.");
     } finally {

@@ -245,8 +245,12 @@ export async function fetchEditaisFromSupabase(): Promise<any[]> {
       return [];
     }
     return data || [];
-  } catch (err) {
-    console.error(err);
+  } catch (err: any) {
+    if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
+      console.warn("fetchEditaisFromSupabase network warning:", err?.message || err);
+    } else {
+      console.warn("fetchEditaisFromSupabase error:", err?.message || err);
+    }
     return [];
   }
 }
@@ -274,7 +278,11 @@ export async function saveEditalToSupabase(item: { id: string; title: string; da
     if (error) throw error;
     return { success: true, message: "Edital salvo com sucesso no Supabase!" };
   } catch (err: any) {
-    console.error("saveEditalToSupabase error:", err);
+    if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
+      console.warn("saveEditalToSupabase network warning:", err?.message || err);
+    } else {
+      console.warn("saveEditalToSupabase error:", err?.message || err);
+    }
     return { success: false, message: err.message || "Erro ao salvar no Supabase." };
   }
 }
@@ -355,7 +363,7 @@ export async function saveCertificateToSupabase(item: any): Promise<{ success: b
     if (error) throw error;
     return { success: true, message: "Certidão salva com sucesso no Supabase!" };
   } catch (err: any) {
-    console.error(err);
+    console.warn("saveCertificateToSupabase error:", err?.message || err);
     return { success: false, message: err.message };
   }
 }
@@ -425,7 +433,7 @@ export async function saveCompetitorToSupabase(item: any): Promise<{ success: bo
     if (error) throw error;
     return { success: true, message: "Concorrente salvo com sucesso no Supabase!" };
   } catch (err: any) {
-    console.error(err);
+    console.warn("saveCompetitorToSupabase error:", err?.message || err);
     return { success: false, message: err.message };
   }
 }
@@ -493,7 +501,7 @@ export async function saveChatSessionToSupabase(item: any): Promise<{ success: b
     if (error) throw error;
     return { success: true, message: "Sessão de chat salva com sucesso no Supabase!" };
   } catch (err: any) {
-    console.error(err);
+    console.warn("saveChatSessionToSupabase error:", err?.message || err);
     return { success: false, message: err.message };
   }
 }
@@ -563,7 +571,7 @@ export async function saveDocumentToSupabase(item: any): Promise<{ success: bool
     if (error) throw error;
     return { success: true, message: "Documento salvo com sucesso no Supabase!" };
   } catch (err: any) {
-    console.error(err);
+    console.warn("saveDocumentToSupabase error:", err?.message || err);
     return { success: false, message: err.message };
   }
 }
@@ -709,7 +717,7 @@ export async function fetchUserConfigFromSupabase(): Promise<any | null> {
     }
     return data;
   } catch (err) {
-    console.error(err);
+    console.warn("fetchUserConfigFromSupabase error:", err);
     return null;
   }
 }
@@ -753,7 +761,11 @@ export async function saveUserConfigToSupabase(config: {
     if (error) throw error;
     return { success: true, message: "Configurações de chaves salvas com sucesso no Supabase!" };
   } catch (err: any) {
-    console.error("saveUserConfigToSupabase error:", err);
+    if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
+      console.warn("saveUserConfigToSupabase network warning:", err?.message || err);
+    } else {
+      console.warn("saveUserConfigToSupabase error:", err?.message || err);
+    }
     return { success: false, message: err.message || "Erro ao salvar chaves." };
   }
 }
@@ -776,7 +788,7 @@ export async function fetchCompanyDataFromSupabase(): Promise<any | null> {
     }
     return data;
   } catch (err) {
-    console.error(err);
+    console.warn("fetchCompanyDataFromSupabase error:", err);
     return null;
   }
 }
@@ -809,7 +821,11 @@ export async function saveCompanyDataToSupabase(companyData: any): Promise<{ suc
     if (error) throw error;
     return { success: true, message: "Dados da empresa salvos com sucesso no Supabase!" };
   } catch (err: any) {
-    console.error("saveCompanyDataToSupabase error:", err);
+    if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
+      console.warn("saveCompanyDataToSupabase network warning:", err?.message || err);
+    } else {
+      console.warn("saveCompanyDataToSupabase error:", err?.message || err);
+    }
     return { success: false, message: err.message || "Erro ao salvar dados de empresa." };
   }
 }

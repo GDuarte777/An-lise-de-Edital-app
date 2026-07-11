@@ -23,3 +23,27 @@ drop policy if exists "Usuários acessam apenas suas próprias configurações" 
 -- Política RLS: cada usuário só pode ver/editar suas próprias configurações
 create policy "Usuários acessam apenas suas próprias configurações" on configuracoes_usuario
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Criar tabela de dados da empresa para o perfil corporativo do usuário
+create table if not exists dados_empresa (
+  user_id uuid references auth.users(id) on delete cascade not null primary key,
+  razon_social text default '',
+  cnpj text default '',
+  address text default '',
+  phone text default '',
+  email text default '',
+  representative_name text default '',
+  representative_cpf text default '',
+  bank_details text default '',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Habilitar RLS
+alter table dados_empresa enable row level security;
+
+-- Remover política existente para evitar erros em re-execuções
+drop policy if exists "Usuários acessam apenas seus próprios dados de empresa" on dados_empresa;
+
+-- Política RLS: cada usuário só pode ver/editar seus próprios dados de empresa
+create policy "Usuários acessam apenas seus próprios dados de empresa" on dados_empresa
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);

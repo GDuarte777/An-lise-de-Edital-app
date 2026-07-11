@@ -11,6 +11,7 @@ export const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 provider.addScope("https://www.googleapis.com/auth/drive.file");
 provider.addScope("https://www.googleapis.com/auth/spreadsheets");
+provider.addScope("https://www.googleapis.com/auth/calendar");
 
 // Local storage keys
 const SYNCED_ITEMS_KEY = "aip_synced_items";
@@ -217,5 +218,66 @@ Sincronizado: ${new Date().toLocaleString()}
     console.log("Simulando injeção de linha no Google Sheets com dados reais...");
   } catch (e) {
     console.error("Falha ao injetar linha no Google Sheets real", e);
+  }
+}
+
+/**
+ * Creates an event in the user's Google Calendar.
+ */
+export async function syncEventToGoogleCalendar(
+  summary: string,
+  description: string,
+  startDateTime: string,
+  endDateTime: string,
+  timeZone: string = "America/Sao_Paulo"
+): Promise<any> {
+  const token = getGoogleAccessToken();
+  if (!token) {
+    throw new Error("Não conectado ao Google Workspace. Conecte-se primeiro!");
+  }
+
+  try {
+    const eventBody = {
+      summary,
+      description,
+      start: {
+        dateTime: startDateTime, // ISO 8601 string, e.g., "2026-07-15T09:00:00"
+        timeZone
+      },
+      end: {
+        dateTime: endDateTime, // ISO 8601 string, e.g., "2026-07-15T11:00:00"
+        timeZone
+      },
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: "popup", minutes: 60 },   // 1 hora antes
+          { method: "email", minutes: 1440 }  // 1 dia antes
+        ]
+      }
+    };
+
+    console.log("Criando evento no Google Calendar real:", eventBody);
+
+    const response = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(eventBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Erro da API do Google Calendar: ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log("Evento criado com sucesso no Google Calendar:", data);
+    return data;
+  } catch (error) {
+    console.error("Erro ao sincronizar com Google Calendar:", error);
+    throw error;
   }
 }

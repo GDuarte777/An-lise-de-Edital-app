@@ -2,10 +2,11 @@ import { useState, useEffect } from "react";
 import { 
   FileText, ShieldCheck, Database, FolderGit, FileSpreadsheet, CloudLightning, 
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, CheckCircle, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Menu, X, ChevronLeft, ChevronRight
+  Menu, X, ChevronLeft, ChevronRight, Search
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
+import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
 import CompanyDocsTab from "./components/CompanyDocsTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
 import ProductComparatorTab from "./components/ProductComparatorTab";
@@ -42,7 +43,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab ] = useState<"analyzer" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
+  const [activeTab, setActiveTab ] = useState<"analyzer" | "radar" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
@@ -541,6 +542,26 @@ export default function App() {
               <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Análise de Edital</span>
             </button>
 
+            {/* Nav item: Radar de Oportunidades */}
+            <button
+              id="tab-btn-radar"
+              onClick={() => {
+                setActiveTab("radar");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "radar"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Radar de Oportunidades"
+            >
+              <Search className="w-4 h-4 text-sky-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Radar de Oportunidades</span>
+            </button>
+
             {/* Nav item: Gestão de Certidões */}
             <button
               id="tab-btn-documents"
@@ -759,6 +780,7 @@ export default function App() {
             </h2>
             <p className="text-slate-400 text-xs mt-0.5">
               {activeTab === "analyzer" ? "Carregamento e Inteligência Artificial de Editais" :
+               activeTab === "radar" ? "Radar de Licitações Públicas Federais (PNCP)" :
                activeTab === "documents" ? "Gestão de Habilitação Jurídica e Fiscal" :
                activeTab === "calculator" ? "Modelagem Financeira e BDI de Licitações" :
                activeTab === "comparator" ? "Compatibilização Técnica de Especificações" :
@@ -784,6 +806,16 @@ export default function App() {
                   activeEdital={activeEdital}
                   setActiveEdital={setActiveEdital}
                   onOpenDocPreview={handleOpenDocPreview}
+                />
+              ) : activeTab === "radar" ? (
+                <RadarOportunidadesTab 
+                  onSelectForAnalysis={(text) => {
+                    localStorage.setItem("aip_auto_analyze_text", text);
+                    setActiveTab("analyzer");
+                    setTimeout(() => {
+                      window.dispatchEvent(new Event("aip_trigger_external_text"));
+                    }, 50);
+                  }}
                 />
               ) : activeTab === "documents" ? (
                 <CompanyDocsTab 

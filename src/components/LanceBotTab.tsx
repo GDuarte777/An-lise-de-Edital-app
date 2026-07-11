@@ -147,8 +147,9 @@ export default function LanceBotTab({ activeEdital }: LanceBotTabProps) {
             pushLog(`⚡ Credenciais atualizadas automaticamente via Extensão do Chrome!`, "success");
           }
         }
-      } catch (e) {
-        console.error("Erro ao sincronizar credenciais da extensão:", e);
+      } catch (e: any) {
+        // Log gently as a warning to prevent polluting platform error logs when offline or server is restarting
+        console.warn("Erro de sincronização de credenciais da extensão (servidor offline ou reiniciando):", e?.message || e);
       }
     }, 2500);
 
@@ -171,8 +172,9 @@ export default function LanceBotTab({ activeEdital }: LanceBotTabProps) {
             pushLog(`🔄 Sincronizado com o robô de lances em execução ativa no servidor.`, "success");
           }
         }
-      } catch (e) {
-        console.error("Erro ao sincronizar robô ativo:", e);
+      } catch (e: any) {
+        // Log gently as a warning
+        console.warn("Erro ao sincronizar robô ativo:", e?.message || e);
       }
     };
     checkActiveBot();
@@ -278,8 +280,8 @@ export default function LanceBotTab({ activeEdital }: LanceBotTabProps) {
               confetti({ particleCount: 45, spread: 60, colors: ["#ef4444", "#f87171"] });
             }
           }
-        } catch (e) {
-          console.error("Erro ao sincronizar com servidor de lances:", e);
+        } catch (e: any) {
+          console.warn("Erro ao sincronizar com servidor de lances (servidor offline ou reiniciando):", e?.message || e);
         }
       };
 

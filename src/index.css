@@ -10,7 +10,8 @@ html, body {
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   overflow-x: hidden;
-  height: 100%;
+  min-height: 100%;
+  overscroll-behavior-y: contain;
 }
 
 body {
@@ -19,6 +20,12 @@ body {
   background-image: radial-gradient(at top right, rgba(29, 78, 216, 0.15), transparent 50%), radial-gradient(at bottom left, rgba(79, 70, 229, 0.12), transparent 50%);
   color: #f8fafc;
   min-height: 100vh;
+}
+
+/* Enable native momentum scroll & overscroll safety globally */
+.overflow-y-auto, .overflow-auto, [class*="overflow-y-scroll"] {
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-y: contain !important;
 }
 
 /* Glass UI Components helper classes */

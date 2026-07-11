@@ -19,46 +19,6 @@ import {
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
 
-// Portuguese demo data for instant simulation & testing convenience
-const DEMO_EDITAL_TEXT = `
-EDITAL DE PREGÃO ELETRÔNICO Nº 14/2026
-
-OBJETIVO: Aquisição de 100 computadores portáteis (laptops) corporativos de alta performance para a Secretaria Estadual de Educação e Cultura, visando o atendimento das unidades escolares do Município Sede.
-
-REQUISITOS ADICIONAIS DOS PRODUTOS:
-Os laptops devem conter no mínimo processador Intel Core i5 de 11ª geração ou equivalente, 16GB de memória RAM, 512GB SSD e tela FHD de 14 polegadas. Garantia mínima residencial de 12 meses fornecida pelo fabricante.
-
-DAS DATAS E PRAZOS DE ENTREGA:
-A contratante deverá efetuar a entrega integral dos notebooks no Almoxarifado Central do Estado no prazo peremptório e máximo de 15 dias corridos contados e sacramentados a partir da data de assinatura da nota de empenho. Sob pena de multa contratual de 0,5% por dia de atraso injustificado.
-
-DAS CONDIÇÕES E PRAZO DE PAGAMENTO:
-O adimplemento financeiro ocorrerá em parcela única, no prazo de até 30 dias contados do protocolo da fatura instruída com o devido termo de recebimento definitivo pelo gestor do almoxarifado.
-
-DOCUMENTOS DE HABILITAÇÃO EXIGIDOS (CRÍTICOS):
-Para fins de habilitação fiscal e trabalhista, neste pregão, as empresas proponentes devem obrigatoriamente anexar na plataforma governamental os seguintes documentos vigentes:
-1. Certidão Conjunta Receita Federal e Tributos Federais.
-2. Certificado de Regularidade Fiscal Trabalhista (CNDT).
-3. Certificado de Regularidade do FGTS (CRF) expedido pela Caixa Econômica.
-4. Certidão de Regularidade perante a SEFAZ (Fazenda Estadual do domicilio social).
-5. Certidão de Regularidade com a Fazenda Municipal.
-6. Cópia do Balanço Patrimonial registrado na junta comercial do último exercício (2025).
-7. Autodeclaração conjunta eletrônica de regularidade.
-`;
-
-const DEMO_CUSTOM_TEMPLATE = `
-DECLARAÇÃO DE COMPROMISSO DE ASSISTÊNCIA TÉCNICA E MANUTENÇÃO
-
-A empresa [Razão Social], inscrita no CNPJ sob o nº [CNPJ], sediada em [Endereço], declara formalmente, sob as penalidades legais, que possui plena capacidade técnica instalada e se compromete a fornecer assistência técnica local autorizada pelo fabricante para os laptops do Pregão Eletrônico nº 14/2026, pelo período mínimo de 12 (doze) meses, no almoxarifado central, devendo efetuar o reparo ou substituição dos equipamentos com vício ou defeito em até 48 horas úteis após a notificação formal realizada pelo fiscal do contrato.
-
-Por ser a expressão da verdade, firmamos a presente.
-
-[Localidade], [Data de Junho de 2026].
-
-_______________________________________________
-Representante Legal da Empresa: [Representante Legal]
-CPF: [CPF do Representante]
-`;
-
 interface EditalAnalyzerTabProps {
   companyData: CompanyData;
   activeEdital: EditalAnalysis | null;
@@ -370,14 +330,32 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     }
     loadHistory();
-  }, []);
 
-  // Load Portuguese Demo text instantly to let user play immediately
-  const handleLoadDemo = () => {
-    setTextInput(DEMO_EDITAL_TEXT);
-    setFileDetails(null);
-    setFileBase64(null);
-  };
+    const handleExternalText = () => {
+      const extText = localStorage.getItem("aip_auto_analyze_text");
+      if (extText) {
+        setTextInput(extText);
+        setFileDetails(null);
+        setFileBase64(null);
+        localStorage.removeItem("aip_auto_analyze_text");
+        
+        // Trigger auto analysis after a tiny delay so the state update is processed
+        setTimeout(() => {
+          const btn = document.getElementById("trigger-analyze-btn");
+          if (btn) btn.click();
+        }, 150);
+      }
+    };
+
+    window.addEventListener("aip_trigger_external_text", handleExternalText);
+    
+    // Check on mount as well
+    handleExternalText();
+
+    return () => {
+      window.removeEventListener("aip_trigger_external_text", handleExternalText);
+    };
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -496,7 +474,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     } catch (e: any) {
       console.error(e);
-      alert("Houve um problema ao enviar o arquivo para análise ao Gemini. Por favor, verifique se seu servidor de backend está de pé ou utilize o texto de demonstração.");
+      alert("Houve um problema ao enviar o arquivo para análise ao Gemini. Por favor, verifique se seu servidor de backend está ativo.");
     } finally {
       setLoading(false);
     }
@@ -517,7 +495,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           analysisData: activeEdital,
           companyData: companyData,
           extraInstructions,
-          uploadedTemplateText: docType === "custom_declaration" ? (uploadedTemplateText || DEMO_CUSTOM_TEMPLATE) : undefined
+          uploadedTemplateText: docType === "custom_declaration" ? uploadedTemplateText : undefined
         }
       });
 
@@ -562,14 +540,6 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleLoadDemo}
-              className="px-3.5 py-1.5 text-xs font-semibold rounded-md border border-white/10 text-slate-200 bg-white/5 hover:bg-white/10 transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              <ClipboardPaste className="w-3.5 h-3.5" />
-              Usar Exemplo de Pregão
-            </button>
-            
             {activeEdital && (
               <button
                 onClick={() => {
@@ -631,6 +601,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             </div>
 
             <button
+              id="trigger-analyze-btn"
               onClick={handleAnalyze}
               disabled={loading || (!textInput && !fileBase64)}
               className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:bg-white/5 disabled:from-white/5 disabled:to-white/5 disabled:text-slate-500 text-white font-bold py-2.5 rounded-lg text-sm transition-all shadow-lg flex items-center justify-center gap-2 border border-white/10 cursor-pointer"
@@ -1212,13 +1183,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             {showCustomDocForm && (
               <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3 animate-fade-in">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-300 block">Escreva ou Cole o modelo exemplo exigido no edital:</span>
-                  <button 
-                    onClick={() => setUploadedTemplateText(DEMO_CUSTOM_TEMPLATE)}
-                    className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold transition-colors"
-                  >
-                    Utilizar Modelo de Assistência Técnica (Exemplo)
-                  </button>
+                  <span className="text-xs font-semibold text-slate-300 block">Escreva ou Cole o modelo exigido no edital:</span>
                 </div>
                 <textarea 
                   value={uploadedTemplateText}
