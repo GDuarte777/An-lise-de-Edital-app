@@ -8,7 +8,7 @@ import {
 import { 
   FileText, Plus, Calendar, AlertTriangle, CheckCircle, Trash2, Edit2, ShieldCheck, 
   HelpCircle, RefreshCw, Layers, CheckSquare, Search, Building2, Landmark, Clock, FileWarning,
-  FileUp, Loader2, GripVertical
+  FileUp, Loader2, GripVertical, SlidersHorizontal
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
@@ -246,6 +246,14 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
           return c;
         });
 
+        // Apply default sorting if not manually ordered yet
+        const isManuallyOrdered = localStorage.getItem("aip_certificates_manually_ordered") === "true";
+        if (!isManuallyOrdered) {
+          const uploaded = evaluatedCerts.filter(c => !!c.fileUploaded);
+          const empty = evaluatedCerts.filter(c => !c.fileUploaded);
+          return [...uploaded, ...empty];
+        }
+
         return evaluatedCerts;
       } catch (e) {
         return INITIAL_CERTIFICATES;
@@ -255,12 +263,68 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
   });
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [hasManuallyOrdered, setHasManuallyOrdered] = useState<boolean>(() => {
+    return localStorage.getItem("aip_certificates_manually_ordered") === "true";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("aip_certificates_manually_ordered", String(hasManuallyOrdered));
+  }, [hasManuallyOrdered]);
+
+  // Auto-sort certs if they have not been manually ordered
+  useEffect(() => {
+    if (!hasManuallyOrdered && certs.length > 0) {
+      // Check if they are already correctly grouped (all fileUploaded === true are before fileUploaded === false)
+      let isSorted = true;
+      let seenEmpty = false;
+      for (const c of certs) {
+        const hasFile = !!c.fileUploaded;
+        if (hasFile) {
+          if (seenEmpty) {
+            isSorted = false;
+            break;
+          }
+        } else {
+          seenEmpty = true;
+        }
+      }
+
+      if (!isSorted) {
+        const uploaded = certs.filter(c => !!c.fileUploaded);
+        const empty = certs.filter(c => !c.fileUploaded);
+        setCerts([...uploaded, ...empty]);
+      }
+    }
+  }, [certs, hasManuallyOrdered]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingCert, setEditingCert] = useState<Certificate | null>(null);
   
   // Extra loading/feedback states for IA document analysis
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  const triggerAlert = (msg: string) => {
+    setErrorMessage(msg);
+    // Auto dismiss after 8 seconds
+    setTimeout(() => {
+      setErrorMessage(prev => prev === msg ? null : prev);
+    }, 8000);
+  };
+
+  const triggerConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setConfirmDialog({
+      title,
+      message,
+      onConfirm
+    });
+  };
+
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [rowDraggingIndex, setRowDraggingIndex] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "expired" | "expiring_soon" | "valid" | "mismatched" | "pending">("all");
@@ -288,7 +352,36 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       try {
         const dbCerts = await fetchCertificatesFromSupabase();
         if (dbCerts && dbCerts.length > 0) {
-          setCerts(dbCerts);
+          setCerts(prev => {
+            // Merge existing local state (which has all standard items and any custom items)
+            // with dbCerts loaded from Supabase
+            const merged = prev.map(local => {
+              const dbMatch = dbCerts.find(d => d.id === local.id);
+              if (dbMatch) {
+                return {
+                  ...local,
+                  ...dbMatch,
+                  fileUploaded: dbMatch.fileUploaded === false ? false : !!dbMatch.fileUploaded,
+                  status: dbMatch.expirationDate ? evaluateStatus(dbMatch.expirationDate) : local.status
+                };
+              }
+              return local;
+            });
+
+            // If there are custom certificates in dbCerts that aren't in the merged list, append them
+            const existingIds = new Set(merged.map(c => c.id));
+            dbCerts.forEach(db => {
+              if (!existingIds.has(db.id)) {
+                merged.push({
+                  ...db,
+                  fileUploaded: !!db.fileUploaded,
+                  status: db.expirationDate ? evaluateStatus(db.expirationDate) : "valid"
+                });
+              }
+            });
+
+            return merged;
+          });
         }
       } catch (e) {
         console.warn("Erro ao carregar certidões do Supabase:", e);
@@ -300,11 +393,6 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
   // Persistence
   useEffect(() => {
     localStorage.setItem("aip_certificates", JSON.stringify(certs));
-    
-    // Sync to Supabase in background
-    certs.forEach(c => {
-      saveCertificateToSupabase(c).catch(e => console.warn("Erro de sincronismo de certidão:", e));
-    });
   }, [certs]);
 
   // Recalculate statuses on mount to ensure everything is perfectly in sync with the real current time
@@ -358,21 +446,25 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
         if (result) {
           const expirationDate = result.expirationDate || "";
           
+          const targetCert = certs.find(c => c.id === certId);
+          const updatedCert = {
+            ...targetCert,
+            id: certId,
+            name: targetCert?.name || "",
+            notes: targetCert?.notes || "",
+            expirationDate,
+            fileUploaded: true,
+            fileName: file.name,
+            documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
+            validationFeedback: result.validationFeedback || "Documento analisado.",
+            status: expirationDate ? evaluateStatus(expirationDate) : "valid"
+          };
+
           // Update cert state
-          setCerts(prev => prev.map(c => {
-            if (c.id === certId) {
-              return {
-                ...c,
-                expirationDate,
-                fileUploaded: true,
-                fileName: file.name,
-                documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
-                validationFeedback: result.validationFeedback || "Documento analisado.",
-                status: expirationDate ? evaluateStatus(expirationDate) : "valid"
-              };
-            }
-            return c;
-          }));
+          setCerts(prev => prev.map(c => c.id === certId ? updatedCert : c));
+
+          // Sync instantly to Supabase
+          saveCertificateToSupabase(updatedCert).catch(err => console.warn("Erro ao salvar anexo no Supabase:", err));
 
           // Process and merge extracted company data
           if (result.extractedCompanyData) {
@@ -419,29 +511,33 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
 
           confetti({ particleCount: 65, spread: 60, origin: { y: 0.8 } });
         } else {
-          alert("A IA analisou o arquivo, mas não retornou um formato de dados esperado.");
+          triggerAlert("A IA analisou o arquivo, mas não retornou um formato de dados esperado.");
         }
       } catch (err: any) {
         console.error(err);
-        alert("Erro na análise da IA. O arquivo foi anexado com sucesso para preenchimento manual.");
+        triggerAlert("Erro na análise da IA. O arquivo foi anexado com sucesso para preenchimento manual.");
         // Fallback: mark as uploaded but allow user to specify a date manually by editing
-        setCerts(prev => prev.map(c => {
-          if (c.id === certId) {
-            return {
-              ...c,
-              fileUploaded: true,
-              fileName: file.name
-            };
-          }
-          return c;
-        }));
+        const targetCert = certs.find(c => c.id === certId);
+        const fallbackCert = {
+          ...targetCert,
+          id: certId,
+          name: targetCert?.name || "",
+          notes: targetCert?.notes || "",
+          fileUploaded: true,
+          fileName: file.name,
+          documentMatchesRow: undefined,
+          validationFeedback: undefined,
+          status: targetCert?.status || "valid"
+        };
+        setCerts(prev => prev.map(c => c.id === certId ? fallbackCert : c));
+        saveCertificateToSupabase(fallbackCert).catch(err => console.warn("Erro ao salvar anexo fallback no Supabase:", err));
       } finally {
         setAnalyzingId(null);
       }
     };
 
     reader.onerror = () => {
-      alert("Falha ao carregar arquivo de certidão.");
+      triggerAlert("Falha ao carregar arquivo de certidão.");
       setAnalyzingId(null);
     };
 
@@ -520,16 +616,17 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       const updated = [...certs];
       const [removed] = updated.splice(mainSourceIdx, 1);
       updated.splice(mainTargetIdx, 0, removed);
+      setHasManuallyOrdered(true);
       setCerts(updated);
     }
     
     setRowDraggingIndex(null);
   };
 
-  const handleAddOrEdit = (e: React.FormEvent) => {
+  const handleAddOrEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name || !formData.expirationDate) {
-      alert("Por favor preencha ao menos Nome e Data de Vencimento.");
+      triggerAlert("Por favor preencha ao menos Nome e Data de Vencimento.");
       return;
     }
 
@@ -537,20 +634,25 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
 
     if (editingCert) {
       // Edit
+      const updatedItem = { 
+        ...editingCert, 
+        name: formData.name, 
+        emissionDate: formData.emissionDate, 
+        expirationDate: formData.expirationDate,
+        notes: formData.notes,
+        status: calculatedStatus,
+        documentMatchesRow: undefined,
+        validationFeedback: undefined
+      };
+      
       const updated = certs.map(c => 
-        c.id === editingCert.id 
-          ? { 
-              ...c, 
-              name: formData.name, 
-              emissionDate: formData.emissionDate, 
-              expirationDate: formData.expirationDate,
-              notes: formData.notes,
-              status: calculatedStatus 
-            }
-          : c
+        c.id === editingCert.id ? updatedItem : c
       );
       setCerts(updated);
       setEditingCert(null);
+      
+      // Sync instantly
+      saveCertificateToSupabase(updatedItem).catch(err => console.warn("Erro ao salvar edição no Supabase:", err));
     } else {
       // Add
       const newCert: Certificate = {
@@ -562,6 +664,9 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
         status: calculatedStatus
       };
       setCerts([newCert, ...certs]);
+      
+      // Sync instantly
+      saveCertificateToSupabase(newCert).catch(err => console.warn("Erro ao salvar nova certidão no Supabase:", err));
     }
 
     setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
@@ -581,16 +686,112 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
   };
 
   const deleteCert = (id: string) => {
-    if (confirm("Tem certeza que deseja excluir esta certidão?")) {
-      deleteCertificateFromSupabase(id).catch(e => console.warn("Erro ao deletar certidão do Supabase:", e));
-      setCerts(certs.filter(c => c.id !== id));
+    triggerConfirm(
+      "Confirmar Exclusão",
+      "Tem certeza que deseja excluir esta certidão personalizada?",
+      () => {
+        deleteCertificateFromSupabase(id).catch(e => console.warn("Erro ao deletar certidão do Supabase:", e));
+        setCerts(prev => prev.filter(c => c.id !== id));
+      }
+    );
+  };
+
+  const handleDeleteAttachment = async (certId: string) => {
+    const isStandard = INITIAL_CERTIFICATES.some(c => c.id === certId);
+    
+    if (isStandard) {
+      triggerConfirm(
+        "Remover Anexo",
+        "Deseja remover o arquivo anexo deste documento?",
+        async () => {
+          const updatedCerts = certs.map(c => 
+            c.id === certId 
+              ? { 
+                  ...c, 
+                  fileUploaded: false, 
+                  fileName: undefined, 
+                  expirationDate: "", 
+                  emissionDate: "", 
+                  status: "expired" as const, 
+                  documentMatchesRow: undefined, 
+                  validationFeedback: undefined 
+                } 
+              : c
+          );
+          setCerts(updatedCerts);
+
+          // Instantly sync this deleted/cleared state to Supabase so that it is updated immediately
+          const certToUpdate = updatedCerts.find(c => c.id === certId);
+          if (certToUpdate) {
+            try {
+              const res = await saveCertificateToSupabase(certToUpdate);
+              if (res.success) {
+                setInfoMessage("Anexo removido e sincronizado no Supabase com sucesso!");
+                setTimeout(() => setInfoMessage(null), 5000);
+              } else {
+                console.warn("Erro ao salvar exclusão no Supabase:", res.message);
+              }
+            } catch (e) {
+              console.error("Erro técnico ao salvar exclusão no Supabase:", e);
+            }
+          }
+        }
+      );
+    } else {
+      triggerConfirm(
+        "Excluir Certidão",
+        "Deseja excluir esta certidão personalizada por completo?",
+        async () => {
+          try {
+            const success = await deleteCertificateFromSupabase(certId);
+            if (success) {
+              setCerts(prev => prev.filter(c => c.id !== certId));
+              setInfoMessage("Certidão personalizada removida do Supabase com sucesso!");
+              setTimeout(() => setInfoMessage(null), 5000);
+            } else {
+              // Fallback local deletion if Supabase delete fails or isn't fully configured
+              setCerts(prev => prev.filter(c => c.id !== certId));
+              console.warn("Erro ao deletar certidão do Supabase, removido localmente.");
+            }
+          } catch (e) {
+            console.error("Erro ao deletar certidão:", e);
+            setCerts(prev => prev.filter(c => c.id !== certId));
+          }
+        }
+      );
+    }
+  };
+
+  const handleManualApprove = async (certId: string) => {
+    const updatedCerts = certs.map(c => 
+      c.id === certId 
+        ? { 
+            ...c, 
+            documentMatchesRow: true, 
+            validationFeedback: "Aprovado manualmente pelo usuário como compatível." 
+          } 
+        : c
+    );
+    setCerts(updatedCerts);
+    
+    const certToUpdate = updatedCerts.find(c => c.id === certId);
+    if (certToUpdate) {
+      try {
+        const res = await saveCertificateToSupabase(certToUpdate);
+        if (res.success) {
+          setInfoMessage("Documento aprovado manualmente com sucesso!");
+          setTimeout(() => setInfoMessage(null), 4000);
+        }
+      } catch (err) {
+        console.warn("Erro ao salvar aprovação manual no Supabase:", err);
+      }
     }
   };
 
   // Perform Gemini-driven Compatibility Analysis!
   const runCompatibilityAnalysis = async () => {
     if (!activeEdital) {
-      alert("Por favor, faça primeiro o upload e análise de um edital na aba 'Análise de Edital'!");
+      triggerAlert("Por favor, faça primeiro o upload e análise de um edital na aba 'Análise de Edital'!");
       return;
     }
 
@@ -615,7 +816,7 @@ Aja como uma auditoria automatizada de licitações. Com base nas certidões que
 Verifique se a minha empresa está APTA ("Aprovada"), se há Pendências Contornáveis ou se a candidatura é INVIÁVEL ("Desqualificada") devido a certidões vencidas ou ausentes.
 
 Nossas Certidões Cadastradas:
-${certs.map(c => `- Nome: "${c.name}" | Status: ${c.status === "expired" ? "VENCIDA em " + c.expirationDate : c.status === "expiring_soon" ? "EXPIRA EM BREVE em " + c.expirationDate : "VÁLIDA até " + c.expirationDate}`).join("\n")}
+${certs.map(c => `- Nome: "${c.name}" | Status: ${c.status === "expired" ? "VENCIDA em " + c.expirationDate : c.status === "expiring_soon" ? "VENCENDO em " + c.expirationDate : "VÁLIDA até " + c.expirationDate}`).join("\n")}
 
 Requisitos de Habilitação do Edital:
 ${activeEdital.documentosExigidos.map(d => `- Exigido: "${d}"`).join("\n")}
@@ -924,6 +1125,22 @@ Retorne exclusivamente o JSON estruturado.
             </div>
           )}
 
+          {/* Error message for alerts/failures */}
+          {errorMessage && (
+            <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-4 py-3 rounded-xl mb-4 text-xs flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{errorMessage}</span>
+              </div>
+              <button 
+                onClick={() => setErrorMessage(null)} 
+                className="text-rose-400 hover:text-rose-300 text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          )}
+
           {/* Quick Status Filters */}
           <div className="mb-4">
             <p className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider font-mono">Organizar e Filtrar Certidões:</p>
@@ -986,14 +1203,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("expiring_soon")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "expiring_soon"
-                    ? "bg-amber-600 text-white shadow-md shadow-amber-950/40"
-                    : "text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                    ? "bg-yellow-600 text-white shadow-md shadow-yellow-950/40"
+                    : "text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
                 }`}
               >
                 <Clock className="w-3.5 h-3.5 shrink-0" />
-                <span>Expirando em Breve</span>
+                <span>Vencendo</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "expiring_soon" ? "bg-white/20 text-white" : "bg-amber-500/10 text-amber-350"
+                  statusFilter === "expiring_soon" ? "bg-white/20 text-white" : "bg-yellow-500/10 text-yellow-400"
                 }`}>
                   {certs.filter(c => c.fileUploaded && evaluateStatus(c.expirationDate) === "expiring_soon").length}
                 </span>
@@ -1048,6 +1265,27 @@ Retorne exclusivamente o JSON estruturado.
               className="w-full pl-9 pr-4 py-2 text-sm bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
+
+          {hasManuallyOrdered && (
+            <div className="flex items-center justify-between bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-3 py-2 rounded-xl mb-4 text-[11px] animate-in fade-in duration-200">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>Posição personalizada ativa (ordem manual via arrastar).</span>
+              </div>
+              <button 
+                type="button"
+                onClick={() => {
+                  setHasManuallyOrdered(false);
+                  const uploaded = certs.filter(c => !!c.fileUploaded);
+                  const empty = certs.filter(c => !c.fileUploaded);
+                  setCerts([...uploaded, ...empty]);
+                }} 
+                className="text-indigo-400 hover:text-indigo-300 hover:underline text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
+              >
+                Organizar por anexos
+              </button>
+            </div>
+          )}
 
           {/* Certificates List / Table Container */}
           <div id="certificates-table-wrapper" className="w-full min-w-0">
@@ -1117,9 +1355,17 @@ Retorne exclusivamente o JSON estruturado.
                             <span className="truncate">{cert.fileName}</span>
                           </div>
                           {cert.documentMatchesRow === false && cert.validationFeedback && (
-                            <div className="text-[11px] text-orange-355 bg-orange-500/5 border border-orange-500/15 rounded-lg p-2.5 flex items-start gap-2 leading-normal">
-                              <AlertTriangle className="w-3.5 h-3.5 text-orange-400 shrink-0 mt-0.5" />
-                              <span>{cert.validationFeedback}</span>
+                            <div className="text-[11px] text-orange-355 bg-orange-500/5 border border-orange-500/15 rounded-lg p-2.5 flex flex-col gap-2 leading-normal">
+                              <div className="flex items-start gap-2">
+                                <AlertTriangle className="w-3.5 h-3.5 text-orange-400 shrink-0 mt-0.5" />
+                                <span>{cert.validationFeedback}</span>
+                              </div>
+                              <button
+                                onClick={() => handleManualApprove(cert.id)}
+                                className="text-[10px] w-full text-center font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1 rounded-lg border border-emerald-500/20 transition-colors cursor-pointer mt-1"
+                              >
+                                ✓ Forçar aprovação deste documento
+                              </button>
                             </div>
                           )}
                         </div>
@@ -1153,8 +1399,8 @@ Retorne exclusivamente o JSON estruturado.
                                     </span>
                                   )}
                                   {status === "expiring_soon" && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 text-amber-305 px-2.5 py-0.5 text-[11px] font-semibold border border-amber-500/20">
-                                      Expira Breve
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-yellow-500/10 text-yellow-400 px-2.5 py-0.5 text-[11px] font-semibold border border-yellow-500/20">
+                                      Vencendo
                                     </span>
                                   )}
                                   {status === "valid" && (
@@ -1171,7 +1417,7 @@ Retorne exclusivamente o JSON estruturado.
                         {/* Expiration date metadata */}
                         <div className="flex items-center gap-1 text-[11px] font-mono text-slate-400">
                           <span className="text-slate-500">Vencimento:</span>
-                          <span className={isUploaded && status === "expired" ? "text-rose-400 font-bold" : isUploaded && status === "expiring_soon" ? "text-amber-405 font-semibold" : "text-slate-300"}>
+                          <span className={isUploaded && status === "expired" ? "text-rose-400 font-bold" : isUploaded && status === "expiring_soon" ? "text-yellow-400 font-semibold" : "text-slate-300"}>
                             {isAnalyzing ? "-" : !isUploaded ? "Pendente" : cert.expirationDate ? new Date(cert.expirationDate).getUTCDate() ? new Date(cert.expirationDate).getUTCDate().toString().padStart(2, '0') + '/' + (new Date(cert.expirationDate).getUTCMonth() + 1).toString().padStart(2, '0') + '/' + new Date(cert.expirationDate).getUTCFullYear() : new Date(cert.expirationDate).toLocaleDateString("pt-BR") : "Sem Vencimento"}
                           </span>
                         </div>
@@ -1201,11 +1447,7 @@ Retorne exclusivamente o JSON estruturado.
                                 <span>Editar</span>
                               </button>
                               <button
-                                onClick={() => {
-                                  if (confirm("Deseja remover o arquivo e desativar este documento?")) {
-                                    setCerts(prev => prev.map(c => c.id === cert.id ? { ...c, fileUploaded: false, fileName: undefined, expirationDate: "", emissionDate: "", status: "expired", documentMatchesRow: undefined, validationFeedback: undefined } : c));
-                                  }
-                                }}
+                                onClick={() => handleDeleteAttachment(cert.id)}
                                 className="flex items-center justify-center gap-1 bg-rose-500/10 border border-rose-500/20 text-rose-300 hover:bg-rose-500/20 px-3 py-1.5 rounded-lg transition duration-150 cursor-pointer text-[11px]"
                               >
                                 <Trash2 className="w-3 h-3" />
@@ -1279,7 +1521,7 @@ Retorne exclusivamente o JSON estruturado.
                                 !isUploaded ? "text-slate-550" :
                                 cert.documentMatchesRow === false ? "text-orange-400" :
                                 status === "expired" ? "text-rose-450" :
-                                status === "expiring_soon" ? "text-amber-400" : "text-emerald-450"
+                                status === "expiring_soon" ? "text-yellow-400" : "text-emerald-400"
                               }`} />
                               <div className="min-w-0">
                                 <p className={`font-medium leading-tight text-xs md:text-sm truncate ${
@@ -1301,9 +1543,18 @@ Retorne exclusivamente o JSON estruturado.
                                       <span>📄 {cert.fileName}</span>
                                     </p>
                                     {cert.documentMatchesRow === false && cert.validationFeedback && (
-                                      <div className="text-[10px] text-orange-355 bg-orange-500/10 border border-orange-500/20 rounded-lg p-1.5 flex items-start gap-1 leading-normal max-w-full">
-                                        <AlertTriangle className="w-3 h-3 text-orange-400 shrink-0 mt-0.5 animate-pulse" />
-                                        <span>{cert.validationFeedback}</span>
+                                      <div className="text-[10px] text-orange-355 bg-orange-500/10 border border-orange-500/20 rounded-lg p-1.5 flex flex-col gap-1.5 leading-normal max-w-full">
+                                        <div className="flex items-start gap-1">
+                                          <AlertTriangle className="w-3 h-3 text-orange-400 shrink-0 mt-0.5 animate-pulse" />
+                                          <span>{cert.validationFeedback}</span>
+                                        </div>
+                                        <button
+                                          onClick={() => handleManualApprove(cert.id)}
+                                          className="text-[9px] w-max font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/20 transition-colors cursor-pointer mt-0.5"
+                                          title="Ignorar incompatibilidade identificada pela IA e aprovar o documento"
+                                        >
+                                          ✓ Forçar aprovação deste documento
+                                        </button>
                                       </div>
                                     )}
                                   </div>
@@ -1338,9 +1589,9 @@ Retorne exclusivamente o JSON estruturado.
                                       </span>
                                     )}
                                     {status === "expiring_soon" && (
-                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/10 text-amber-305 px-1.5 py-0.5 text-[10px] font-semibold border border-amber-500/20">
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-yellow-500/10 text-yellow-400 px-1.5 py-0.5 text-[10px] font-semibold border border-yellow-500/20">
                                         <Clock className="w-3 h-3 shrink-0 animate-pulse" />
-                                        No Limite
+                                        Vencendo
                                       </span>
                                     )}
                                     {status === "valid" && (
@@ -1363,7 +1614,7 @@ Retorne exclusivamente o JSON estruturado.
                             ) : (
                               <span className={`text-[11px] font-medium font-mono ${
                                 status === "expired" ? "text-rose-300 font-bold" :
-                                status === "expiring_soon" ? "text-amber-305 font-semibold" : "text-slate-300"
+                                status === "expiring_soon" ? "text-yellow-400 font-semibold" : "text-slate-300"
                               }`}>
                                 {cert.expirationDate ? new Date(cert.expirationDate).getUTCDate() ? new Date(cert.expirationDate).getUTCDate().toString().padStart(2, '0') + '/' + (new Date(cert.expirationDate).getUTCMonth() + 1).toString().padStart(2, '0') + '/' + new Date(cert.expirationDate).getUTCFullYear() : new Date(cert.expirationDate).toLocaleDateString("pt-BR") : "Sem Venc."}
                               </span>
@@ -1395,11 +1646,7 @@ Retorne exclusivamente o JSON estruturado.
                                     <Edit2 className="w-3.5 h-3.5" />
                                   </button>
                                   <button
-                                    onClick={() => {
-                                      if (confirm("Deseja remover o arquivo e desativar este documento?")) {
-                                        setCerts(prev => prev.map(c => c.id === cert.id ? { ...c, fileUploaded: false, fileName: undefined, expirationDate: "", emissionDate: "", status: "expired", documentMatchesRow: undefined, validationFeedback: undefined } : c));
-                                      }
-                                    }}
+                                    onClick={() => handleDeleteAttachment(cert.id)}
                                     className="text-slate-400 hover:text-rose-450 p-1 hover:bg-rose-500/10 rounded transition-colors cursor-pointer"
                                     title="Remover arquivo carregado"
                                   >
@@ -1582,6 +1829,37 @@ Retorne exclusivamente o JSON estruturado.
         )}
 
       </div>
+
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 shadow-2xl shadow-black/80 animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
+              {confirmDialog.title}
+            </h3>
+            <p className="text-xs text-slate-300 mb-6 leading-relaxed">
+              {confirmDialog.message}
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer border border-slate-700"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  confirmDialog.onConfirm();
+                  setConfirmDialog(null);
+                }}
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all cursor-pointer shadow-md shadow-rose-950/25"
+              >
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

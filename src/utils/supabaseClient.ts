@@ -291,10 +291,13 @@ export async function deleteEditalFromSupabase(id: string): Promise<boolean> {
   const client = getSupabaseClient();
   if (!client) return false;
   try {
+    const user = await getActiveUser();
+    if (!user) return false;
     const { error } = await client
       .from("editais_analisados")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("user_id", user.id);
     return !error;
   } catch {
     return false;
@@ -345,13 +348,13 @@ export async function saveCertificateToSupabase(item: any): Promise<{ success: b
       id: item.id,
       user_id: user.id,
       name: item.name,
-      emission_date: item.emissionDate,
-      expiration_date: item.expirationDate,
+      emission_date: item.emissionDate || null,
+      expiration_date: item.expirationDate || null,
       status: item.status,
       notes: item.notes || "",
       file_uploaded: !!item.fileUploaded,
       file_name: item.fileName || "",
-      document_matches_row: !!item.documentMatchesRow,
+      document_matches_row: item.documentMatchesRow === false ? false : true,
       validation_feedback: item.validationFeedback || "",
       updated_at: new Date().toISOString()
     };
@@ -372,10 +375,13 @@ export async function deleteCertificateFromSupabase(id: string): Promise<boolean
   const client = getSupabaseClient();
   if (!client) return false;
   try {
+    const user = await getActiveUser();
+    if (!user) return false;
     const { error } = await client
       .from("certidoes_fiscais")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("user_id", user.id);
     return !error;
   } catch {
     return false;
@@ -442,10 +448,13 @@ export async function deleteCompetitorFromSupabase(id: string): Promise<boolean>
   const client = getSupabaseClient();
   if (!client) return false;
   try {
+    const user = await getActiveUser();
+    if (!user) return false;
     const { error } = await client
       .from("historico_concorrentes")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("user_id", user.id);
     return !error;
   } catch {
     return false;
@@ -510,10 +519,13 @@ export async function deleteChatSessionFromSupabase(id: string): Promise<boolean
   const client = getSupabaseClient();
   if (!client) return false;
   try {
+    const user = await getActiveUser();
+    if (!user) return false;
     const { error } = await client
       .from("sessoes_chat")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("user_id", user.id);
     return !error;
   } catch {
     return false;
@@ -580,10 +592,13 @@ export async function deleteDocumentFromSupabase(id: string): Promise<boolean> {
   const client = getSupabaseClient();
   if (!client) return false;
   try {
+    const user = await getActiveUser();
+    if (!user) return false;
     const { error } = await client
       .from("documentos_sincronizados")
       .delete()
-      .eq("id", id);
+      .eq("id", id)
+      .eq("user_id", user.id);
     return !error;
   } catch {
     return false;

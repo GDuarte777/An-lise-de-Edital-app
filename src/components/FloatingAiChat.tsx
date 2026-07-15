@@ -1318,7 +1318,7 @@ PARECER E ESTRATÉGIA:
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-slate-300 truncate">{cert.name}</p>
                           <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className={`w-1.5 h-1.5 rounded-full ${cert.status === "valid" ? "bg-emerald-400" : cert.status === "expiring_soon" ? "bg-amber-400 animate-pulse" : "bg-rose-400"}`} />
+                            <span className={`w-1.5 h-1.5 rounded-full ${cert.status === "valid" ? "bg-emerald-400" : cert.status === "expiring_soon" ? "bg-yellow-400 animate-pulse" : "bg-rose-400"}`} />
                             <p className="text-[9px] text-slate-500">
                               {cert.status === "valid" ? "Válida" : cert.status === "expiring_soon" ? "Próxima ao Vencimento" : "Vencida/Pendente"}
                               {cert.expirationDate ? ` • Vencimento: ${cert.expirationDate}` : ""}

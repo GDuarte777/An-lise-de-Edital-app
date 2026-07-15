@@ -53,6 +53,7 @@ export default function AiConfigTab() {
 
     loadFromStorage();
     window.addEventListener("user-config-loaded", loadFromStorage);
+
     return () => {
       window.removeEventListener("user-config-loaded", loadFromStorage);
     };
@@ -310,11 +311,9 @@ export default function AiConfigTab() {
                       onChange={(e) => setGeminiModel(e.target.value)}
                       className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
                     >
-                      <option value="gemini-3.5-flash">gemini-3.5-flash (Nova Geração Flash - Padrão)</option>
-                      <option value="gemini-3.5-pro">gemini-3.5-pro (Nova Geração Pro - Raciocínio Complexo)</option>
-                      <option value="gemini-3.1-pro">gemini-3.1-pro (Raciocínio Pure-Reasoning)</option>
-                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Leve e rápido)</option>
-                      <option value="gemini-1.5-flash">gemini-1.5-flash (Legado de compatibilidade)</option>
+                      <option value="gemini-3.5-flash">gemini-3.5-flash (Geração Flash - Padrão)</option>
+                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Leve, Rápido e Estável)</option>
+                      <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Raciocínio Avançado)</option>
                     </select>
                   </div>
                 </div>

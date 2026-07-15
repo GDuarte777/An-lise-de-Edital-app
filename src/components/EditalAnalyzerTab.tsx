@@ -19,6 +19,15 @@ import {
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
 
+function cleanMarkdownText(text: string | undefined): string {
+  if (!text) return "";
+  return text
+    .replace(/\\n/gi, "\n")
+    .replace(/\\r/gi, "\r")
+    .replace(/\\t/gi, "\t")
+    .replace(/\\"/g, '"');
+}
+
 interface EditalAnalyzerTabProps {
   companyData: CompanyData;
   activeEdital: EditalAnalysis | null;
@@ -50,6 +59,23 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   const [valEntrega, setValEntrega] = useState("");
   const [valLocal, setValLocal] = useState("");
   const [proposalDate, setProposalDate] = useState("");
+  const [selectedItemNumbers, setSelectedItemNumbers] = useState<number[]>([]);
+  const [originalEdital, setOriginalEdital] = useState<EditalAnalysis | null>(null);
+  const [refining, setRefining] = useState(false);
+  const [isRefined, setIsRefined] = useState(false);
+
+  useEffect(() => {
+    if (activeEdital?.itensEdital) {
+      const activeNums = activeEdital.itensEdital.map(it => it.numero);
+      // Only overwrite if the user selected nothing or there's absolutely no overlap (e.g. brand new document)
+      const hasOverlap = selectedItemNumbers.some(n => activeNums.includes(n));
+      if (!hasOverlap || selectedItemNumbers.length === 0) {
+        setSelectedItemNumbers(activeNums);
+      }
+    } else {
+      setSelectedItemNumbers([]);
+    }
+  }, [activeEdital]);
 
   // Helper numbers to words (Português)
   function numeroParaExtenso(valor: number): string {
@@ -183,11 +209,49 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     ];
 
+    let finalItems = defaultItems;
+    if (activeEdital?.itensEdital && activeEdital.itensEdital.length > 0) {
+      // Filter by user selection
+      const itemsToMap = activeEdital.itensEdital.filter(it => selectedItemNumbers.includes(it.numero));
+      const targetItems = itemsToMap.length > 0 ? itemsToMap : activeEdital.itensEdital;
+
+      finalItems = targetItems.map(it => {
+        let unitVal = "0,00";
+        if (it.valorEstimado) {
+          const match = it.valorEstimado.match(/([0-9.]+,[0-9]{2})/);
+          if (match) {
+            unitVal = match[1];
+          } else {
+            // strip currency signs and attempt standard parse
+            const cleaned = it.valorEstimado.replace(/[^\d,.-]/g, "").trim();
+            if (cleaned) unitVal = cleaned;
+          }
+        }
+
+        // Calculate total
+        let totalVal = "0,00";
+        const q = it.quantidade || 1;
+        const uStr = unitVal.replace(/\./g, "").replace(",", ".");
+        const u = parseFloat(uStr);
+        if (!isNaN(u)) {
+          totalVal = (q * u).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        return {
+          description: it.descricao.toUpperCase(),
+          quantity: it.quantidade || 1,
+          brandModel: "",
+          unitValue: unitVal,
+          totalValue: totalVal
+        };
+      });
+    }
+
     setProposalDispensa(dispensaDefault);
     setProposalProcesso(processoDefault);
     setProposalOrgao(orgaoDefault);
     setProposalObject(objetoDefault);
-    setProposalItems(defaultItems);
+    setProposalItems(finalItems);
     
     // Custom clean filename
     const cleanNum = (activeEdital?.identificacaoCertame?.identificacaoNumerica || "046-2026").replace(/\//g, "-");
@@ -307,6 +371,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
   // Histórico de Editais (Supabase com fallback Local)
   const [history, setHistory] = useState<any[]>([]);
+  const [showConfirmClearHistory, setShowConfirmClearHistory] = useState(false);
 
   useEffect(() => {
     async function loadHistory() {
@@ -446,6 +511,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         };
         
         setActiveEdital(analysisResult);
+        setOriginalEdital(analysisResult);
+        setIsRefined(false);
 
         confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
 
@@ -477,6 +544,103 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       alert("Houve um problema ao enviar o arquivo para análise ao Gemini. Por favor, verifique se seu servidor de backend está ativo.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Helper for dynamic filtering of points & documents based on selectedItemNumbers
+  const getFilteredArray = (array: string[] | undefined) => {
+    if (!array) return [];
+    if (!activeEdital?.itensEdital || activeEdital.itensEdital.length <= 1) return array;
+    if (selectedItemNumbers.length === activeEdital.itensEdital.length) return array;
+    if (selectedItemNumbers.length === 0) return [];
+
+    const unselectedNumbers = activeEdital.itensEdital
+      .map(it => it.numero)
+      .filter(num => !selectedItemNumbers.includes(num));
+
+    return array.filter(text => {
+      const mentionsUnselected = unselectedNumbers.some(num => {
+        const regex = new RegExp(`\\b(item|lote|produto)\\s*0*${num}\\b`, 'i');
+        return regex.test(text);
+      });
+      const mentionsSelected = selectedItemNumbers.some(num => {
+        const regex = new RegExp(`\\b(item|lote|produto)\\s*0*${num}\\b`, 'i');
+        return regex.test(text);
+      });
+
+      if (mentionsUnselected && !mentionsSelected) {
+        return false; // hide points belonging only to unselected items
+      }
+      return true;
+    });
+  };
+
+  const getDynamicDescricaoProduto = () => {
+    if (!activeEdital) return "";
+    if (!activeEdital.itensEdital || activeEdital.itensEdital.length <= 1) return activeEdital.descricaoProduto;
+    if (selectedItemNumbers.length === activeEdital.itensEdital.length) return activeEdital.descricaoProduto;
+    if (selectedItemNumbers.length === 0) return "Nenhum item selecionado para cotação.";
+
+    const selected = activeEdital.itensEdital.filter(it => selectedItemNumbers.includes(it.numero));
+    return `[Descrição Focada nos Itens Selecionados]\n` + selected.map(it => `• Item ${String(it.numero).padStart(2, '0')}: ${it.descricao} (Qtd: ${it.quantidade} ${it.unidade || "un"}${it.valorEstimado ? ` - Estimado: ${it.valorEstimado}` : ""})`).join("\n\n");
+  };
+
+  const handleRefineWithAi = async () => {
+    if (!activeEdital) return;
+    if (!textInput && !fileBase64) {
+      alert("Para realizar o refinamento avançado com IA, o edital precisa ter sido enviado/carregado nesta sessão ativa.");
+      return;
+    }
+
+    setRefining(true);
+    try {
+      const selectedItemsObjects = activeEdital.itensEdital?.filter(it => selectedItemNumbers.includes(it.numero)) || [];
+      
+      const response = await apiFetch("/api/analyze-edital", {
+        method: "POST",
+        body: {
+          textInput: textInput,
+          fileBase64: fileBase64,
+          fileName: fileDetails?.name,
+          fileType: fileDetails?.type,
+          selectedItems: selectedItemsObjects
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error("Erro de processamento.");
+      }
+
+      const data = await response.json();
+      if (data && data.analysis) {
+        const refinedResult: EditalAnalysis = {
+          ...data.analysis,
+          // Preserve full items list so we don't lock out the selection controls!
+          itensEdital: activeEdital.itensEdital,
+          rawText: textInput || `Arquivo: ${fileDetails?.name || "Edital Upload"}`
+        };
+
+        setActiveEdital(refinedResult);
+        setIsRefined(true);
+        confetti({ particleCount: 60, spread: 50 });
+      } else {
+        alert("Não foi possível processar o refinamento da análise.");
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert("Erro ao refinar análise com Gemini: " + (e.message || e));
+    } finally {
+      setRefining(false);
+    }
+  };
+
+  const handleRestoreFullAnalysis = () => {
+    if (originalEdital) {
+      setActiveEdital(originalEdital);
+      setIsRefined(false);
+      if (originalEdital.itensEdital) {
+        setSelectedItemNumbers(originalEdital.itensEdital.map(it => it.numero));
+      }
     }
   };
 
@@ -660,22 +824,42 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                   Histórico Local de Editais
                 </h4>
                 {history.length > 0 && (
-                  <button
-                    onClick={() => {
-                      if (confirm("Tem certeza que deseja apagar todo o histórico para liberar espaço?")) {
-                        // Delete all from Supabase
-                        history.forEach(item => {
-                          deleteEditalFromSupabase(item.id).catch(() => {});
-                        });
-                        setHistory([]);
-                        localStorage.removeItem("aip_edital_history");
-                        setActiveEdital(null);
-                      }
-                    }}
-                    className="text-[10px] text-rose-400 hover:text-rose-300 font-bold tracking-tight bg-rose-500/10 hover:bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/20 transition-all cursor-pointer"
-                  >
-                    Apagar Tudo
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {showConfirmClearHistory ? (
+                      <div className="flex items-center gap-1.5 animate-in fade-in slide-in-from-right-1 duration-150">
+                        <button
+                          onClick={() => {
+                            // Delete all from Supabase
+                            history.forEach(item => {
+                              deleteEditalFromSupabase(item.id).catch(() => {});
+                            });
+                            setHistory([]);
+                            localStorage.removeItem("aip_edital_history");
+                            setActiveEdital(null);
+                            setShowConfirmClearHistory(false);
+                          }}
+                          className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/20 transition-all cursor-pointer"
+                        >
+                          Sim, apagar tudo!
+                        </button>
+                        <button
+                          onClick={() => setShowConfirmClearHistory(false)}
+                          className="text-[10px] text-slate-400 hover:text-white bg-white/5 px-2 py-0.5 rounded border border-white/10 transition-all cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setShowConfirmClearHistory(true);
+                        }}
+                        className="text-[10px] text-rose-400 hover:text-rose-300 font-bold tracking-tight bg-rose-500/10 hover:bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/20 transition-all cursor-pointer"
+                      >
+                        Apagar Tudo
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -697,6 +881,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <button
                           onClick={() => {
                             setActiveEdital(item.analysis);
+                            setOriginalEdital(item.analysis);
+                            setIsRefined(false);
                             if (item.analysis.rawText) {
                               if (item.analysis.rawText.startsWith("Arquivo: ")) {
                                 setFileDetails({
@@ -763,12 +949,12 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         <div className="space-y-6 animate-fade-in" id="analysis-results-section">
           
           {/* Executive Overview Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             
-            <div className="bg-white/5 border border-white/10 backdrop-blur-md text-white p-5 rounded-xl shadow-md space-y-2">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Descrição Principal do Objeto</span>
-              <p className="font-semibold text-slate-100 text-sm md:text-base leading-snug line-clamp-3">
-                {activeEdital.descricaoProduto}
+            <div className="bg-white/5 border border-white/10 backdrop-blur-md text-white p-5 rounded-xl shadow-md space-y-2 max-h-[160px] overflow-y-auto">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Descrição Principal do Objeto</span>
+              <p className="font-semibold text-slate-100 text-xs md:text-sm leading-snug whitespace-pre-line">
+                {getDynamicDescricaoProduto()}
               </p>
             </div>
 
@@ -793,6 +979,147 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             </div>
 
           </div>
+
+          {/* Mapping of Items / Lotes */}
+          {activeEdital.itensEdital && activeEdital.itensEdital.length > 0 && (
+            <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-5 md:p-6 space-y-4 animate-fade-in">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="bg-indigo-500/10 text-indigo-400 p-2 rounded-lg border border-indigo-500/20 shrink-0">
+                    <CheckSquare className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-white text-sm md:text-base">Itens e Lotes Identificados no Edital</h4>
+                    <p className="text-slate-400 text-xs">O Gemini extraiu os itens do edital. Selecione os itens que você deseja cotar ou incluir na proposta automática.</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2 self-start sm:self-center">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedItemNumbers(activeEdital.itensEdital?.map(it => it.numero) || [])}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-white/10 text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    Selecionar Todos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedItemNumbers([])}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-white/10 text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    Limpar Seleção
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {activeEdital.itensEdital.map((it) => {
+                  const isSelected = selectedItemNumbers.includes(it.numero);
+                  return (
+                    <div
+                      key={it.numero}
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedItemNumbers(selectedItemNumbers.filter(n => n !== it.numero));
+                        } else {
+                          setSelectedItemNumbers([...selectedItemNumbers, it.numero]);
+                        }
+                      }}
+                      className={`p-4 rounded-xl border transition-all cursor-pointer flex items-start gap-3 select-none ${
+                        isSelected
+                          ? "bg-indigo-500/10 border-indigo-500/40 text-white"
+                          : "bg-white/5 border-white/5 hover:border-white/10 text-slate-300"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}} // handled by parent div onClick
+                        className="mt-1 rounded-sm border-white/20 bg-slate-900 text-indigo-500 focus:ring-0 focus:ring-offset-0 w-4 h-4 cursor-pointer font-sans"
+                      />
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                            isSelected ? "bg-indigo-500/20 text-indigo-300" : "bg-white/10 text-slate-400"
+                          }`}>
+                            Item {String(it.numero).padStart(2, '0')}
+                          </span>
+                          {it.valorEstimado && (
+                            <span className="text-xs font-semibold font-mono text-emerald-400 truncate">
+                              {it.valorEstimado}
+                            </span>
+                          )}
+                        </div>
+                        
+                        <p className="text-xs font-semibold leading-tight text-slate-200 line-clamp-2" title={it.descricao}>
+                          {it.descricao}
+                        </p>
+
+                        <div className="flex items-center gap-3 text-[10px] text-slate-400 font-medium">
+                          <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/5">
+                            Qtd: <strong className="text-slate-200 font-semibold">{it.quantidade}</strong> {it.unidade || "un"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="bg-indigo-500/10 border border-indigo-500/25 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs text-indigo-300 mt-2">
+                <div className="flex items-start md:items-center gap-3">
+                  <Sparkles className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5 md:mt-0" />
+                  <div className="space-y-0.5">
+                    <p className="text-slate-200 font-semibold text-sm">
+                      Você selecionou <strong className="font-bold text-indigo-300">{selectedItemNumbers.length}</strong> de <strong className="font-bold text-white">{activeEdital.itensEdital.length}</strong> itens identificados.
+                    </p>
+                    <p className="text-slate-400 text-xs">
+                      O painel de controle e os pontos do dossiê abaixo se filtram instantaneamente para estes itens.
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {isRefined ? (
+                    <>
+                      <span className="px-2 py-1 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30 font-bold text-[10px] uppercase tracking-wider">
+                        Análise Refinada por IA
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleRestoreFullAnalysis}
+                        className="px-3.5 py-2 font-bold text-xs bg-slate-800 hover:bg-slate-700 text-white border border-white/10 rounded-lg shadow-sm cursor-pointer transition-colors flex items-center gap-1.5"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Ver Edital Completo
+                      </button>
+                    </>
+                  ) : (
+                    selectedItemNumbers.length > 0 && selectedItemNumbers.length < activeEdital.itensEdital.length && (
+                      <button
+                        type="button"
+                        onClick={handleRefineWithAi}
+                        disabled={refining}
+                        className="px-3.5 py-2 font-bold text-xs bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg shadow-md cursor-pointer transition-all flex items-center gap-2 disabled:opacity-50"
+                      >
+                        {refining ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Refinando Foco...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5" />
+                            Refinar Análise (Gemini IA)
+                          </>
+                        )}
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Tab Selector Menu for Sub-Information Panels */}
           <div className="flex border-b border-white/10 gap-2 overflow-x-auto pb-px">
@@ -858,7 +1185,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                     tbody: ({node, ...props}) => <tbody className="divide-y divide-white/5" {...props} />,
                     td: ({node, ...props}) => <td className="p-2.5 text-slate-300 font-sans leading-normal" {...props} />,
                     strong: ({node, ...props}) => <strong className="font-semibold text-white bg-indigo-500/10 px-1 rounded text-indigo-200" {...props} />,
-                  }}>{activeEdital.reportMarkdown}</ReactMarkdown>
+                  }}>{cleanMarkdownText(activeEdital.reportMarkdown)}</ReactMarkdown>
                 </div>
               ) : (
                 <div className="text-center py-10 space-y-2">
@@ -876,7 +1203,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
           {/* TAB 2: DETAILED STRATEGIC PILLARS */}
           {analysisActiveTab === "struc" && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-fade-in text-slate-300">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-in text-slate-300">
               
               {/* Pillar 1: IDENTIFICATION */}
               <div className="bg-white/5 border border-white/10 rounded-xl p-5 space-y-3">
@@ -919,7 +1246,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                     <div>
                       <span className="text-slate-500 block font-mono text-[9px] uppercase tracking-wider mb-1.5">Exigências Físicas do Produto (Checklist Mandatório)</span>
                       <ul className="list-disc pl-4 space-y-1 text-slate-200">
-                        {activeEdital.especificacoesTecnicas.exigenciasFisicas.map((item, idx) => (
+                        {getFilteredArray(activeEdital.especificacoesTecnicas.exigenciasFisicas).map((item, idx) => (
                           <li key={idx} className="leading-snug">{item}</li>
                         ))}
                       </ul>
@@ -927,7 +1254,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                     <div>
                       <span className="text-amber-400 block font-mono text-[9px] uppercase tracking-wider mb-1.5 font-bold">Pegadinhas Técnicas Ocultas / Risco de Desclassificação</span>
                       <ul className="list-disc pl-4 space-y-1 text-slate-200">
-                        {activeEdital.especificacoesTecnicas.pegadinhasOcultas.map((item, idx) => (
+                        {getFilteredArray(activeEdital.especificacoesTecnicas.pegadinhasOcultas).map((item, idx) => (
                           <li key={idx} className="leading-snug">{item}</li>
                         ))}
                       </ul>
@@ -1033,13 +1360,13 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               </div>
 
               {/* Pillar 6: CONCLUDING RECOMMENDATION */}
-              <div className="bg-indigo-950/20 border border-indigo-500/20 rounded-xl p-5 space-y-3 md:col-span-2">
+              <div className="bg-indigo-950/20 border border-indigo-500/20 rounded-xl p-5 space-y-3 lg:col-span-2">
                 <div className="flex items-center gap-2 border-b border-indigo-500/30 pb-2">
                   <TrendingUp className="w-4 h-4 text-indigo-400 shrink-0" />
                   <h4 className="font-bold text-white text-xs uppercase tracking-wide">6. Parecer Final do Analista & Estratégia de Lances</h4>
                 </div>
                 {activeEdital.parecerFinal ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs leading-normal">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs leading-normal">
                     <div>
                       <span className="text-indigo-400 block font-mono text-[9px] uppercase tracking-wider font-bold">Veredito Final</span>
                       <span className="text-white font-bold bg-indigo-500/20 px-2 py-1 rounded inline-block border border-indigo-500/30 mt-1">{activeEdital.parecerFinal.veredito}</span>
@@ -1079,7 +1406,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                     Pontos Positivos / Vantagens Competitivas
                   </h4>
                   <ul className="space-y-3 pl-1 text-xs text-slate-300 select-none">
-                    {activeEdital.pontosPositivos.map((item, idx) => (
+                    {getFilteredArray(activeEdital.pontosPositivos).map((item, idx) => (
                       <li key={idx} className="flex gap-2.5 items-start">
                         <span className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 h-5 w-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold mt-0.5">
                           {idx + 1}
@@ -1097,7 +1424,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                     Pontos de Alerta / Atenção e Riscos
                   </h4>
                   <ul className="space-y-3 pl-1 text-xs text-slate-300 select-none">
-                    {activeEdital.pontosAlerta.map((item, idx) => (
+                    {getFilteredArray(activeEdital.pontosAlerta).map((item, idx) => (
                       <li key={idx} className="flex gap-2.5 items-start">
                         <span className="bg-amber-500/10 border border-amber-500/20 text-amber-400 h-5 w-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold mt-0.5">
                           {idx + 1}
@@ -1116,12 +1443,12 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                       Certidões e Documentos Exigidos no Pregão
                     </h4>
                     <span className="text-xs bg-white/5 text-indigo-300 border border-white/10 px-2.5 py-1 rounded-full font-semibold">
-                      Exigências habilitatórias decifradas: {activeEdital.documentosExigidos.length}
+                      Exigências habilitatórias decifradas: {getFilteredArray(activeEdital.documentosExigidos).length}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {activeEdital.documentosExigidos.map((doc, idx) => (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {getFilteredArray(activeEdital.documentosExigidos).map((doc, idx) => (
                       <div key={idx} className="flex gap-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl p-3 text-xs text-slate-200 transition-colors">
                         <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/20 h-6 w-6 font-bold rounded-lg flex items-center justify-center shrink-0 text-[10px]">
                           {idx + 1}

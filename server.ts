@@ -234,7 +234,7 @@ function normalizeContents(contents: any[]): any[] {
 // Robust content generation helper with automatic fallback for high demand/503 errors
 async function generateContentWithFallback(params: any): Promise<any> {
   const client = getAiClient();
-  const modelsToTry = ["gemini-3.5-flash", "gemini-3.5-pro", "gemini-3.1-pro", "gemini-3.1-flash-lite", "gemini-1.5-flash"];
+  const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
   
   if (params.model) {
     const idx = modelsToTry.indexOf(params.model);
@@ -442,36 +442,52 @@ async function generateAiResponse(params: {
     }
 
     if (provider === "gemini") {
-      const geminiModelName = activeModel || "gemini-3.5-flash";
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelName}:generateContent?key=${apiKey}`;
-      const payload: any = {
-        contents: processedContents,
-        generationConfig: {
-          responseMimeType: jsonMode ? "application/json" : undefined,
-          responseSchema: responseSchema
-        },
-        tools: tools
-      };
-      // systemInstruction must be at ROOT level, not inside generationConfig
-      if (systemInstruction) {
-        payload.systemInstruction = { parts: [{ text: systemInstruction }] };
+      const primaryModel = activeModel || "gemini-3.5-flash";
+      const modelsToTry = [primaryModel, "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
+      
+      // De-duplicate if primaryModel is already one of the fallbacks
+      const uniqueModels = Array.from(new Set(modelsToTry));
+      
+      let lastError: any = null;
+      for (const geminiModelName of uniqueModels) {
+        try {
+          console.log(`[Dynamic AI Router] Requesting Gemini content generation using model: ${geminiModelName}`);
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelName}:generateContent?key=${apiKey}`;
+          const payload: any = {
+            contents: processedContents,
+            generationConfig: {
+              responseMimeType: jsonMode ? "application/json" : undefined,
+              responseSchema: responseSchema
+            },
+            tools: tools
+          };
+          // systemInstruction must be at ROOT level, not inside generationConfig
+          if (systemInstruction) {
+            payload.systemInstruction = { parts: [{ text: systemInstruction }] };
+          }
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Gemini Error: ${response.status} - ${errorText}`);
+          }
+          const data = await response.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          return {
+            text,
+            candidates: data.candidates || [],
+            groundingMetadata: data.candidates?.[0]?.groundingMetadata || null
+          };
+        } catch (error: any) {
+          console.error(`[Dynamic AI Router] Gemini model ${geminiModelName} failed:`, error.message || error);
+          lastError = error;
+          console.log(`[Dynamic AI Router] Attempting fallback to the next available Gemini model...`);
+        }
       }
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Gemini Error: ${response.status} - ${errorText}`);
-      }
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      return {
-        text,
-        candidates: data.candidates || [],
-        groundingMetadata: data.candidates?.[0]?.groundingMetadata || null
-      };
+      throw lastError;
     }
   }
 
@@ -658,7 +674,16 @@ function parseEditalLocally(text: string): any {
       grauRisco: "Baixo",
       estrategiaLances: "Focar em ofertas de lote fechado para reduzir custos logísticos unitários."
     },
-    reportMarkdown: markdownReport
+    reportMarkdown: markdownReport,
+    itensEdital: [
+      {
+        numero: 1,
+        descricao: produto,
+        quantidade: 10,
+        unidade: "Unidades",
+        valorEstimado: "R$ 2.500,00"
+      }
+    ]
   };
 }
 
@@ -1204,7 +1229,7 @@ async function startServer() {
   // API Route: Analyze Edital
   app.post("/api/analyze-edital", async (req, res): Promise<any> => {
     try {
-      const { textInput, fileBase64, fileName, fileType, aiConfig: clientAiConfig } = req.body;
+      const { textInput, fileBase64, fileName, fileType, aiConfig: clientAiConfig, selectedItems } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
 
       if (!aiConfig) {
@@ -1228,6 +1253,22 @@ async function startServer() {
             mimeType: fileType,
           }
         });
+      }
+
+      let itemFocusInstructions = "";
+      if (selectedItems && Array.isArray(selectedItems) && selectedItems.length > 0) {
+        itemFocusInstructions = `
+
+⚠️ ATENÇÃO EXTREMAMENTE CRÍTICA - FOCO EXCLUSIVO NOS SEGUINTES ITENS SELECIONADOS PELO USUÁRIO:
+${selectedItems.map((it: any) => `- Item/Lote ${it.numero}: ${it.descricao} (Quantidade: ${it.quantidade} ${it.unidade || ""})`).join("\n")}
+
+A sua análise e o relatório markdown GERADOS DEVEM FOCAR EXCLUSIVAMENTE nos itens/lotes especificados acima.
+1. No campo "descricaoProduto", transcreva na íntegra apenas a descrição e especificações técnicas completas dos itens selecionados.
+2. Na seção "ESPECIFICAÇÕES TÉCNICAS E PEGADINHAS" e no campo "especificacoesTecnicas", mapeie apenas as exigências físicas e pegadinhas que se aplicam a estes itens selecionados. Ignore pegadinhas ou exigências que pertencem a outros itens não selecionados.
+3. Na seção "BUROCRACIA E BARREIRAS DE ENTRADA", filtre as barreiras para contemplar somente as que afetam a entrega destes itens específicos (ex: se exigir amostra apenas para um item não selecionado, não mencione como exigência obrigatória).
+4. Na "VIABILIDADE FINANCEIRA" e no campo "valorEstimado", calcule e analise as estimativas de preço de mercado especificamente para estes itens selecionados.
+5. No "PARECER FINAL DO ANALISTA" e no "reportMarkdown", dê o veredito e elabore a estratégia de lances focada exclusivamente em vencer a disputa por este grupo de itens selecionados.
+*Nota: Se houver cláusulas gerais aplicáveis a todo o edital (como certidões fiscais ou regras gerais de disputa), mantenha-as normalmente, mas garanta que todo o foco material, técnico e financeiro esteja afunilado para os itens selecionados.*`;
       }
 
       const basePrompt = `
@@ -1265,13 +1306,15 @@ Sua missão é ler o edital/termo de referência anexado e gerar uma análise co
 
 Adote um tom corporativo, extremamente profissional, objetivo e scannable, utilizando tabelas e tópicos para evitar paredes de texto.
 
+Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos individuais estão mencionados ou descritos no edital/termo de referência. Crie uma lista de todos os itens com seus números sequenciais, descrições completas detalhadas, quantidades solicitadas, unidades de medida e valores estimados (se fornecidos), preenchendo o array "itensEdital" no JSON.
+
 Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves estruturadas solicitadas no JSON para o preenchimento de formulários de auditoria automáticos.
 `;
 
       contentParts.push({
         text: textInput 
-          ? `${basePrompt}\n\nTexto adicional / Edital:\n${textInput}` 
-          : basePrompt
+          ? `${basePrompt}\n${itemFocusInstructions}\n\nTexto adicional / Edital:\n${textInput}` 
+          : `${basePrompt}\n${itemFocusInstructions}`
       });
 
       console.log("Chamando AI Router para análise de edital...");
@@ -1369,12 +1412,27 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
               reportMarkdown: {
                 type: Type.STRING,
                 description: "Relatório executivo completo em markdown super scannable utilizando tabelas bem feitas, tópicos fortes e dividindo rigorosamente as seções de 1 a 6."
+              },
+              itensEdital: {
+                type: Type.ARRAY,
+                description: "Lista de TODOS os itens, lotes ou produtos individuais identificados/mencionados no edital.",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    numero: { type: Type.INTEGER, description: "Número sequencial do item ou lote (ex: 1, 2)" },
+                    descricao: { type: Type.STRING, description: "Descrição detalhada do produto ou serviço" },
+                    quantidade: { type: Type.INTEGER, description: "Quantidade total solicitada" },
+                    unidade: { type: Type.STRING, description: "Unidade de medida (ex: Unidades, Metros, Resmas, etc)" },
+                    valorEstimado: { type: Type.STRING, description: "Valor unitário estimado se mencionado no edital (ex: R$ 120,00)" }
+                  },
+                  required: ["numero", "descricao", "quantidade"]
+                }
               }
             },
             required: [
               "pontosPositivos", "pontosAlerta", "prazoEntrega", "prazoPagamento", "descricaoProduto", "documentosExigidos",
               "identificacaoCertame", "especificacoesTecnicas", "burocraciaBarreiras", "logisticaCronograma", "viabilidadeFinanceira", "parecerFinal",
-              "reportMarkdown"
+              "reportMarkdown", "itensEdital"
             ]
           }
       });
@@ -1628,13 +1686,38 @@ Você é uma inteligência artificial especialista em auditoria e análise de do
 O usuário está preenchendo o campo de certidão/documento denominado exatamente como: "${docName || fileName}".
 Sua tarefa é analisar o documento fornecido (conteúdo em imagem/pdf ou inferindo detalhes se o arquivo for texto básico) para extrair dados oficiais E realizar um teste de conformidade de tipo.
 
-Verifique se o documento enviado CORRESPONDE DE FATO a esse tipo de documento solicitado ("${docName || fileName}").
-Por exemplo, se o campo for "CND FGTS", o documento deve ser um Certificado de Regularidade do FGTS (CRF). Se for "CNPJ", deve ser o cartão CNPJ da Receita Federal. Se o documento for completamente diferente do pretendido (ex: enviou um comprovante de CNPJ no campo do FGTS ou do Contrato Social), retorne "documentMatchesRow" como false e explique o erro.
+--- REGRA DE SEGURANÇA MÁXIMA DE DATA DE VENCIMENTO (EXPIRATION DATE) ---
+A análise da DATA DE VENCIMENTO do documento de certidão fiscal não pode errar sob hipótese alguma! A data deve ser extraída com precisão absoluta de 100%. Siga rigorosamente este protocolo de validação:
+1. IDENTIFICAÇÃO DE DATAS: No documento, localize claramente e diferencie a "Data de Emissão", "Data de Validade/Vencimento/Expiração" ou "Válida até". NUNCA confunda a data de emissão ou de consulta do documento com o vencimento dele.
+2. PALAVRAS-CHAVE DE VENCIMENTO: Procure no documento por termos como "válida até", "vencimento:", "validade:", "prazo de validade", "válido até", "limite de validade", "data de expiração", "expira em", "válida pelo prazo de", "vencimento em".
+3. CLÁUSULA DE PRAZO EM DIAS (VENCIMENTO CALCULADO): Muitas certidões brasileiras não trazem uma data de vencimento explícita, mas afirmam uma cláusula como "Esta certidão é válida por 90 (noventa) dias a contar da data de sua emissão" ou "válida por 180 dias". Nesses casos:
+   - Identifique a data de emissão com precisão (ex: "Emitida em 10/05/2026").
+   - Calcule matematicamente a data exata de validade somando a quantidade de dias descrita no prazo à data de emissão.
+   - Retorne esta data calculada no formato "YYYY-MM-DD".
+4. VALIDAÇÃO DE ANO: Certifique-se de que o ano extraído é coerente e confira os quatro dígitos (ex: 2026, 2027, etc.). Não confunda com anos de decretos, leis ou portarias que possam estar citados no texto da certidão (ex: "Portaria RFB nº 103 de 2021").
+5. DOCUMENTOS PERMANENTES/SEM VENCIMENTO: Se o documento enviado for um comprovante de CNPJ, Inscrição Estadual/Municipal ou Contrato Social/Estatuto que não expira e é permanente por natureza, você deve retornar a string de "expirationDate" vazia "".
+6. FORMATO DE SAÍDA: A data de vencimento final deve estar estritamente formatada como uma string "YYYY-MM-DD" (ex: "2026-12-15"). Se for atemporal, retorne "".
+
+REGRAS CRÍTICAS DE COMPATIBILIDADE (Evite classificar documentos corretos como incompatíveis!):
+Seja extremamente flexível, inteligente e tolerante com abreviações, sinônimos, órgãos emissores e variações de nomenclatura comuns no Brasil. O "documentMatchesRow" deve ser TRUE sempre que o arquivo enviado servir para comprovar a exigência descrita no campo "${docName || fileName}".
+
+Considere as seguintes equivalências como VÁLIDAS (documentMatchesRow = true):
+1. Exigência "FGTS" ou "Regularidade do FGTS" ou "CRF": Aceita "Certificado de Regularidade do FGTS", "CRF", "Situação de Regularidade do Empregador", emitida pela Caixa Econômica Federal (CEF).
+2. Exigência "Tributos Federais", "Receita Federal", "União", "INSS", "Dívida Ativa da União" ou "Conjunta Federal": Aceita "Certidão Conjunta de Débitos Relativos a Tributos Federais e à Dívida Ativa da União", "Certidão de Débitos Previdenciários", "Certidão da Secretaria da Receita Federal do Brasil (RFB)" ou "Procuradoria-Geral da Fazenda Nacional (PGFN)".
+3. Exigência "Tributos Estaduais", "Fazenda Estadual", "ICMS", "Sefaz" ou "Receita Estadual": Aceita qualquer Certidão de Débitos Estaduais, certidões de Tributos Estaduais ativas ou não inscritos em dívida ativa estadual, emitida pela Secretaria de Fazenda/Finanças do respectivo Estado.
+4. Exigência "Tributos Municipais", "Fazenda Municipal", "ISS", "Prefeitura": Aceita "Certidão de Débitos Municipais" (seja de tributos mobiliários ou imobiliários), emitida pela Secretaria de Finanças/Fazenda do respectivo Municipio.
+5. Exigência "Trabalhista", "Débitos Trabalhistas", "Justiça do Trabalho", "CNDT": Aceita "Certidão Negativa de Débitos Trabalhistas" (CNDT), emitida pelo Tribunal Superior do Trabalho (TST) ou Justiça do Trabalho.
+6. Exigência "Falência e Recuperação Judicial", "Falência", "Recuperação": Aceita "Certidão Negativa de Falência e Recuperação Judicial", "Certidão de Distribuição Cível (Ações de Falência e Concordata)", emitida pelo Tribunal de Justiça do estado sede.
+7. Exigência "CNPJ" ou "Cartão CNPJ": Aceita "Comprovante de Inscrição e de Situação Cadastral" do CNPJ da Receita Federal.
+8. Exigência "Contrato Social", "Estatuto Social", "Estatuto", "Constituição", "Requerimento de Empresário": Aceita Contrato Social consolidado, alterações contratuais, estatuto social de S/A acompanhado de ata de eleição da diretoria, ou documento de empresário individual correspondente.
+9. Se o nome do arquivo carregado pelo usuário ou o conteúdo sugerir forte correlação com o nome do campo "${docName || fileName}", marque como "documentMatchesRow" = true.
+
+Apenas retorne "documentMatchesRow" = false se o documento enviado for bizarramente desconexo do campo de destino (ex: enviou uma certidão de FGTS no campo de Contrato Social, ou um CNPJ no campo da CNDT). Caso contrário, se for um equivalente ou se houver dúvida razoável, sempre dê preferência por aceitar (true) e use o campo "validationFeedback" para dar uma orientação ou aviso amigável.
 
 Retorne um objeto JSON contendo exatamente os seguintes campos em português brasileiro:
 
-1. "expirationDate": Uma string correspondente à data de validade/vencimento do documento no formato "YYYY-MM-DD" (Ex: "2026-10-31"). Se o documento não possuir data de vencimento explícita ou permanente, ou se for atemporal (como o CNPJ), retorne uma string vazia ou adote uma data futura realista se aplicável. Mas tente ao máximo extrair o vencimento real indicado no documento.
-2. "documentMatchesRow": Um valor booleano (true ou false). Deve ser true se o documento de fato corresponder ao solicitado ("${docName || fileName}"), ou false se for detectado que pertence a outra categoria de certidão ou for incorreto para esse campo.
+1. "expirationDate": Uma string correspondente à data de validade/vencimento do documento no formato "YYYY-MM-DD" (Ex: "2026-10-31") seguindo as REGRAS DE SEGURANÇA MÁXIMA DE DATA acima. Se for permanente ou sem vencimento, retorne "".
+2. "documentMatchesRow": Um valor booleano (true ou false) conforme as regras de compatibilidade acima.
 3. "validationFeedback": Uma frase de justificativa bem esclarecedora (Ex: "Documento validado com sucesso como CRF FGTS ativo." ou "Atenção: Identificamos que este arquivo é um Comprovante de Inscrição Cadastral do CNPJ, mas o campo atual exige o Contrato Social. Por favor, ajuste o upload.").
 4. "extractedCompanyData": Um objeto contendo dados da empresa que você conseguir identificar ou deduzir com base no conteúdo lido do documento (como um Contrato Social, CNPJ ou CND). Deixe os campos vazios caso não localize no documento:
    - "razonSocial": Razão Social / Nome da empresa (Ex: "Empresa de Alimentos Alfa Ltda")

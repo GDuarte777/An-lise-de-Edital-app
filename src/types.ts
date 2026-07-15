@@ -65,6 +65,13 @@ export interface EditalAnalysis {
     estrategiaLances: string;
   };
   reportMarkdown?: string;
+  itensEdital?: {
+    numero: number;
+    descricao: string;
+    quantidade: number;
+    unidade?: string;
+    valorEstimado?: string;
+  }[];
 }
 
 export type ChatRole = "user" | "assistant";

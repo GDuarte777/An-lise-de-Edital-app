@@ -179,6 +179,7 @@ export default function PricingCalculatorTab({ companyData, activeEdital }: Pric
       return [];
     }
   });
+  const [showConfirmClearSimulations, setShowConfirmClearSimulations] = useState(false);
 
   // Active simulation forms fields
   const [selectedEditalId, setSelectedEditalId] = useState<string>("");
@@ -876,17 +877,35 @@ Status da Simulação: ${marginAnalysis.label}
               Cenários de Planilhas Salvas ({simulations.length})
             </h4>
             {simulations.length > 0 && (
-              <button
-                onClick={() => {
-                  if (confirm("Deseja expurgar todos os cenários financeiros e limpar a lista?")) {
-                    setSimulations([]);
-                    localStorage.removeItem("aip_pricing_simulations");
-                  }
-                }}
-                className="text-[9px] bg-rose-500/10 hover:bg-rose-500/25 border border-rose-500/20 text-rose-400 font-bold px-2 py-1 rounded cursor-pointer transition"
-              >
-                Apagar Tudo
-              </button>
+              <div className="flex items-center gap-1.5">
+                {showConfirmClearSimulations ? (
+                  <div className="flex items-center gap-1.5 animate-in fade-in slide-in-from-right-1 duration-150">
+                    <button
+                      onClick={() => {
+                        setSimulations([]);
+                        localStorage.removeItem("aip_pricing_simulations");
+                        setShowConfirmClearSimulations(false);
+                      }}
+                      className="text-[9px] text-emerald-400 hover:text-emerald-300 font-bold bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-1 rounded border border-emerald-500/20 transition-all cursor-pointer"
+                    >
+                      Confirmar
+                    </button>
+                    <button
+                      onClick={() => setShowConfirmClearSimulations(false)}
+                      className="text-[9px] text-slate-400 hover:text-white bg-white/5 px-2 py-1 rounded border border-white/10 transition-all cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowConfirmClearSimulations(true)}
+                    className="text-[9px] bg-rose-500/10 hover:bg-rose-500/25 border border-rose-500/20 text-rose-400 font-bold px-2 py-1 rounded cursor-pointer transition"
+                  >
+                    Apagar Tudo
+                  </button>
+                )}
+              </div>
             )}
           </div>
 

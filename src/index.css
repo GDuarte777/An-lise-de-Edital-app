@@ -11,7 +11,6 @@ html, body {
   -webkit-overflow-scrolling: touch;
   overflow-x: hidden;
   min-height: 100%;
-  overscroll-behavior-y: contain;
 }
 
 body {
@@ -22,10 +21,9 @@ body {
   min-height: 100vh;
 }
 
-/* Enable native momentum scroll & overscroll safety globally */
+/* Enable native momentum scroll globally */
 .overflow-y-auto, .overflow-auto, [class*="overflow-y-scroll"] {
   -webkit-overflow-scrolling: touch !important;
-  overscroll-behavior-y: contain !important;
 }
 
 /* Glass UI Components helper classes */

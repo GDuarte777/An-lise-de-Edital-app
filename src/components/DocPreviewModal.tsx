@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { 
   X, FileText, Printer, Code, Eye, HardDriveDownload, Save, 
@@ -6,6 +6,15 @@ import {
 } from "lucide-react";
 import { addSyncedItem } from "../utils/googleSync";
 import confetti from "canvas-confetti";
+
+function cleanMarkdownText(text: string | undefined): string {
+  if (!text) return "";
+  return text
+    .replace(/\\n/gi, "\n")
+    .replace(/\\r/gi, "\r")
+    .replace(/\\t/gi, "\t")
+    .replace(/\\"/g, '"');
+}
 
 interface DocPreviewModalProps {
   isOpen: boolean;
@@ -17,12 +26,20 @@ interface DocPreviewModalProps {
 }
 
 export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdown, type, onAddLog }: DocPreviewModalProps) {
-  const [markdownText, setMarkdownText] = useState(initialMarkdown);
+  const [markdownText, setMarkdownText] = useState(() => cleanMarkdownText(initialMarkdown));
   const [isEditing, setIsEditing] = useState(false);
   
   // Google sync indicators
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncDone, setSyncDone] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setMarkdownText(cleanMarkdownText(initialMarkdown));
+      setIsEditing(false);
+      setSyncDone(false);
+    }
+  }, [isOpen, initialMarkdown]);
 
   if (!isOpen) return null;
 

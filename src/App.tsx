@@ -449,7 +449,7 @@ export default function App() {
   }
 
   return (
-    <div id="application-container" className="min-h-screen lg:h-screen lg:overflow-hidden bg-[#0b0f19] text-slate-100 flex flex-col lg:flex-row font-sans select-text relative overflow-x-hidden">
+    <div id="application-container" className="min-h-screen lg:h-screen lg:h-[100dvh] lg:overflow-hidden bg-[#0b0f19] text-slate-100 flex flex-col lg:flex-row font-sans select-text relative">
       
       {/* Glowing Frosted blur background elements */}
       <div className="absolute top-[-10%] right-[-15%] w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[110px] -z-10 pointer-events-none"></div>
@@ -770,7 +770,7 @@ export default function App() {
       )}
 
       {/* Main Content Pane */}
-      <div className="flex-1 flex flex-col min-w-0 lg:h-screen lg:max-h-screen">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-auto lg:h-full lg:overflow-hidden">
         
         {/* Top bar header only for desktop to show page details & header spacing */}
         <header className="hidden lg:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-10">
@@ -795,7 +795,7 @@ export default function App() {
         </header>
 
         {/* Content Scrolling Stage Area */}
-        <main className="flex-1 p-4 lg:p-8 overflow-y-visible lg:overflow-y-auto relative z-10">
+        <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-visible lg:overflow-y-auto relative z-10 scrollbar-thin">
           <div className="max-w-7xl mx-auto w-full">
             
             {/* Active Render Stage Tab Component */}

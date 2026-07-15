@@ -52,6 +52,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
 
   // Competitor audit history (Supabase with Local fallback)
   const [competitorHistory, setCompetitorHistory] = useState<CompetitorHistoryItem[]>([]);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadCompetitorHistory() {
@@ -264,15 +265,22 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
 
   const handleDeleteHistory = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm("Tem certeza que deseja excluir esta auditoria do histórico?")) {
-      deleteCompetitorFromSupabase(id).catch((err) => console.warn("Erro ao deletar concorrente do Supabase:", err));
-      const updated = competitorHistory.filter(h => h.id !== id);
-      setCompetitorHistory(updated);
-      localStorage.setItem("aip_competitors_history", JSON.stringify(updated));
-      if (activeAnalysis && competitorHistory.find(h => h.id === id)?.analysis === activeAnalysis) {
-        setActiveAnalysis(null);
-      }
+    if (deletingId !== id) {
+      setDeletingId(id);
+      setTimeout(() => {
+        setDeletingId(prev => prev === id ? null : prev);
+      }, 4000);
+      return;
     }
+
+    deleteCompetitorFromSupabase(id).catch((err) => console.warn("Erro ao deletar concorrente do Supabase:", err));
+    const updated = competitorHistory.filter(h => h.id !== id);
+    setCompetitorHistory(updated);
+    localStorage.setItem("aip_competitors_history", JSON.stringify(updated));
+    if (activeAnalysis && competitorHistory.find(h => h.id === id)?.analysis === activeAnalysis) {
+      setActiveAnalysis(null);
+    }
+    setDeletingId(null);
   };
 
   return (
@@ -782,10 +790,14 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
                     <button
                       type="button"
                       onClick={(e) => handleDeleteHistory(item.id, e)}
-                      className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-rose-500/10 transition-colors"
-                      title="Excluir auditoria"
+                      className={`p-1 px-1.5 rounded transition-all text-[9px] font-bold flex items-center gap-1 cursor-pointer ${
+                        deletingId === item.id 
+                          ? "bg-rose-500/20 text-rose-400 border border-rose-500/30 animate-pulse" 
+                          : "text-slate-500 hover:text-rose-400 hover:bg-rose-500/10"
+                      }`}
+                      title={deletingId === item.id ? "Clique novamente para confirmar" : "Excluir auditoria"}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      {deletingId === item.id ? "Confirmar?" : <Trash2 className="w-3.5 h-3.5" />}
                     </button>
                   </div>
                   <h4 className="font-bold text-white text-xs truncate group-hover:text-indigo-300 transition-colors">
