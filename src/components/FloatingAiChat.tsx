@@ -4,7 +4,8 @@ import { ChatMessage, ChatSession, CompanyData, EditalAnalysis, Attachment } fro
 import { 
   MessageSquare, X, Send, Bot, User, Sparkles, Loader2, Plus, Trash2, 
   Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw,
-  FolderOpen, FileCheck, Download, Eye, ClipboardCopy, CheckSquare, Globe, Database, Printer
+  FolderOpen, FileCheck, Download, Eye, ClipboardCopy, CheckSquare, Globe, Database, Printer,
+  ChevronDown, Search
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
@@ -49,23 +50,72 @@ export default function FloatingAiChat({ companyData, activeEdital }: FloatingAi
   // Loaded edital history
   const [editalHistory, setEditalHistory] = useState<any[]>([]);
 
+  // States for the modernized custom selector
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [dropdownSearch, setDropdownSearch] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
   // Load edital history from localStorage dynamically
   const reloadEditalHistory = () => {
     const saved = localStorage.getItem("aip_edital_history");
     if (saved) {
       try {
-        setEditalHistory(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setEditalHistory(parsed);
+        }
       } catch (e) {
         console.error("Erro ao carregar histórico de editais:", e);
       }
     }
   };
 
+  // Keep editalHistory always in sync (active listener + periodic sync)
+  useEffect(() => {
+    reloadEditalHistory(); // Sync on mount
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "aip_edital_history") {
+        reloadEditalHistory();
+      }
+    };
+
+    const handleFocus = () => {
+      reloadEditalHistory();
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    window.addEventListener("focus", handleFocus);
+    
+    // Quick polling fallback to handle updates from within the same window
+    const interval = setInterval(reloadEditalHistory, 1500);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("focus", handleFocus);
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Sync again when chat is opened
   useEffect(() => {
     if (isOpen) {
       reloadEditalHistory();
     }
   }, [isOpen]);
+
+  // Click outside to close the custom selector dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   // Multiple sessions state
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
@@ -905,33 +955,184 @@ PARECER E ESTRATÉGIA:
               </div>
             </div>
 
-            {/* Edital Selection Context Ribbon */}
-            <div className="bg-slate-950/50 px-4 py-2 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs shrink-0 select-none">
-              <div className="flex items-center gap-1.5 text-slate-300">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Edital no qual focar o Chat:</span>
+            {/* Edital Selection Context Ribbon - Ultra Compact & Elegant Custom Dropdown */}
+            <div className="bg-slate-950/70 px-4 py-2 border-b border-white/10 flex items-center justify-between gap-3 shrink-0 select-none text-xs relative z-30">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Database className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="text-[11px] font-bold text-slate-300 shrink-0">Foco do Chat:</span>
+                
+                {/* Visual state indicator dot */}
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeSession.selectedEditalId ? "bg-indigo-400 animate-pulse" : "bg-slate-500"}`} />
+                
+                <span className="text-[10px] text-slate-400 hidden sm:inline truncate max-w-[120px] md:max-w-[180px]">
+                  {activeSession.selectedEditalId ? "Focando em edital específico" : "Geral / Sem edital"}
+                </span>
               </div>
               
-              <select
-                value={activeSession.selectedEditalId}
-                onChange={(e) => handleSelectEdital(e.target.value)}
-                className="bg-slate-900 text-white border border-white/15 rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                <option value="">Nenhum (Conversa Geral)</option>
-                {activeEdital && (
-                  <option value="active">
-                    ★ Edital Ativo ({activeEdital.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Em Memória"}...)
-                  </option>
+              {/* Custom Searchable Select Dropdown Container */}
+              <div ref={dropdownRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                  className="max-w-[195px] sm:max-w-[340px] flex items-center justify-between gap-2 bg-slate-900/90 hover:bg-slate-800/95 border border-white/10 hover:border-indigo-500/40 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none transition-all cursor-pointer shadow-sm active:scale-95 text-left"
+                >
+                  <span className="truncate">
+                    {activeSession.selectedEditalId === "" && "💬 Nenhum Edital (Conversa Geral)"}
+                    {activeSession.selectedEditalId === "active" && (
+                      `✨ Edital Ativo (${activeEdital?.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Em Análise"}...)`
+                    )}
+                    {activeSession.selectedEditalId !== "" && activeSession.selectedEditalId !== "active" && (
+                      (() => {
+                        const found = editalHistory.find(h => h.id === activeSession.selectedEditalId);
+                        const ed = found?.analysis || found;
+                        return `📄 ${found?.title || ed?.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Edital Histórico"}`;
+                      })()
+                    )}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`} />
+                </button>
+
+                {/* Dropdown Popover */}
+                {isDropdownOpen && (
+                  <div className="absolute right-0 mt-1.5 w-64 sm:w-80 bg-slate-950/95 border border-white/15 rounded-xl shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden max-h-72 animate-scale-up">
+                    {/* Search Field */}
+                    <div className="p-2 border-b border-white/10 flex items-center gap-2 bg-slate-900/40 shrink-0">
+                      <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-1" />
+                      <input
+                        type="text"
+                        placeholder="Buscar edital analisado..."
+                        value={dropdownSearch}
+                        onChange={(e) => setDropdownSearch(e.target.value)}
+                        className="w-full bg-transparent text-slate-200 placeholder-slate-500 text-[11px] focus:outline-none py-1"
+                        autoFocus
+                      />
+                      {dropdownSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setDropdownSearch("")}
+                          className="text-slate-500 hover:text-slate-300 p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Scrollable Options List */}
+                    <div className="overflow-y-auto py-1 max-h-56 divide-y divide-white/5 scrollbar-thin">
+                      {/* Option: Conversa Geral */}
+                      {(!dropdownSearch || "conversa geral sem focar nenhum edital".includes(dropdownSearch.toLowerCase())) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSelectEdital("");
+                            setIsDropdownOpen(false);
+                            setDropdownSearch("");
+                          }}
+                          className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center justify-between transition-colors ${activeSession.selectedEditalId === "" ? "text-indigo-400 font-bold bg-indigo-500/5" : "text-slate-300"}`}
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            <MessageSquare className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
+                            <span className="truncate">Nenhum Edital (Conversa Geral)</span>
+                          </span>
+                          {activeSession.selectedEditalId === "" && <Check className="w-3.5 h-3.5 text-indigo-450 shrink-0" />}
+                        </button>
+                      )}
+
+                      {/* Group: Active Edital */}
+                      {activeEdital && (!dropdownSearch || (activeEdital.identificacaoCertame?.orgaoComprador || "").toLowerCase().includes(dropdownSearch.toLowerCase())) && (
+                        <div>
+                          <div className="px-3 py-1 bg-white/2 text-[9px] font-extrabold uppercase tracking-wider text-indigo-300 shrink-0">
+                            ✨ Edital Ativo em Análise
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleSelectEdital("active");
+                              setIsDropdownOpen(false);
+                              setDropdownSearch("");
+                            }}
+                            className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center justify-between transition-colors ${activeSession.selectedEditalId === "active" ? "text-indigo-400 font-bold bg-indigo-500/5" : "text-slate-300"}`}
+                          >
+                            <span className="flex items-center gap-2 truncate">
+                              <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                              <span className="truncate">
+                                {activeEdital.identificacaoCertame?.orgaoComprador || "Edital Carregado"}
+                              </span>
+                            </span>
+                            {activeSession.selectedEditalId === "active" && <Check className="w-3.5 h-3.5 text-indigo-450 shrink-0" />}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Group: History */}
+                      {(() => {
+                        const filteredHistory = editalHistory.filter(item => {
+                          const ed = item.analysis || item;
+                          const term = dropdownSearch.toLowerCase();
+                          return (
+                            (item.title || "").toLowerCase().includes(term) ||
+                            (ed.identificacaoCertame?.orgaoComprador || "").toLowerCase().includes(term) ||
+                            (ed.identificacaoCertame?.modalidadeLicitacao || "").toLowerCase().includes(term)
+                          );
+                        });
+
+                        if (filteredHistory.length > 0) {
+                          return (
+                            <div>
+                              <div className="px-3 py-1 bg-white/2 text-[9px] font-extrabold uppercase tracking-wider text-slate-400 shrink-0 flex items-center justify-between">
+                                <span>📂 Editais Analisados ({filteredHistory.length})</span>
+                              </div>
+                              {filteredHistory.map((item, idx) => {
+                                const ed = item.analysis || item;
+                                const isSelected = activeSession.selectedEditalId === item.id;
+                                const title = item.title || ed.identificacaoCertame?.orgaoComprador || "Edital Histórico";
+                                const desc = ed.identificacaoCertame?.modalidadeLicitacao || "Pregão Eletrônico";
+                                
+                                return (
+                                  <button
+                                    key={item.id || idx}
+                                    type="button"
+                                    onClick={() => {
+                                      handleSelectEdital(item.id);
+                                      setIsDropdownOpen(false);
+                                      setDropdownSearch("");
+                                    }}
+                                    className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex flex-col justify-center transition-colors ${isSelected ? "text-indigo-400 font-bold bg-indigo-500/5" : "text-slate-300"}`}
+                                  >
+                                    <div className="flex items-center justify-between w-full gap-2">
+                                      <span className="flex items-center gap-2 truncate">
+                                        <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                        <span className="truncate">{title}</span>
+                                      </span>
+                                      {isSelected && <Check className="w-3.5 h-3.5 text-indigo-450 shrink-0" />}
+                                    </div>
+                                    <span className="text-[9px] text-slate-500 ml-5 truncate block">
+                                      {desc}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        } else if (dropdownSearch && filteredHistory.length === 0) {
+                          return (
+                            <div className="px-3 py-4 text-center text-[11px] text-slate-500">
+                              Nenhum edital encontrado para "{dropdownSearch}"
+                            </div>
+                          );
+                        } else if (editalHistory.length === 0) {
+                          return (
+                            <div className="px-3 py-4 text-center text-[11px] text-slate-500">
+                              Nenhum edital analisado ainda
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
                 )}
-                {editalHistory.map((item, idx) => {
-                  const ed = item.analysis || item;
-                  return (
-                    <option key={item.id || idx} value={item.id}>
-                      {item.title || `Pregão de ${ed.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Histórico"}`}
-                    </option>
-                  );
-                })}
-              </select>
+              </div>
             </div>
 
             {/* Scrollable Messages Area */}
@@ -1171,26 +1372,7 @@ PARECER E ESTRATÉGIA:
               )}
             </div>
 
-            {/* Chatbot suggestions rows (Only show on startup with default message) */}
-            {activeSession.messages.length === 1 && (
-              <div className="px-4 py-2 border-t border-white/10 bg-white/5 space-y-1.5 shrink-0 select-none">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-indigo-400" />
-                  Dúvidas Frequentes:
-                </span>
-                <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none scroll-smooth">
-                  {CONSTANT_SUGGESTIONS.map((s, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleSend(s)}
-                      className="shrink-0 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 rounded-lg px-2.5 py-1 text-[10px] text-left cursor-pointer transition-colors max-w-xs"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+
 
             {/* PRE-UPLOADED ATTACHMENT TRAY */}
             {selectedAttachment && (

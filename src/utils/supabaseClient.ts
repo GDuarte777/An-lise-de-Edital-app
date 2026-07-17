@@ -609,7 +609,12 @@ export async function deleteDocumentFromSupabase(id: string): Promise<boolean> {
 }
 
 // SaaS User Sign Up using Supabase Auth
-export async function signUpWithSupabase(email: string, password: string): Promise<{ success: boolean; message: string; user?: any }> {
+export async function signUpWithSupabase(
+  email: string, 
+  password: string, 
+  fullName?: string, 
+  phone?: string
+): Promise<{ success: boolean; message: string; user?: any }> {
   const client = getSupabaseClient();
   if (!client) {
     return { success: false, message: "Supabase não está configurado. Insira as credenciais primeiro." };
@@ -619,9 +624,30 @@ export async function signUpWithSupabase(email: string, password: string): Promi
     const { data, error } = await client.auth.signUp({
       email,
       password,
+      options: {
+        data: {
+          full_name: fullName || "",
+          phone: phone || ""
+        }
+      }
     });
 
     if (error) throw error;
+
+    // Seed the company profile with name and phone if possible and we have a session
+    if (data.user && data.session) {
+      try {
+        await client.from("dados_empresa").upsert({
+          user_id: data.user.id,
+          representative_name: fullName || "",
+          phone: phone || "",
+          email: email,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "user_id" });
+      } catch (e) {
+        console.warn("Could not pre-seed dados_empresa:", e);
+      }
+    }
 
     // Check if email confirmation is required or if it signed up directly
     if (data.user && data.session === null) {

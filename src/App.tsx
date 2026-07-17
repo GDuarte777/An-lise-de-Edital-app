@@ -219,6 +219,21 @@ export default function App() {
         setCompanyData(loadedCompany);
         localStorage.setItem("aip_company_data", JSON.stringify(loadedCompany));
         addLogMessage("Perfil corporativo do usuário carregado com sucesso.");
+      } else if (user?.user_metadata) {
+        const meta = user.user_metadata;
+        const loadedCompany: CompanyData = {
+          razonSocial: "",
+          cnpj: "",
+          address: "",
+          phone: meta.phone || "",
+          email: user.email || "",
+          representativeName: meta.full_name || "",
+          representativeCpf: "",
+          bankDetails: ""
+        };
+        setCompanyData(loadedCompany);
+        localStorage.setItem("aip_company_data", JSON.stringify(loadedCompany));
+        addLogMessage("Perfil corporativo inicializado a partir do cadastro.");
       }
 
       // 2. Fetch User AI Config / Keys
