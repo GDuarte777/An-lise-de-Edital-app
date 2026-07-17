@@ -521,4 +521,30 @@ html.light .pointer-events-none {
   display: none !important;
 }
 
+/* 
+  GPU acceleration & compositing fixes to resolve subpixel rounding layout bugs
+  (such as flickering white/grey vertical or horizontal lines or stripes 
+  when backdrop-blur and blur-filter elements overlap or rescale on various screen sizes).
+*/
+.backdrop-blur-md,
+.backdrop-blur-lg,
+.backdrop-blur-xl,
+.backdrop-blur-2xl,
+[class*="backdrop-blur-"] {
+  will-change: transform, filter;
+  transform: translate3d(0, 0, 0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* Force separate composite layer on high-blur decorative circles to prevent screen-edge bleeding or clipping seams */
+.blur-\[90px\],
+.blur-\[110px\],
+[class*="blur-"] {
+  will-change: transform, filter;
+  transform: translate3d(0, 0, 0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
 

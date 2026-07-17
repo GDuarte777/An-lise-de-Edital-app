@@ -32,6 +32,20 @@ export default function FloatingAiChat({ companyData, activeEdital }: FloatingAi
   const [isOpen, setIsOpen] = useState(false);
   const [showSidebarMobile, setShowSidebarMobile] = useState(true);
   
+  // Track unread messages status (defaults to true for visibility on first load)
+  const [hasUnread, setHasUnread] = useState(() => {
+    const saved = localStorage.getItem("aip_chat_has_unread");
+    return saved !== "false";
+  });
+
+  // Clear unread indicator when opened
+  useEffect(() => {
+    if (isOpen) {
+      setHasUnread(false);
+      localStorage.setItem("aip_chat_has_unread", "false");
+    }
+  }, [isOpen]);
+  
   // Loaded edital history
   const [editalHistory, setEditalHistory] = useState<any[]>([]);
 
@@ -616,6 +630,11 @@ PARECER E ESTRATÉGIA:
         }
         return s;
       }));
+      
+      if (!isOpen) {
+        setHasUnread(true);
+        localStorage.setItem("aip_chat_has_unread", "true");
+      }
     } catch (error: any) {
       console.error("Erro no chat:", error);
       const errorText = error?.message || String(error);
@@ -635,6 +654,11 @@ PARECER E ESTRATÉGIA:
         }
         return s;
       }));
+      
+      if (!isOpen) {
+        setHasUnread(true);
+        localStorage.setItem("aip_chat_has_unread", "true");
+      }
     } finally {
       setLoading(false);
     }
@@ -643,20 +667,44 @@ PARECER E ESTRATÉGIA:
   return (
     <div className="fixed bottom-6 right-6 z-50 font-sans">
       
-      {/* Floating Circle Button */}
+      {/* Floating Circle Button - Modern, visible and robust design */}
       {!isOpen && (
         <button
           onClick={() => {
             setIsOpen(true);
             setShowSidebarMobile(true);
           }}
-          className="relative bg-gradient-to-r from-indigo-650 to-indigo-550 hover:from-indigo-550 hover:to-indigo-450 text-white p-4 rounded-full shadow-lg hover:shadow-indigo-500/20 shadow-indigo-950/40 hover:scale-105 active:scale-95 transition-all text-center flex items-center justify-center cursor-pointer group border border-white/10"
+          className="flex items-center gap-2.5 px-4.5 py-3 rounded-full bg-gradient-to-r from-indigo-600 via-indigo-550 to-violet-600 hover:from-indigo-550 hover:to-violet-550 text-white shadow-xl hover:shadow-indigo-500/25 shadow-slate-950/40 hover:scale-105 active:scale-95 transition-all duration-300 text-center cursor-pointer relative group border border-white/15 overflow-visible select-none"
           id="floating-chat-trigger"
         >
-          <span className="absolute top-0 right-0 h-3 w-3 rounded-full bg-emerald-400 border-2 border-slate-950 animate-ping" />
-          <MessageSquare className="w-6 h-6" />
-          <span className="absolute right-14 bg-slate-950/90 text-white text-[11px] font-semibold py-1 px-2.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 border border-white/10 shadow-md backdrop-blur-md pointer-events-none whitespace-nowrap">
-            Assistente Multi-canal Ativo
+          {/* Inner hover glow */}
+          <span className="absolute inset-0 rounded-full bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+
+          {/* Glowing pulse indicator ONLY if hasUnread is true */}
+          {hasUnread && (
+            <span className="absolute -top-1 -right-1 flex h-4.5 w-4.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-4.5 w-4.5 bg-emerald-500 border-2 border-slate-900" />
+            </span>
+          )}
+
+          {/* Animated icon container */}
+          <div className="bg-white/10 p-1.5 rounded-full border border-white/10 flex items-center justify-center shrink-0">
+            <MessageSquare className="w-4.5 h-4.5 text-white group-hover:scale-110 transition-transform duration-300" />
+          </div>
+
+          {/* Pill text label */}
+          <div className="flex flex-col text-left shrink-0 pr-1">
+            <span className="text-[9px] font-extrabold uppercase tracking-widest text-indigo-200 leading-none mb-0.5">Online</span>
+            <span className="text-xs font-bold text-white tracking-wide leading-none">Assessor IA</span>
+          </div>
+
+          {/* Mini Action Arrow */}
+          <ArrowRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-1 transition-transform duration-300 shrink-0" />
+
+          {/* Elegant Tooltip overlay */}
+          <span className="absolute right-0 bottom-14 bg-slate-950/95 text-slate-200 text-[10.5px] font-medium py-2 px-3 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 border border-white/10 shadow-2xl backdrop-blur-md pointer-events-none whitespace-nowrap">
+            Dúvidas? Pergunte ao Assessor Inteligente!
           </span>
         </button>
       )}
