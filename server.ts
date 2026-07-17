@@ -68,8 +68,8 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
   }
 
   const token = authHeader.slice(7);
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
-  const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
+  const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
 
   if (!supabaseUrl || !supabaseAnonKey) {
     console.log("[AI Config] Supabase env vars missing on server - checking server default GEMINI_API_KEY.");
@@ -1068,9 +1068,9 @@ async function startServer() {
   // API Route: Setup DB - creates the configuracoes_usuario table if it doesn't exist
   // This is called once to initialize the Supabase schema.
   app.post("/api/setup-db", async (req, res): Promise<any> => {
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
     const supabaseServiceKey = req.body?.serviceKey || "";
-    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
+    const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
     
     if (!supabaseUrl) {
       return res.status(400).json({ error: "Supabase URL não configurada no servidor." });

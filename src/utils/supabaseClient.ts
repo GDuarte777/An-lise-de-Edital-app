@@ -7,6 +7,9 @@ export interface SupabaseConfig {
 }
 
 export function getSupabaseConfig(): SupabaseConfig {
+  const DEFAULT_URL = "https://cghlfhndoqohmrrvppjj.supabase.co";
+  const DEFAULT_KEY = "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
+
   const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL || "";
   const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || "";
   
@@ -14,8 +17,8 @@ export function getSupabaseConfig(): SupabaseConfig {
   const savedKey = localStorage.getItem("supabase_anon_key") || "";
 
   return {
-    url: envUrl || savedUrl,
-    anonKey: envKey || savedKey
+    url: envUrl || savedUrl || DEFAULT_URL,
+    anonKey: envKey || savedKey || DEFAULT_KEY
   };
 }
 
