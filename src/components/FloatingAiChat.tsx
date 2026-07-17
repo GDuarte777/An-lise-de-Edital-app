@@ -724,7 +724,7 @@ PARECER E ESTRATÉGIA:
             setIsOpen(true);
             setShowSidebarMobile(true);
           }}
-          className="flex items-center gap-2.5 px-4.5 py-3 rounded-full bg-gradient-to-r from-indigo-600 via-indigo-550 to-violet-600 hover:from-indigo-550 hover:to-violet-550 text-white shadow-xl hover:shadow-indigo-500/25 shadow-slate-950/40 hover:scale-105 active:scale-95 transition-all duration-300 text-center cursor-pointer relative group border border-white/15 overflow-visible select-none"
+          className="flex items-center p-3 rounded-full bg-gradient-to-r from-indigo-600 via-indigo-550 to-violet-600 hover:from-indigo-550 hover:to-violet-550 text-white shadow-xl hover:shadow-indigo-500/25 shadow-slate-950/40 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer relative group border border-white/15 overflow-visible select-none hover:pr-4.5"
           id="floating-chat-trigger"
         >
           {/* Inner hover glow */}
@@ -743,14 +743,17 @@ PARECER E ESTRATÉGIA:
             <MessageSquare className="w-4.5 h-4.5 text-white group-hover:scale-110 transition-transform duration-300" />
           </div>
 
-          {/* Pill text label */}
-          <div className="flex flex-col text-left shrink-0 pr-1">
-            <span className="text-[9px] font-extrabold uppercase tracking-widest text-indigo-200 leading-none mb-0.5">Online</span>
-            <span className="text-xs font-bold text-white tracking-wide leading-none">Assessor IA</span>
-          </div>
+          {/* Expandable info on hover */}
+          <div className="flex items-center max-w-0 opacity-0 overflow-hidden group-hover:max-w-[200px] group-hover:opacity-100 transition-all duration-300 ease-out whitespace-nowrap">
+            {/* Pill text label */}
+            <div className="flex flex-col text-left shrink-0 pr-1.5 pl-2">
+              <span className="text-[9px] font-extrabold uppercase tracking-widest text-indigo-200 leading-none mb-0.5">Online</span>
+              <span className="text-xs font-bold text-white tracking-wide leading-none">Assessor IA</span>
+            </div>
 
-          {/* Mini Action Arrow */}
-          <ArrowRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-1 transition-transform duration-300 shrink-0" />
+            {/* Mini Action Arrow */}
+            <ArrowRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-1 transition-transform duration-300 shrink-0 mr-1.5" />
+          </div>
 
           {/* Elegant Tooltip overlay */}
           <span className="absolute right-0 bottom-14 bg-slate-950/95 text-slate-200 text-[10.5px] font-medium py-2 px-3 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 border border-white/10 shadow-2xl backdrop-blur-md pointer-events-none whitespace-nowrap">

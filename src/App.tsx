@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { 
   FileText, ShieldCheck, Database, FolderGit, FileSpreadsheet, CloudLightning, 
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, CheckCircle, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Menu, X, ChevronLeft, ChevronRight, Search, AlertTriangle
+  Menu, X, ChevronLeft, ChevronRight, Search, AlertTriangle, ChevronDown, Check
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
@@ -110,6 +110,21 @@ export default function App() {
     window.addEventListener("ai-quota-warning", handleQuotaWarning);
     return () => {
       window.removeEventListener("ai-quota-warning", handleQuotaWarning);
+    };
+  }, []);
+
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
+        setModelDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
     };
   }, []);
 
@@ -719,80 +734,99 @@ export default function App() {
 
           </nav>
 
-          {/* Bottom Sidebar area: Google & Supabase connection Integration */}
-          <div className={`border-t border-white/5 pt-4 space-y-3 ${sidebarCollapsed ? "lg:hidden block" : "block"}`}>
+          {/* Bottom Sidebar area - Highly Compact & Refined */}
+          <div className={`border-t border-white/5 pt-4 space-y-4 ${sidebarCollapsed ? "lg:hidden block" : "block"}`}>
             
-
-
-            {/* Active AI Selector */}
-            <div className="p-3 rounded-xl border border-white/10 bg-[#0c101e]/80 text-slate-300 select-none text-[11px] flex flex-col gap-1.5">
-              <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
-                Inteligência Artificial Ativa
-              </label>
-              <select
-                value={activeProvider}
-                onChange={(e) => handleGlobalProviderChange(e.target.value)}
-                className="w-full bg-slate-950 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-semibold"
+           {/* Compact Active AI Selector */}
+            <div className="relative" ref={modelDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+                className="w-full bg-slate-900/60 hover:bg-slate-900/90 border border-white/5 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2 text-left transition-all cursor-pointer group"
               >
-                <option value="gemini">Google Gemini 3.5</option>
-                <option value="openai">OpenAI ChatGPT (GPT-4o)</option>
-                <option value="anthropic">Anthropic Claude 3.7</option>
-                <option value="deepseek">DeepSeek (V3/R1)</option>
-              </select>
+                <div className="flex items-center gap-2">
+                  <div className="p-1 rounded-lg bg-indigo-500/10 text-indigo-400 group-hover:scale-105 transition-transform">
+                    <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider leading-none">Modelo IA</span>
+                    <span className="text-xs font-bold text-slate-200 mt-0.5">
+                      {activeProvider === "gemini" && "Gemini 3.5"}
+                      {activeProvider === "openai" && "GPT-4o"}
+                      {activeProvider === "anthropic" && "Claude 3.7"}
+                      {activeProvider === "deepseek" && "DeepSeek V3"}
+                    </span>
+                  </div>
+                </div>
+                <ChevronDown className={`w-4 h-4 text-slate-500 group-hover:text-slate-300 transition-transform duration-200 ${modelDropdownOpen ? "rotate-180 text-indigo-400" : ""}`} />
+              </button>
+
+              {/* Modernized Dropup List */}
+              {modelDropdownOpen && (
+                <div className="absolute bottom-full left-0 right-0 mb-2 bg-slate-950 border border-white/10 rounded-xl shadow-2xl p-1.5 space-y-0.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                  <div className="px-2 py-1.5 border-b border-white/5 mb-1 flex items-center justify-between">
+                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Cérebro IA Ativo</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping" />
+                  </div>
+                  
+                  {[
+                    { id: "gemini", name: "Gemini 3.5", brand: "Google", desc: "Rápido & Inteligente", badge: "Recomendado" },
+                    { id: "openai", name: "GPT-4o", brand: "OpenAI", desc: "Altamente Analítico", badge: null },
+                    { id: "anthropic", name: "Claude 3.7", brand: "Anthropic", desc: "Máxima Conformidade", badge: null },
+                    { id: "deepseek", name: "DeepSeek", brand: "Análise Cost", desc: "Raciocínio Lógico", badge: "Economia" }
+                  ].map((p) => {
+                    const isSelected = activeProvider === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => {
+                          handleGlobalProviderChange(p.id);
+                          setModelDropdownOpen(false);
+                        }}
+                        className={`w-full text-left p-2 rounded-lg flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                          isSelected 
+                            ? "bg-indigo-600/15 border border-indigo-500/20 text-indigo-200" 
+                            : "hover:bg-white/5 text-slate-400 hover:text-slate-200 border border-transparent"
+                        }`}
+                      >
+                        <div className="flex flex-col">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-[11px]">{p.name}</span>
+                            <span className="text-[8px] text-slate-500 font-medium">({p.brand})</span>
+                            {p.badge && (
+                              <span className="text-[7px] px-1 py-0.2 bg-indigo-500/10 text-indigo-400 font-bold uppercase tracking-wider rounded">
+                                {p.badge}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[9px] text-slate-500 mt-0.5 font-medium">{p.desc}</span>
+                        </div>
+                        {isSelected && <Check className="w-4 h-4 text-indigo-400 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             
-            {/* Supabase SaaS Identity Center */}
-            <div className="p-3 rounded-xl border border-emerald-500/25 bg-slate-900/50 text-slate-300 select-none text-[11px] flex flex-col gap-1.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="font-bold block">Sessão SaaS Ativa</span>
+            {/* User Session Info & Simple Log Out Button */}
+            <div className="flex flex-col gap-1.5 px-1.5">
+              {supabaseUser?.email && (
+                <div className="text-[10px] font-mono tracking-tight text-slate-500 truncate" title={supabaseUser.email}>
+                  {supabaseUser.email}
                 </div>
-              </div>
-
-              <div className="text-[10px] font-mono tracking-tight truncate text-slate-400">
-                {supabaseUser?.email}
-              </div>
-
+              )}
               <button
                 onClick={handleSaaSSignOut}
-                className="py-1.5 px-2 rounded-lg font-bold text-[10px] transition-all flex items-center justify-center gap-1.5 cursor-pointer bg-rose-950/30 hover:bg-rose-950/50 text-rose-400 border border-rose-500/20 w-full"
-                title="Sair da Plataforma"
+                className="w-full py-2.5 px-3 rounded-xl font-bold text-xs flex items-center gap-3 transition-all cursor-pointer text-slate-400 hover:text-rose-400 hover:bg-rose-950/20 text-left border border-transparent hover:border-rose-500/10"
+                title="Sair"
               >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Sair da Plataforma</span>
+                <LogOut className="w-4 h-4 shrink-0 text-slate-500 hover:text-rose-400" />
+                <span>Sair</span>
               </button>
             </div>
 
-            {/* Google Workspace connection */}
-            {googleConnected ? (
-              <div className="bg-emerald-950/25 border border-emerald-500/20 rounded-xl p-3 flex flex-col gap-2 select-none text-[11px] text-emerald-400">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  <p className="font-bold block">Workspace Conectado</p>
-                </div>
-                <p className="text-[10px] text-slate-400 font-mono tracking-tight truncate">
-                  {userEmail || "gabrieltrafego7@gmail.com"}
-                </p>
-                <button
-                  onClick={handleGoogleLogout}
-                  className="bg-rose-950/30 hover:bg-rose-950/50 border border-rose-500/20 hover:border-rose-500/30 py-1.5 rounded-lg text-rose-400 text-[10px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 w-full"
-                  title="Desconectar Google"
-                >
-                  <LogOut className="w-3 h-3" />
-                  <span>Desconectar Google</span>
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={handleGoogleLogin}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition-all cursor-pointer shadow-lg shadow-indigo-600/10 border border-white/10 flex items-center justify-center w-full py-2.5 px-3 rounded-xl text-[10px] gap-1.5"
-                title="Conectar Workspace"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>Conectar Workspace</span>
-              </button>
-            )}
           </div>
 
         </div>
