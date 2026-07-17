@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { 
   FileText, ShieldCheck, Database, FolderGit, FileSpreadsheet, CloudLightning, 
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, CheckCircle, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Menu, X, ChevronLeft, ChevronRight, Search
+  Menu, X, ChevronLeft, ChevronRight, Search, AlertTriangle
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
@@ -29,6 +29,7 @@ import {
   saveCompanyDataToSupabase
 } from "./utils/supabaseClient";
 import SupabaseLoginScreen from "./components/SupabaseLoginScreen";
+import ThemeToggle from "./components/ThemeToggle";
 
 // Default Initial Corporate profile representing a Brazilian company 
 const DEFAULT_COMPANY_DATA: CompanyData = {
@@ -46,6 +47,8 @@ export default function App() {
   const [activeTab, setActiveTab ] = useState<"analyzer" | "radar" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  
+  // Dark/Light theme state removed as requested
   
   // App-wide state
   const [companyData, setCompanyData] = useState<CompanyData>(() => {
@@ -95,6 +98,20 @@ export default function App() {
     return localStorage.getItem("supabase_saas_plan") || "Free";
   });
   const [supabaseConnected, setSupabaseConnected] = useState(false);
+  const [aiQuotaWarning, setAiQuotaWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleQuotaWarning = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail && customEvent.detail.message) {
+        setAiQuotaWarning(customEvent.detail.message);
+      }
+    };
+    window.addEventListener("ai-quota-warning", handleQuotaWarning);
+    return () => {
+      window.removeEventListener("ai-quota-warning", handleQuotaWarning);
+    };
+  }, []);
 
   // Supabase dynamic auth credentials inside modal
   const [authEmail, setAuthEmail] = useState("");
@@ -457,20 +474,23 @@ export default function App() {
 
       {/* Mobile Sticky Navbar Header */}
       <header className="lg:hidden bg-white/5 border-b border-white/10 backdrop-blur-xl text-white sticky top-0 z-40 px-4 py-3 flex items-center justify-between shadow-lg">
-        <div className="flex items-center gap-2">
-          <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-1.5 rounded-lg">
-            <ShieldCheck className="w-5 h-5" />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
+          >
+            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-1.5 rounded-lg">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <h1 className="text-sm font-bold tracking-tight text-white">
+              Analisador Inteligente
+            </h1>
           </div>
-          <h1 className="text-sm font-bold tracking-tight text-white">
-            Analisador Inteligente
-          </h1>
         </div>
-        <button
-          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
-        >
-          {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-        </button>
+        <ThemeToggle />
       </header>
 
       {/* Desktop Sidebar (Persistent) & Mobile Sidebar Drawer */}
@@ -687,6 +707,8 @@ export default function App() {
           {/* Bottom Sidebar area: Google & Supabase connection Integration */}
           <div className={`border-t border-white/5 pt-4 space-y-3 ${sidebarCollapsed ? "lg:hidden block" : "block"}`}>
             
+
+
             {/* Active AI Selector */}
             <div className="p-3 rounded-xl border border-white/10 bg-[#0c101e]/80 text-slate-300 select-none text-[11px] flex flex-col gap-1.5">
               <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
@@ -773,7 +795,7 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-auto lg:h-full lg:overflow-hidden">
         
         {/* Top bar header only for desktop to show page details & header spacing */}
-        <header className="hidden lg:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-10">
+        <header className="hidden lg:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-30">
           <div>
             <h2 className="text-sm font-bold text-white tracking-wide uppercase">
               Painel Operacional
@@ -789,8 +811,11 @@ export default function App() {
                "Auditoria Legal de Documentação de Concorrentes"}
             </p>
           </div>
-          <div className="text-[10px] font-mono text-slate-500 bg-slate-900/60 px-3 py-1.5 rounded-lg border border-white/5">
-            SISTEMA ATIVO (UTC)
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <div className="text-[10px] font-mono text-slate-500 bg-slate-900/60 px-3 py-1.5 rounded-lg border border-white/5">
+              SISTEMA ATIVO (UTC)
+            </div>
           </div>
         </header>
 
@@ -798,6 +823,39 @@ export default function App() {
         <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-visible lg:overflow-y-auto relative z-10 scrollbar-thin">
           <div className="max-w-7xl mx-auto w-full">
             
+            {aiQuotaWarning && (
+              <div className="mb-6 p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 backdrop-blur-md flex flex-col md:flex-row items-center justify-between gap-4 animate-fade-in">
+                <div className="flex items-center gap-3">
+                  <div className="bg-rose-500/20 text-rose-300 p-2 rounded-lg">
+                    <AlertTriangle className="w-5 h-5 text-rose-400" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-rose-200 uppercase tracking-wide">Aviso de Limite de Cota</h4>
+                    <p className="text-xs text-rose-300/90 mt-0.5 leading-relaxed">{aiQuotaWarning}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
+                  <button
+                    onClick={() => {
+                      setActiveTab("aiConfig");
+                      setAiQuotaWarning(null);
+                    }}
+                    className="flex-1 md:flex-none text-center bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs px-4 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-rose-500/20"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Configurar Minha Chave
+                  </button>
+                  <button
+                    onClick={() => setAiQuotaWarning(null)}
+                    className="p-2 hover:bg-white/5 border border-white/10 hover:border-white/20 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
+                    title="Ignorar aviso"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Active Render Stage Tab Component */}
             <div className="select-text w-full">
               {activeTab === "analyzer" ? (

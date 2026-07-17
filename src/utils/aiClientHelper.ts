@@ -47,6 +47,45 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
     }
 
     const response = await fetch(url, fetchOptions);
+
+    const hasUserKey = aiConfig?.apiKey && aiConfig.apiKey.trim().length > 10;
+
+    if (response.status === 429) {
+      if (typeof window !== "undefined") {
+        const message = hasUserKey
+          ? "A sua chave de API personalizada atingiu o limite de cota (429 Rate Limit). Verifique o saldo ou limites da sua conta no Google AI Studio."
+          : "A chave de API gratuita e compartilhada do servidor atingiu o limite de cota (429 Rate Limit). Para continuar usando com velocidade ilimitada, por favor insira sua própria chave de API na aba 'IA & Modelos'.";
+        window.dispatchEvent(new CustomEvent("ai-quota-warning", {
+          detail: { message }
+        }));
+      }
+    } else if (!response.ok) {
+      // Clone response to check body for quota-related error messages in JSON
+      try {
+        const cloned = response.clone();
+        cloned.json().then(data => {
+          const errorMsg = data?.error?.message || data?.error || "";
+          if (errorMsg && (
+            errorMsg.toLowerCase().includes("quota") ||
+            errorMsg.toLowerCase().includes("rate limit") ||
+            errorMsg.toLowerCase().includes("429") ||
+            errorMsg.toLowerCase().includes("limit exceeded")
+          )) {
+            if (typeof window !== "undefined") {
+              const message = hasUserKey
+                ? "A sua chave de API personalizada atingiu o limite de cota (429 Rate Limit). Verifique o saldo ou limites da sua conta no Google AI Studio."
+                : "A chave de API gratuita e compartilhada do servidor atingiu o limite de cota (429 Rate Limit). Para continuar usando com velocidade ilimitada, por favor insira sua própria chave de API na aba 'IA & Modelos'.";
+              window.dispatchEvent(new CustomEvent("ai-quota-warning", {
+                detail: { message }
+              }));
+            }
+          }
+        }).catch(() => {});
+      } catch (err) {
+        // Safe catch
+      }
+    }
+
     return response;
   } catch (error: any) {
     if (error?.message?.includes("Failed to fetch") || error?.message?.includes("fetch")) {

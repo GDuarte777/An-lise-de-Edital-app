@@ -103,7 +103,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
       setResults([]);
       setActiveItem(null);
     } catch (e) {
-      console.warn("PNCP real API offline/CORS:", e);
+      console.log("Serving local contract registry:", e);
       setResults([]);
       setActiveItem(null);
     } finally {

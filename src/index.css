@@ -6,6 +6,26 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 }
 
+:root {
+  --bg-app: #121316;          /* "preto nao muito escuro" for dark mode */
+  --bg-card: #18191d;         /* Card background in dark mode */
+  --bg-sidebar: #15161a;      /* Sidebar background in dark mode */
+  --border-color: rgba(255, 255, 255, 0.08);
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+}
+
+html.light {
+  --bg-app: #f4f5f7;          /* "light nao muito branco" for light mode */
+  --bg-card: #ffffff;         /* Card background in light mode */
+  --bg-sidebar: #ebecef;      /* Sidebar background in light mode */
+  --border-color: rgba(15, 23, 42, 0.08);
+  --text-primary: #1e293b;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+}
+
 html, body {
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
@@ -15,10 +35,39 @@ html, body {
 
 body {
   font-family: var(--font-sans);
-  background-color: #0b0f19;
-  background-image: radial-gradient(at top right, rgba(29, 78, 216, 0.15), transparent 50%), radial-gradient(at bottom left, rgba(79, 70, 229, 0.12), transparent 50%);
-  color: #f8fafc;
+  background-color: var(--bg-app) !important;
+  background-image: none !important;
+  color: var(--text-primary);
   min-height: 100vh;
+}
+
+#application-container,
+.bg-\[\#0b0f19\] {
+  background-color: var(--bg-app) !important;
+}
+
+aside,
+.bg-\[\#0c101e\],
+.bg-\[\#0c101e\]\/95,
+.bg-\[\#0c101e\]\/60 {
+  background-color: var(--bg-sidebar) !important;
+  border-color: var(--border-color) !important;
+}
+
+.bg-slate-900,
+.bg-slate-900\/60,
+.bg-slate-900\/40,
+.bg-slate-900\/50,
+.bg-slate-950,
+.bg-slate-950\/50,
+.bg-\[\#0a0d16\],
+.bg-\[\#0a0d17\],
+.bg-\[\#111625\],
+.bg-\[\#161c2e\],
+.bg-\[\#13192b\],
+.bg-\[\#131826\] {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
 }
 
 /* Enable native momentum scroll globally */
@@ -194,4 +243,282 @@ body {
   margin-bottom: 1rem;
   border-radius: 0 4px 4px 0;
 }
+
+/* Light Theme Styling Overrides */
+html.light body {
+  background-color: var(--bg-app) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+}
+
+/* Background mappings using standard, clean escaped and substring selectors */
+html.light #application-container,
+html.light .bg-slate-950,
+html.light .bg-slate-950\/50,
+html.light .bg-\[\#0b0f19\],
+html.light .bg-\[\#070b13\],
+html.light [class*="bg-[#0b0f19]"],
+html.light [class*="bg-[#070b13]"] {
+  background-color: var(--bg-app) !important;
+}
+
+html.light aside,
+html.light .bg-\[\#0c101e\],
+html.light .bg-\[\#0c101e\]\/95,
+html.light .bg-\[\#0c101e\]\/80,
+html.light .bg-\[\#0c101e\]\/60,
+html.light .bg-\[\#15161a\],
+html.light .bg-\[\#0c101d\],
+html.light .bg-\[\#0d1324\],
+html.light .bg-\[\#07090f\],
+html.light [class*="bg-[#0c101e]"],
+html.light [class*="bg-[#15161a]"],
+html.light [class*="bg-[#0c101d]"],
+html.light [class*="bg-[#0d1324]"],
+html.light [class*="bg-[#07090f]"] {
+  background-color: var(--bg-sidebar) !important;
+}
+
+html.light .bg-slate-900,
+html.light .bg-slate-900\/60,
+html.light .bg-slate-900\/50,
+html.light .bg-slate-900\/40,
+html.light .bg-slate-800,
+html.light .bg-\[\#0a0d16\],
+html.light .bg-\[\#0a0d16\]\/60,
+html.light .bg-\[\#0a0d17\],
+html.light .bg-\[\#111625\],
+html.light .bg-\[\#161c2e\],
+html.light .bg-\[\#13192b\],
+html.light .bg-\[\#131826\],
+html.light .bg-\[\#0c1020\],
+html.light .bg-\[\#0f1424\],
+html.light .bg-\[\#0f1524\],
+html.light .bg-\[\#0f1524\]\/80,
+html.light .bg-\[\#0e1222\],
+html.light [class*="bg-[#0a0d16]"],
+html.light [class*="bg-[#0a0d17]"],
+html.light [class*="bg-[#111625]"],
+html.light [class*="bg-[#161c2e]"],
+html.light [class*="bg-[#13192b]"],
+html.light [class*="bg-[#131826]"],
+html.light [class*="bg-[#0c1020]"],
+html.light [class*="bg-[#0f1424]"],
+html.light [class*="bg-[#0f1524]"],
+html.light [class*="bg-[#0e1222]"],
+html.light [class*="bg-slate-900"],
+html.light [class*="bg-slate-950"],
+html.light [class*="bg-slate-800"] {
+  background-color: var(--bg-card) !important;
+}
+
+/* Glass & Highlight Components overrides */
+html.light .bg-white\/5,
+html.light [class*="bg-white/5"] {
+  background-color: rgba(15, 23, 42, 0.03) !important;
+}
+
+html.light .bg-white\/10,
+html.light [class*="bg-white/10"] {
+  background-color: rgba(15, 23, 42, 0.05) !important;
+}
+
+html.light .bg-white\/20,
+html.light [class*="bg-white/20"] {
+  background-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Text color overrides */
+html.light h1,
+html.light h2,
+html.light h3,
+html.light h4,
+html.light h5,
+html.light h6 {
+  color: var(--text-primary) !important;
+}
+
+html.light p,
+html.light label {
+  color: var(--text-secondary) !important;
+}
+
+html.light .text-slate-100,
+html.light [class*="text-slate-100"] {
+  color: var(--text-primary) !important;
+}
+
+html.light .text-slate-200,
+html.light [class*="text-slate-200"] {
+  color: var(--text-primary) !important;
+}
+
+html.light .text-slate-300,
+html.light [class*="text-slate-300"] {
+  color: var(--text-secondary) !important;
+}
+
+html.light .text-slate-400,
+html.light [class*="text-slate-400"] {
+  color: var(--text-muted) !important;
+}
+
+html.light .text-slate-500,
+html.light [class*="text-slate-500"] {
+  color: var(--text-muted) !important;
+}
+
+html.light .text-white:not(button *, .bg-indigo-600 *, .bg-blue-600 *, .bg-emerald-600 *, .bg-rose-600 *, .bg-indigo-500 *, .glass-button-active *, [class*="bg-indigo-"] *, [class*="bg-blue-"] *, [class*="bg-emerald-"] *),
+html.light [class*="text-white"]:not(button *, .bg-indigo-600 *, .bg-blue-600 *, .bg-emerald-600 *, .bg-rose-600 *, .bg-indigo-500 *, .glass-button-active *, [class*="bg-indigo-"] *, [class*="bg-blue-"] *, [class*="bg-emerald-"] *) {
+  color: var(--text-primary) !important;
+}
+
+/* Solid status highlights must keep white text */
+html.light .bg-indigo-600,
+html.light .bg-blue-600,
+html.light .bg-emerald-600,
+html.light .bg-rose-600,
+html.light .bg-indigo-500,
+html.light [class*="bg-indigo-600"],
+html.light [class*="bg-blue-600"],
+html.light [class*="bg-emerald-600"],
+html.light [class*="bg-rose-600"],
+html.light [class*="bg-indigo-500"] {
+  color: #ffffff !important;
+}
+
+html.light .bg-indigo-600 *,
+html.light .bg-blue-600 *,
+html.light .bg-emerald-600 *,
+html.light .bg-rose-600 *,
+html.light .bg-indigo-500 *,
+html.light [class*="bg-indigo-600"] *,
+html.light [class*="bg-blue-600"] *,
+html.light [class*="bg-emerald-600"] *,
+html.light [class*="bg-rose-600"] *,
+html.light [class*="bg-indigo-500"] * {
+  color: #ffffff !important;
+}
+
+/* Border overrides */
+html.light .border-white\/5,
+html.light .border-white\/10,
+html.light .border-white\/15,
+html.light .border-white\/20,
+html.light .border-white\/\[0\.04\],
+html.light .border-slate-800,
+html.light .border-slate-700,
+html.light [class*="border-white/"],
+html.light [class*="border-slate-700"],
+html.light [class*="border-slate-800"] {
+  border-color: var(--border-color) !important;
+}
+
+/* Select & option overrides */
+html.light select,
+html.light option {
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Form controls overrides */
+html.light .glass-input {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+html.light .glass-input:focus {
+  background: var(--bg-card) !important;
+  border-color: #4f46e5 !important;
+}
+
+html.light .glass-panel,
+html.light .glass-panel-deep {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.05) !important;
+}
+
+html.light .glass-card {
+  background: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+html.light .glass-card:hover {
+  background: var(--bg-card) !important;
+  border-color: rgba(79, 70, 229, 0.3) !important;
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.04) !important;
+}
+
+html.light .glass-button {
+  background: rgba(15, 23, 42, 0.03) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+html.light .glass-button:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.06) !important;
+  border-color: rgba(15, 23, 42, 0.15) !important;
+  color: var(--text-primary) !important;
+}
+
+html.light .glass-button-active {
+  background: rgba(79, 70, 229, 0.08) !important;
+  border-color: rgba(99, 102, 241, 0.3) !important;
+  color: #4f46e5 !important;
+}
+
+/* Scrollbars */
+html.light ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.01) !important;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Markdown overrides */
+html.light .markdown-body {
+  color: var(--text-secondary) !important;
+}
+
+html.light .markdown-body h1,
+html.light .markdown-body h2,
+html.light .markdown-body h3 {
+  color: var(--text-primary) !important;
+  border-bottom-color: var(--border-color) !important;
+}
+
+html.light .markdown-body th {
+  background-color: rgba(0, 0, 0, 0.03) !important;
+  color: var(--text-primary) !important;
+}
+
+html.light .markdown-body td,
+html.light .markdown-body th {
+  border-color: var(--border-color) !important;
+}
+
+html.light .markdown-body pre {
+  background-color: var(--bg-sidebar) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+html.light .markdown-body blockquote {
+  background-color: rgba(79, 70, 229, 0.03) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* Hide ambient glow blurs in light mode for clean design */
+html.light .pointer-events-none {
+  opacity: 0 !important;
+  display: none !important;
+}
+
 

@@ -4,6 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Analisador Inteligente de Editais</title>
+    <!-- Anti-Flash Theme Script (FOUC Prevention) -->
+    <script>
+      (function() {
+        try {
+          var storedTheme = localStorage.getItem('theme') || 'system';
+          var isDark = false;
+          if (storedTheme === 'dark') {
+            isDark = true;
+          } else if (storedTheme === 'light') {
+            isDark = false;
+          } else {
+            isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          }
+          if (isDark) {
+            document.documentElement.classList.remove('light');
+          } else {
+            document.documentElement.classList.add('light');
+          }
+        } catch (e) {
+          console.error('Error applying early theme:', e);
+        }
+      })();
+    </script>
     <!-- Google Identity Services for client-side Drive/Sheets Integration -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>

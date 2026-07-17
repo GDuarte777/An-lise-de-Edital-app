@@ -8,7 +8,7 @@ import {
 import { 
   FileText, Plus, Calendar, AlertTriangle, CheckCircle, Trash2, Edit2, ShieldCheck, 
   HelpCircle, RefreshCw, Layers, CheckSquare, Search, Building2, Landmark, Clock, FileWarning,
-  FileUp, Loader2, GripVertical, SlidersHorizontal
+  FileUp, Loader2, GripVertical, SlidersHorizontal, Sparkles
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
@@ -131,11 +131,20 @@ const INITIAL_CERTIFICATES: Certificate[] = [
   },
   {
     id: "docs-socios",
-    name: "Documentos dos Sócios",
+    name: "Documento de Identidade / CNH dos Sócios",
     emissionDate: "",
     expirationDate: "",
     status: "expired",
-    notes: "Cópia do RG, CPF, comprovante de residência e estado civil dos sócios/representante.",
+    notes: "Cópia da CNH, RG, CPF, comprovante de residência e estado civil dos sócios/representante.",
+    fileUploaded: false
+  },
+  {
+    id: "declaracao-simples-mei",
+    name: "Declaração de Optante pelo Simples / MEI",
+    emissionDate: "",
+    expirationDate: "",
+    status: "expired",
+    notes: "Declaração ou Comprovante de Opção pelo Simples Nacional e Enquadramento como MEI.",
     fileUploaded: false
   },
   {
@@ -328,6 +337,39 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [rowDraggingIndex, setRowDraggingIndex] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "expired" | "expiring_soon" | "valid" | "mismatched" | "pending">("all");
+  const [isGeneratingNotes, setIsGeneratingNotes] = useState(false);
+
+  const generateNotesWithAi = async (nameToUse?: string) => {
+    const title = nameToUse || formData.name;
+    if (!title || !title.trim()) return;
+
+    setIsGeneratingNotes(true);
+    try {
+      const response = await apiFetch("/api/generate-cert-description", {
+        method: "POST",
+        body: { name: title }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.description) {
+          setFormData(prev => ({
+            ...prev,
+            notes: data.description
+          }));
+        }
+      }
+    } catch (error) {
+      console.warn("Erro ao gerar descrição com IA:", error);
+    } finally {
+      setIsGeneratingNotes(false);
+    }
+  };
+
+  const handleNameBlur = () => {
+    if (formData.name && formData.name.trim() && !formData.notes.trim()) {
+      generateNotesWithAi(formData.name);
+    }
+  };
 
   // Form State
   const [formData, setFormData] = useState({
@@ -625,21 +667,49 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
 
   const handleAddOrEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.expirationDate) {
-      triggerAlert("Por favor preencha ao menos Nome e Data de Vencimento.");
+    if (!formData.name || !formData.name.trim()) {
+      triggerAlert("Por favor preencha ao menos o Nome Oficial da Certidão.");
       return;
     }
 
-    const calculatedStatus = evaluateStatus(formData.expirationDate);
+    let finalNotes = formData.notes;
+    let finalExpirationDate = formData.expirationDate || "";
+    let finalEmissionDate = formData.emissionDate || "";
+
+    setIsGeneratingNotes(true);
+    // If notes is empty, generate notes automatically with IA
+    if (!finalNotes || !finalNotes.trim()) {
+      try {
+        const response = await apiFetch("/api/generate-cert-description", {
+          method: "POST",
+          body: { name: formData.name }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.description) {
+            finalNotes = data.description;
+          }
+        }
+      } catch (err) {
+        console.warn("Erro ao gerar descrição automática com IA no submit:", err);
+      }
+    }
+    setIsGeneratingNotes(false);
+
+    if (!finalNotes || !finalNotes.trim()) {
+      finalNotes = `Documento ou certidão para comprovar os requisitos de "${formData.name}" no processo licitatório.`;
+    }
+
+    const calculatedStatus = finalExpirationDate ? evaluateStatus(finalExpirationDate) : "expired";
 
     if (editingCert) {
       // Edit
       const updatedItem = { 
         ...editingCert, 
         name: formData.name, 
-        emissionDate: formData.emissionDate, 
-        expirationDate: formData.expirationDate,
-        notes: formData.notes,
+        emissionDate: finalEmissionDate, 
+        expirationDate: finalExpirationDate,
+        notes: finalNotes,
         status: calculatedStatus,
         documentMatchesRow: undefined,
         validationFeedback: undefined
@@ -658,10 +728,11 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       const newCert: Certificate = {
         id: `cert-${Date.now()}`,
         name: formData.name,
-        emissionDate: formData.emissionDate,
-        expirationDate: formData.expirationDate,
-        notes: formData.notes,
-        status: calculatedStatus
+        emissionDate: finalEmissionDate,
+        expirationDate: finalExpirationDate,
+        notes: finalNotes,
+        status: calculatedStatus,
+        fileUploaded: false
       };
       setCerts([newCert, ...certs]);
       
@@ -1061,9 +1132,11 @@ Retorne exclusivamente o JSON estruturado.
                     required
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    onBlur={handleNameBlur}
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-emerald-500"
                     placeholder="Ex: Certidão Negativa de Tributos Estaduais - SEFAZ"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">Ao sair deste campo ou salvar, a IA definirá a descrição automaticamente se deixada em branco.</p>
                 </div>
 
                 <div>
@@ -1077,10 +1150,9 @@ Retorne exclusivamente o JSON estruturado.
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1 font-sans">Data de Vencimento</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1 font-sans">Data de Vencimento (Opcional)</label>
                   <input 
                     type="date" 
-                    required
                     value={formData.expirationDate}
                     onChange={(e) => setFormData({ ...formData, expirationDate: e.target.value })}
                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-rose-300 font-medium focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-emerald-500"
@@ -1088,7 +1160,20 @@ Retorne exclusivamente o JSON estruturado.
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-400 mb-1 font-sans">Observações / Para que serve</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-slate-400 font-sans">Observações / Para que serve</label>
+                    {formData.name && formData.name.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => generateNotesWithAi()}
+                        disabled={isGeneratingNotes}
+                        className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                      >
+                        <Sparkles className={`w-3 h-3 ${isGeneratingNotes ? "animate-spin" : "animate-pulse"}`} />
+                        {isGeneratingNotes ? "Descrevendo..." : "Sugerir com IA"}
+                      </button>
+                    )}
+                  </div>
                   <textarea 
                     value={formData.notes}
                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
