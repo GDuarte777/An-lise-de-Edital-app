@@ -459,131 +459,226 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     setCompanyData({ ...companyData, [field]: value });
   };
 
+  const compressImageIfNeeded = (file: File): Promise<File | Blob> => {
+    return new Promise((resolve) => {
+      if (!file.type || !file.type.startsWith("image/")) {
+        resolve(file);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1600;
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            canvas.toBlob((blob) => {
+              if (blob) {
+                resolve(blob);
+              } else {
+                resolve(file);
+              }
+            }, "image/jpeg", 0.85);
+          } else {
+            resolve(file);
+          }
+        };
+        img.onerror = () => resolve(file);
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => resolve(file);
+      reader.readAsDataURL(file);
+    });
+  };
+
   const processCertFile = async (certId: string, file: File) => {
     setAnalyzingId(certId);
     setInfoMessage(null);
 
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const base64String = (e.target?.result as string).split(",")[1];
-        
-        const response = await apiFetch("/api/analyze-cert", {
-          method: "POST",
-          body: {
-            fileBase64: base64String,
-            fileName: file.name,
-            fileType: file.type || "application/pdf",
-            docName: certs.find(c => c.id === certId)?.name || ""
-          }
-        });
-
-        if (!response.ok) {
-          throw new Error("Erro de processamento no servidor.");
-        }
-
-        const data = await response.json();
-        const result = data.result;
-
-        if (result) {
-          const expirationDate = result.expirationDate || "";
+    try {
+      const processedFile = await compressImageIfNeeded(file);
+      const reader = new FileReader();
+      
+      reader.onload = async (e) => {
+        try {
+          const base64String = (e.target?.result as string).split(",")[1];
           
+          const response = await apiFetch("/api/analyze-cert", {
+            method: "POST",
+            body: {
+              fileBase64: base64String,
+              fileName: file.name,
+              fileType: file.type.startsWith("image/") ? "image/jpeg" : (file.type || "application/pdf"),
+              docName: certs.find(c => c.id === certId)?.name || ""
+            }
+          });
+
+          if (!response.ok) {
+            throw new Error("Erro de processamento no servidor.");
+          }
+
+          const data = await response.json();
+          const result = data.result;
+
+          if (result) {
+            const expirationDate = result.expirationDate || "";
+            
+            const targetCert = certs.find(c => c.id === certId);
+            const updatedCert = {
+              ...targetCert,
+              id: certId,
+              name: targetCert?.name || "",
+              notes: targetCert?.notes || "",
+              expirationDate,
+              fileUploaded: true,
+              fileName: file.name,
+              documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
+              validationFeedback: result.validationFeedback || "Documento analisado.",
+              status: expirationDate ? evaluateStatus(expirationDate) : "valid"
+            };
+
+            // Update cert state
+            setCerts(prev => prev.map(c => c.id === certId ? updatedCert : c));
+
+            // Sync instantly to Supabase
+            saveCertificateToSupabase(updatedCert).catch(err => console.warn("Erro ao salvar anexo no Supabase:", err));
+
+            // Process and merge extracted company data
+            if (result.extractedCompanyData) {
+              const ext = result.extractedCompanyData;
+              const updated = { ...companyData };
+              let updatedKeys: string[] = [];
+
+              if (ext.razonSocial && ext.razonSocial.trim() !== "") {
+                updated.razonSocial = ext.razonSocial;
+                updatedKeys.push("Razão Social");
+              }
+              if (ext.cnpj && ext.cnpj.trim() !== "") {
+                updated.cnpj = ext.cnpj;
+                updatedKeys.push("CNPJ");
+              }
+              if (ext.address && ext.address.trim() !== "") {
+                updated.address = ext.address;
+                updatedKeys.push("Endereço");
+              }
+              if (ext.phone && ext.phone.trim() !== "") {
+                updated.phone = ext.phone;
+                updatedKeys.push("Telefone");
+              }
+              if (ext.email && ext.email.trim() !== "") {
+                updated.email = ext.email;
+                updatedKeys.push("E-mail");
+              }
+              if (ext.representativeName && ext.representativeName.trim() !== "") {
+                updated.representativeName = ext.representativeName;
+                updatedKeys.push("Representante Legal");
+              }
+              if (ext.representativeCpf && ext.representativeCpf.trim() !== "") {
+                updated.representativeCpf = ext.representativeCpf;
+                updatedKeys.push("CPF Representante");
+              }
+
+              if (updatedKeys.length > 0) {
+                setCompanyData(updated);
+                setInfoMessage(`IA extraiu do documento e atualizou seu cadastro: ${updatedKeys.join(", ")}`);
+                // Auto dismiss
+                setTimeout(() => setInfoMessage(null), 10000);
+              }
+            }
+
+            confetti({ particleCount: 65, spread: 60, origin: { y: 0.8 } });
+          } else {
+            triggerAlert("A IA analisou o arquivo, mas não retornou um formato de dados esperado.");
+          }
+        } catch (err: any) {
+          console.error(err);
+          triggerAlert("Erro na análise da IA. O arquivo foi anexado com sucesso para preenchimento manual.");
+          // Fallback: mark as uploaded but allow user to specify a date manually by editing
           const targetCert = certs.find(c => c.id === certId);
-          const updatedCert = {
+          const fallbackCert = {
             ...targetCert,
             id: certId,
             name: targetCert?.name || "",
             notes: targetCert?.notes || "",
-            expirationDate,
             fileUploaded: true,
             fileName: file.name,
-            documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
-            validationFeedback: result.validationFeedback || "Documento analisado.",
-            status: expirationDate ? evaluateStatus(expirationDate) : "valid"
+            documentMatchesRow: undefined,
+            validationFeedback: undefined,
+            status: targetCert?.status || "valid"
           };
-
-          // Update cert state
-          setCerts(prev => prev.map(c => c.id === certId ? updatedCert : c));
-
-          // Sync instantly to Supabase
-          saveCertificateToSupabase(updatedCert).catch(err => console.warn("Erro ao salvar anexo no Supabase:", err));
-
-          // Process and merge extracted company data
-          if (result.extractedCompanyData) {
-            const ext = result.extractedCompanyData;
-            const updated = { ...companyData };
-            let updatedKeys: string[] = [];
-
-            if (ext.razonSocial && ext.razonSocial.trim() !== "") {
-              updated.razonSocial = ext.razonSocial;
-              updatedKeys.push("Razão Social");
-            }
-            if (ext.cnpj && ext.cnpj.trim() !== "") {
-              updated.cnpj = ext.cnpj;
-              updatedKeys.push("CNPJ");
-            }
-            if (ext.address && ext.address.trim() !== "") {
-              updated.address = ext.address;
-              updatedKeys.push("Endereço");
-            }
-            if (ext.phone && ext.phone.trim() !== "") {
-              updated.phone = ext.phone;
-              updatedKeys.push("Telefone");
-            }
-            if (ext.email && ext.email.trim() !== "") {
-              updated.email = ext.email;
-              updatedKeys.push("E-mail");
-            }
-            if (ext.representativeName && ext.representativeName.trim() !== "") {
-              updated.representativeName = ext.representativeName;
-              updatedKeys.push("Representante Legal");
-            }
-            if (ext.representativeCpf && ext.representativeCpf.trim() !== "") {
-              updated.representativeCpf = ext.representativeCpf;
-              updatedKeys.push("CPF Representante");
-            }
-
-            if (updatedKeys.length > 0) {
-              setCompanyData(updated);
-              setInfoMessage(`IA extraiu do documento e atualizou seu cadastro: ${updatedKeys.join(", ")}`);
-              // Auto dismiss
-              setTimeout(() => setInfoMessage(null), 10000);
-            }
-          }
-
-          confetti({ particleCount: 65, spread: 60, origin: { y: 0.8 } });
-        } else {
-          triggerAlert("A IA analisou o arquivo, mas não retornou um formato de dados esperado.");
+          setCerts(prev => prev.map(c => c.id === certId ? fallbackCert : c));
+          saveCertificateToSupabase(fallbackCert).catch(err => console.warn("Erro ao salvar anexo fallback no Supabase:", err));
+        } finally {
+          setAnalyzingId(null);
         }
-      } catch (err: any) {
-        console.error(err);
-        triggerAlert("Erro na análise da IA. O arquivo foi anexado com sucesso para preenchimento manual.");
-        // Fallback: mark as uploaded but allow user to specify a date manually by editing
-        const targetCert = certs.find(c => c.id === certId);
-        const fallbackCert = {
-          ...targetCert,
-          id: certId,
-          name: targetCert?.name || "",
-          notes: targetCert?.notes || "",
-          fileUploaded: true,
-          fileName: file.name,
-          documentMatchesRow: undefined,
-          validationFeedback: undefined,
-          status: targetCert?.status || "valid"
-        };
-        setCerts(prev => prev.map(c => c.id === certId ? fallbackCert : c));
-        saveCertificateToSupabase(fallbackCert).catch(err => console.warn("Erro ao salvar anexo fallback no Supabase:", err));
-      } finally {
+      };
+
+      reader.onerror = () => {
+        triggerAlert("Falha ao carregar arquivo de certidão.");
         setAnalyzingId(null);
-      }
-    };
+      };
 
-    reader.onerror = () => {
-      triggerAlert("Falha ao carregar arquivo de certidão.");
-      setAnalyzingId(null);
-    };
-
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(processedFile as File);
+    } catch (compressErr) {
+      console.warn("Error compressing image client-side:", compressErr);
+      // fallback to original file if compression fails
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const base64String = (e.target?.result as string).split(",")[1];
+          const response = await apiFetch("/api/analyze-cert", {
+            method: "POST",
+            body: {
+              fileBase64: base64String,
+              fileName: file.name,
+              fileType: file.type || "application/pdf",
+              docName: certs.find(c => c.id === certId)?.name || ""
+            }
+          });
+          if (!response.ok) throw new Error("Erro de processamento.");
+          const data = await response.json();
+          const result = data.result;
+          if (result) {
+            const expirationDate = result.expirationDate || "";
+            const targetCert = certs.find(c => c.id === certId);
+            const updatedCert = {
+              ...targetCert,
+              id: certId,
+              name: targetCert?.name || "",
+              notes: targetCert?.notes || "",
+              expirationDate,
+              fileUploaded: true,
+              fileName: file.name,
+              documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
+              validationFeedback: result.validationFeedback || "Documento analisado.",
+              status: expirationDate ? evaluateStatus(expirationDate) : "valid"
+            };
+            setCerts(prev => prev.map(c => c.id === certId ? updatedCert : c));
+            saveCertificateToSupabase(updatedCert).catch(err => console.warn(err));
+          }
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setAnalyzingId(null);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleUploadFile = async (certId: string, event: React.ChangeEvent<HTMLInputElement>) => {
@@ -999,10 +1094,10 @@ Retorne exclusivamente o JSON estruturado.
   });
 
   return (
-    <div id="company-docs-tab" className="grid grid-cols-1 xl:grid-cols-3 gap-6 font-sans">
+    <div id="company-docs-tab" className="space-y-6 font-sans">
       
       {/* Col 1 & 2: Document Index */}
-      <div className="xl:col-span-2 min-w-0 space-y-6">
+      <div className="w-full min-w-0 space-y-6">
         
         {/* Company Identity Profile */}
         <div id="company-profile" className="bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-5 shadow-lg relative overflow-hidden group">
@@ -1758,161 +1853,6 @@ Retorne exclusivamente o JSON estruturado.
           </div>
 
         </div>
-      </div>
-
-      {/* Col 3: Compatibility with active Edital */}
-      <div className="space-y-6">
-        
-        {/* Active Edital Box Card */}
-        <div className="bg-white/5 border border-white/10 backdrop-blur-md text-white rounded-xl shadow-lg p-6">
-          <div className="flex items-center gap-2.5 mb-4">
-            <div className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 p-2 rounded-lg">
-              <Layers className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-white text-base">Edital em Seleção</h3>
-              <p className="text-slate-400 text-xs">Exigências mapeadas</p>
-            </div>
-          </div>
-
-          {activeEdital ? (
-            <div className="space-y-4 font-sans">
-              <div className="border-b border-white/10 pb-3">
-                <span className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">Pronto para Análise</span>
-                <p className="font-medium text-slate-200 mt-2 text-sm leading-snug line-clamp-2">
-                  {activeEdital.descricaoProduto}
-                </p>
-              </div>
-
-              <div className="space-y-2.5">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                  <CheckSquare className="w-3.5 h-3.5 text-indigo-400" />
-                  Habilitações Exigidas ({activeEdital.documentosExigidos.length})
-                </p>
-                <div className="max-h-36 overflow-y-auto space-y-1.5 text-xs text-slate-300 pr-1 select-none">
-                  {activeEdital.documentosExigidos.map((doc, idx) => (
-                    <div key={idx} className="flex gap-2 items-start py-0.5">
-                      <span className="bg-white/10 border border-white/10 text-slate-300 rounded h-4 w-4 shrink-0 flex items-center justify-center text-[10px] font-bold">
-                        {idx + 1}
-                      </span>
-                      <span className="leading-tight text-slate-200">{doc}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                onClick={runCompatibilityAnalysis}
-                className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 active:scale-[0.98] text-white font-semibold py-2.5 px-4 rounded-lg text-sm flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md shadow-indigo-950/50 mt-2"
-              >
-                <ShieldCheck className="w-4.5 h-4.5" />
-                Dossiê de Compatibilidade
-              </button>
-            </div>
-          ) : (
-            <div className="text-center py-6 space-y-3 font-sans">
-              <FileWarning className="w-10 h-10 text-slate-600 mx-auto" />
-              <p className="text-slate-400 text-xs leading-normal">
-                Nenhum edital foi submetido ou analisado ainda na Aba de Análises.
-              </p>
-              <p className="text-[11px] text-slate-500">
-                Faça o upload do documento na primeira aba para habilitar o analisador de compatibilidade de certidões corporativas.
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Compatibility Result Drawer */}
-        {compatibilityResult && (
-          <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-5 space-y-4 animate-fade-in text-white shadow-lg">
-            {compatibilityResult.loading ? (
-              <div className="py-8 text-center space-y-3">
-                <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin mx-auto" />
-                <p className="text-slate-200 text-xs font-medium">Processando certidões cadastrais no painel fiscal...</p>
-                <p className="text-[11px] text-slate-400">Gemini cruzando validades tributárias com cláusulas habilitatórias.</p>
-              </div>
-            ) : (
-              <div className="space-y-4 font-sans">
-                <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                  <h4 className="font-bold text-white text-sm flex items-center gap-1.5">
-                    <ShieldCheck className="w-4.5 h-4.5 text-indigo-400" />
-                    Resultado do Cruzamento
-                  </h4>
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-slate-400">Aptidão:</span>
-                    <span className={`text-base font-extrabold ${
-                      compatibilityResult.score >= 80 ? "text-emerald-400" :
-                      compatibilityResult.score >= 50 ? "text-amber-400" : "text-rose-400"
-                    }`}>
-                      {compatibilityResult.score}%
-                    </span>
-                  </div>
-                </div>
-
-                {/* Score slider */}
-                <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden border border-white/5">
-                  <div 
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      compatibilityResult.score >= 80 ? "bg-emerald-500" :
-                      compatibilityResult.score >= 50 ? "bg-amber-500" : "bg-rose-500"
-                    }`}
-                    style={{ width: `${compatibilityResult.score}%` }}
-                  />
-                </div>
-
-                <p className="text-xs text-slate-200 leading-normal bg-white/5 rounded-lg p-3 border border-white/5">
-                  {compatibilityResult.summary}
-                </p>
-
-                {/* Warnings / Reprovations */}
-                {compatibilityResult.warnings.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider flex items-center gap-1">
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                      Alertas e Pendências ({compatibilityResult.warnings.length})
-                    </p>
-                    <ul className="space-y-2 text-xs text-slate-300">
-                      {compatibilityResult.warnings.map((w, idx) => (
-                        <li key={idx} className="flex gap-2 items-start bg-rose-500/10 p-2.5 rounded-md border border-rose-500/20">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0 mt-1.5" />
-                          <span className="leading-snug text-rose-100">{w}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Passes / Approved Certs */}
-                {compatibilityResult.passes.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1">
-                      <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                      Documentos em Conformidade ({compatibilityResult.passes.length})
-                    </p>
-                    <ul className="space-y-1.5 text-xs text-slate-300 pl-1">
-                      {compatibilityResult.passes.map((p, idx) => (
-                        <li key={idx} className="flex gap-2 items-start py-0.5">
-                          <span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0 mt-2" />
-                          <span className="leading-tight text-slate-400">{p}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* Footnote advice */}
-                <div className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-lg p-3 text-xs leading-normal flex gap-2">
-                  <HelpCircle className="w-5 h-5 text-indigo-400 shrink-0" />
-                  <span>
-                    Caso alguma certidão esteja vencida, você pode usar o <strong>Chat Assistente</strong> ao lado para pedir orientação de como emiti-la ou formalizar pedido de prorrogação regulamentar se aplicável.
-                  </span>
-                </div>
-
-              </div>
-            )}
-          </div>
-        )}
-
       </div>
 
       {confirmDialog && (

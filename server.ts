@@ -1746,10 +1746,12 @@ Identificamos **2 irregularidades de gravidade ALTA** que servem como fundamenta
         });
       }
 
-      const basePrompt = `
-Você é uma inteligência artificial especialista em auditoria e análise de documentos fiscais, certidões públicas e contratos societários brasileiros (ex: CND, CNPJ, Contrato Social, etc.).
-O usuário está preenchendo o campo de certidão/documento denominado exatamente como: "${docName || fileName}".
-Sua tarefa é analisar o documento fornecido (conteúdo em imagem/pdf ou inferindo detalhes se o arquivo for texto básico) para extrair dados oficiais E realizar um teste de conformidade de tipo.
+      contentParts.push({
+        text: `O usuário está preenchendo o campo de certidão/documento denominado exatamente como: "${docName || fileName}". O nome do arquivo enviado é "${fileName}". Por favor, analise as informações contidas no documento anexado e preencha a estrutura JSON de retorno.`
+      });
+
+      const systemInstruction = `Você é uma inteligência artificial especialista em auditoria e análise de documentos fiscais, certidões públicas e contratos societários brasileiros (ex: CND, CNPJ, Contrato Social, etc.).
+Sua tarefa é analisar o documento fornecido para extrair dados oficiais E realizar um teste de conformidade de tipo de acordo com a exigência informada.
 
 --- REGRA DE SEGURANÇA MÁXIMA DE DATA DE VENCIMENTO (EXPIRATION DATE) ---
 A análise da DATA DE VENCIMENTO do documento de certidão fiscal não pode errar sob hipótese alguma! A data deve ser extraída com precisão absoluta de 100%. Siga rigorosamente este protocolo de validação:
@@ -1764,7 +1766,7 @@ A análise da DATA DE VENCIMENTO do documento de certidão fiscal não pode erra
 6. FORMATO DE SAÍDA: A data de vencimento final deve estar estritamente formatada como uma string "YYYY-MM-DD" (ex: "2026-12-15"). Se for atemporal, retorne "".
 
 REGRAS CRÍTICAS DE COMPATIBILIDADE (Evite classificar documentos corretos como incompatíveis!):
-Seja extremamente flexível, inteligente e tolerante com abreviações, sinônimos, órgãos emissores e variações de nomenclatura comuns no Brasil. O "documentMatchesRow" deve ser TRUE sempre que o arquivo enviado servir para comprovar a exigência descrita no campo "${docName || fileName}".
+Seja extremamente flexível, inteligente e tolerante com abreviações, sinônimos, órgãos emissores e variações de nomenclatura comuns no Brasil. O "documentMatchesRow" deve ser TRUE sempre que o arquivo enviado servir para comprovar a exigência descrita no campo solicitado.
 
 Considere as seguintes equivalências como VÁLIDAS (documentMatchesRow = true):
 1. Exigência "FGTS" ou "Regularidade do FGTS" ou "CRF": Aceita "Certificado de Regularidade do FGTS", "CRF", "Situação de Regularidade do Empregador", emitida pela Caixa Econômica Federal (CEF).
@@ -1775,35 +1777,30 @@ Considere as seguintes equivalências como VÁLIDAS (documentMatchesRow = true):
 6. Exigência "Falência e Recuperação Judicial", "Falência", "Recuperação": Aceita "Certidão Negativa de Falência e Recuperação Judicial", "Certidão de Distribuição Cível (Ações de Falência e Concordata)", emitida pelo Tribunal de Justiça do estado sede.
 7. Exigência "CNPJ" ou "Cartão CNPJ": Aceita "Comprovante de Inscrição e de Situação Cadastral" do CNPJ da Receita Federal.
 8. Exigência "Contrato Social", "Estatuto Social", "Estatuto", "Constituição", "Requerimento de Empresário": Aceita Contrato Social consolidado, alterações contratuais, estatuto social de S/A acompanhado de ata de eleição da diretoria, ou documento de empresário individual correspondente.
-9. Se o nome do arquivo carregado pelo usuário ou o conteúdo sugerir forte correlação com o nome do campo "${docName || fileName}", marque como "documentMatchesRow" = true.
+9. Se o nome do arquivo carregado pelo usuário ou o conteúdo sugerir forte correlação com o nome do campo de destino, marque como "documentMatchesRow" = true.
 
 Apenas retorne "documentMatchesRow" = false se o documento enviado for bizarramente desconexo do campo de destino (ex: enviou uma certidão de FGTS no campo de Contrato Social, ou um CNPJ no campo da CNDT). Caso contrário, se for um equivalente ou se houver dúvida razoável, sempre dê preferência por aceitar (true) e use o campo "validationFeedback" para dar uma orientação ou aviso amigável.
 
 Retorne um objeto JSON contendo exatamente os seguintes campos em português brasileiro:
-
-1. "expirationDate": Uma string correspondente à data de validade/vencimento do documento no formato "YYYY-MM-DD" (Ex: "2026-10-31") seguindo as REGRAS DE SEGURANÇA MÁXIMA DE DATA acima. Se for permanente ou sem vencimento, retorne "".
+1. "expirationDate": Uma string correspondente à data de validade/vencimento do documento no formato "YYYY-MM-DD". Se for permanente ou sem vencimento, retorne "".
 2. "documentMatchesRow": Um valor booleano (true ou false) conforme as regras de compatibilidade acima.
-3. "validationFeedback": Uma frase de justificativa bem esclarecedora (Ex: "Documento validado com sucesso como CRF FGTS ativo." ou "Atenção: Identificamos que este arquivo é um Comprovante de Inscrição Cadastral do CNPJ, mas o campo atual exige o Contrato Social. Por favor, ajuste o upload.").
+3. "validationFeedback": Uma frase de justificativa bem esclarecedora.
 4. "extractedCompanyData": Um objeto contendo dados da empresa que você conseguir identificar ou deduzir com base no conteúdo lido do documento (como um Contrato Social, CNPJ ou CND). Deixe os campos vazios caso não localize no documento:
-   - "razonSocial": Razão Social / Nome da empresa (Ex: "Empresa de Alimentos Alfa Ltda")
-   - "cnpj": Número do CNPJ formatado ou não (Ex: "12.345.678/0001-90")
-   - "address": Endereço completo (Ex: "Av. Paulista, 1000, São Paulo - SP")
+   - "razonSocial": Razão Social / Nome da empresa
+   - "cnpj": Número do CNPJ formatado ou não
+   - "address": Endereço completo
    - "phone": Telefone de contato
    - "email": E-mail corporativo
-   - "representativeName": Nome do representante legal, sócio administrador ou outorgado (comum em Contratos Sociais)
+   - "representativeName": Nome do representante legal, sócio administrador ou outorgado
    - "representativeCpf": CPF do representante/sócio
 
-Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o esquema e não adicione texto explicativo ou markdown fora das chaves do JSON.
-`;
-
-      contentParts.push({
-        text: basePrompt
-      });
+Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o esquema e não adicione texto explicativo ou markdown fora das chaves do JSON.`;
 
       console.log(`Chamando AI Router para análise da certidão: ${docName || fileName}...`);
       const response = await generateAiResponse({
         model: "gemini-3.5-flash",
         contents: contentParts,
+        systemInstruction,
         aiConfig,
         jsonMode: true,
         responseSchema: {
