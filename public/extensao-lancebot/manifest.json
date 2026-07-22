@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LanceBot Pro - Capturador de Sessão",
+  "name": "HORASIS LanceBot Pro - Capturador de Sessão",
   "version": "1.0.0",
-  "description": "Captura de forma segura e automática tokens de autorização e cookies do Compras.gov.br e sincroniza diretamente com seu robô LanceBot.",
+  "description": "Captura de forma segura e automática tokens de autorização e cookies do Compras.gov.br e sincroniza diretamente com a plataforma HORASIS.",
   "permissions": [
     "webRequest",
     "storage",

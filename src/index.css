@@ -26,11 +26,16 @@ html.light {
   --text-muted: #64748b;
 }
 
-html, body {
-  scroll-behavior: smooth;
-  -webkit-overflow-scrolling: touch;
-  overflow-x: hidden;
+html {
   min-height: 100%;
+  height: -webkit-fill-available;
+  scroll-behavior: auto; /* Avoid mobile touch scrolling physics conflicts */
+}
+
+@media (min-width: 1024px) {
+  html {
+    scroll-behavior: smooth; /* Keep smooth scroll on desktop */
+  }
 }
 
 body {
@@ -39,6 +44,11 @@ body {
   background-image: none !important;
   color: var(--text-primary);
   min-height: 100vh;
+  min-height: -webkit-fill-available;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-y: auto;
 }
 
 #application-container,

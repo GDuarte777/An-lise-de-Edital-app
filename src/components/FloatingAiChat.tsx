@@ -464,38 +464,49 @@ PARECER E ESTRATÉGIA:
     setShowSidebarMobile(false);
   };
 
-  const handleDeleteChat = (e: React.MouseEvent, idToDelete: string) => {
+  const handleDeleteChat = async (e: React.MouseEvent, idToDelete: string) => {
     e.stopPropagation();
     
-    deleteChatSessionFromSupabase(idToDelete).catch((err) => console.warn("Erro ao deletar sessão de chat do Supabase:", err));
+    // Deleta permanentemente no banco de dados Supabase
+    try {
+      await deleteChatSessionFromSupabase(idToDelete);
+    } catch (err) {
+      console.warn("Erro ao deletar sessão de chat do Supabase:", err);
+    }
+
+    // Atualiza o estado local removendo a sessão
     const updated = sessions.filter(s => s.id !== idToDelete);
     
     if (updated.length === 0) {
-      // Re-create a default one if all were deleted
+      // Se apagar todas as conversas, cria uma nova limpa
+      const newDefaultId = `chat-${Date.now()}`;
       const defaultS: ChatSession = {
-        id: "chat-default",
+        id: newDefaultId,
         title: "Chat Principal",
-        selectedEditalId: "active",
+        selectedEditalId: activeEdital ? "active" : "",
         messages: [
           {
             id: `msg-init-${Date.now()}`,
             role: "assistant",
-            content: `Olá! Sou o seu **Assessor de Licitações Inteligente**. Como posso te ajudar hoje?`,
+            content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
             timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
           }
         ],
         createdAt: new Date().toLocaleString("pt-BR")
       };
       setSessions([defaultS]);
-      setActiveSessionId("chat-default");
+      setActiveSessionId(newDefaultId);
+      localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
+      saveChatSessionToSupabase(defaultS).catch(() => {});
     } else {
       setSessions(updated);
+      localStorage.setItem("aip_chat_sessions", JSON.stringify(updated));
       if (activeSessionId === idToDelete) {
         setActiveSessionId(updated[0].id);
       }
     }
 
-    // Trigger sweet success of storage deletion
+    // Comemoração visual da exclusão concluída
     confetti({ particleCount: 30, spread: 40, colors: ["#ef4444", "#f87171"] });
     setShowSidebarMobile(true);
   };
@@ -899,8 +910,8 @@ PARECER E ESTRATÉGIA:
 
             {/* Sidebar Footer */}
             <div className="p-3 border-t border-white/10 bg-slate-950/20 text-[10px] text-slate-400 flex flex-col gap-1 select-none">
-              <p>📌 *Bco. Dados*: LocalStorage</p>
-              <p>🗑️ Ao excluir, o espaço é liberado.</p>
+              <p>📌 *Banco de Dados*: Supabase + Local Storage</p>
+              <p>🗑️ A exclusão apaga definitivamente no banco e layout.</p>
             </div>
           </div>
 
@@ -933,6 +944,15 @@ PARECER E ESTRATÉGIA:
               </div>
               
               <div className="flex items-center gap-2">
+                <button
+                  onClick={(e) => handleDeleteChat(e, activeSession.id)}
+                  className="text-xs text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 bg-red-500/10 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                  title="Apagar este chat definitivamente do layout e banco de dados"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Excluir Chat</span>
+                </button>
+
                 {isDesktop && (width !== DEFAULT_WIDTH || height !== DEFAULT_HEIGHT) && (
                   <button
                     onClick={() => {

@@ -12,6 +12,17 @@ let globalTheme: ThemeMode = (() => {
   } catch (e) {
     console.warn("localStorage is not available:", e);
   }
+  try {
+    const match = document.cookie.match(/(^|;)\s*theme\s*=\s*([^;]+)/);
+    if (match) {
+      const stored = match[2] as ThemeMode;
+      if (stored === "light" || stored === "dark" || stored === "system") {
+        return stored;
+      }
+    }
+  } catch (e) {
+    console.warn("Cookies are not available:", e);
+  }
   return "system";
 })();
 
@@ -23,6 +34,11 @@ function setGlobalTheme(newTheme: ThemeMode) {
     localStorage.setItem("theme", newTheme);
   } catch (e) {
     console.warn("Could not save theme to localStorage:", e);
+  }
+  try {
+    document.cookie = `theme=${newTheme};path=/;max-age=31536000;SameSite=Lax`;
+  } catch (e) {
+    console.warn("Could not save theme to cookie:", e);
   }
   listeners.forEach((listener) => listener(newTheme));
 }

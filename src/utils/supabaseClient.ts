@@ -523,14 +523,41 @@ export async function deleteChatSessionFromSupabase(id: string): Promise<boolean
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    if (!user) return false;
-    const { error } = await client
-      .from("sessoes_chat")
-      .delete()
-      .eq("id", id)
-      .eq("user_id", user.id);
-    return !error;
-  } catch {
+    let query = client.from("sessoes_chat").delete().eq("id", id);
+    if (user) {
+      query = query.eq("user_id", user.id);
+    }
+    const { error } = await query;
+    if (error) {
+      console.warn("deleteChatSessionFromSupabase error:", error.message || error);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn("deleteChatSessionFromSupabase exception:", err?.message || err);
+    return false;
+  }
+}
+
+export async function clearAllChatSessionsInSupabase(): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const user = await getActiveUser();
+    let query = client.from("sessoes_chat").delete();
+    if (user) {
+      query = query.eq("user_id", user.id);
+    } else {
+      query = query.neq("id", "");
+    }
+    const { error } = await query;
+    if (error) {
+      console.warn("clearAllChatSessionsInSupabase error:", error.message || error);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn("clearAllChatSessionsInSupabase exception:", err?.message || err);
     return false;
   }
 }

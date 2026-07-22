@@ -372,7 +372,7 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
       const savedNode = addSyncedItem(title, type, markdownText);
       setSyncDone(true);
       
-      onAddLog(`Sincronizado "${title}" com sucesso na pasta 'Analisador_Pregões/${type === "proposal" ? "Propostas" : "Declarações"}' no Google Drive.`);
+      onAddLog(`Sincronizado "${title}" com sucesso na pasta 'HORASIS_Licitações/${type === "proposal" ? "Propostas" : "Declarações"}' no Google Drive.`);
       confetti({ particleCount: 50, spread: 50, colors: ["#10b981", "#3b82f6"] });
     } catch (e) {
       console.error(e);

@@ -515,8 +515,8 @@ export default function App() {
             <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-1.5 rounded-lg">
               <ShieldCheck className="w-5 h-5" />
             </div>
-            <h1 className="text-sm font-bold tracking-tight text-white">
-              Analisador Inteligente
+            <h1 className="text-sm font-bold tracking-tight text-white uppercase font-mono">
+              HORASIS
             </h1>
           </div>
         </div>
@@ -541,11 +541,11 @@ export default function App() {
               </div>
               {(!sidebarCollapsed || mobileMenuOpen) && (
                 <div className="transition-opacity duration-200">
-                  <h1 className="text-sm font-bold tracking-tight text-white leading-tight truncate">
-                    Analisador de Editais
+                  <h1 className="text-base font-black tracking-tight text-white leading-tight truncate">
+                    HORASIS
                   </h1>
-                  <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider font-semibold truncate">
-                    Auditoria de Certames
+                  <p className="text-[10px] text-indigo-400 mt-0.5 uppercase tracking-wider font-semibold truncate">
+                    Licitações Inteligentes
                   </p>
                 </div>
               )}
@@ -846,8 +846,10 @@ export default function App() {
         {/* Top bar header only for desktop to show page details & header spacing */}
         <header className="hidden lg:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-30">
           <div>
-            <h2 className="text-sm font-bold text-white tracking-wide uppercase">
-              Painel Operacional
+            <h2 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2">
+              <span className="text-indigo-400 font-extrabold">HORASIS</span>
+              <span className="text-slate-600">|</span>
+              <span>Painel Operacional</span>
             </h2>
             <p className="text-slate-400 text-xs mt-0.5">
               {activeTab === "analyzer" ? "Carregamento e Inteligência Artificial de Editais" :

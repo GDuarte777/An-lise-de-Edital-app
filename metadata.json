@@ -1,6 +1,6 @@
 {
-  "name": "Analisador de Editais",
-  "description": "Plataforma inteligente para upload e análise de editais de pregão eletrônico, criação de propostas e declarações automatizadas, integração ao Google Drive e Sheets, e gestão de certidões corporativas.",
+  "name": "HORASIS",
+  "description": "HORASIS — Plataforma Inteligente de Licitações Públicas: Análise de editais, radar PNCP, robô de lances, criação de propostas e precificação automatizada.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

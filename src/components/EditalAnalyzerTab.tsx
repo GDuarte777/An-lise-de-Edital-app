@@ -791,7 +791,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               <div className="space-y-3 leading-normal">
                 <h4 className="font-semibold text-white flex items-center gap-1.5 text-sm">
                   <HelpCircle className="w-4 h-4 text-indigo-400" />
-                  Como funciona o Analisador de Pregões?
+                  Como funciona a inteligência HORASIS?
                 </h4>
                 <p>
                   O processador utiliza o modelo <strong>Gemini 3.5-flash</strong> para decifrar a hermenêutica jurídica pesada de editais de licitação, economizando horas cruciais de leitura árdua:

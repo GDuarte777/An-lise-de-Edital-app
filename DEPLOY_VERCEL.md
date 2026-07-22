@@ -1,4 +1,4 @@
-# Guia de Implantação (Deploy) na Vercel — Plataforma LanceBot
+# Guia de Implantação (Deploy) na Vercel — Plataforma HORASIS
 
 Este guia detalha os passos, configurações e as **importantes considerações arquiteturais** necessárias para implantar esta plataforma na **Vercel**.
 

@@ -115,8 +115,8 @@ export default function SupabaseLoginScreen({ onLoginSuccess }: SupabaseLoginScr
             <ShieldCheck className="w-8 h-8" />
           </div>
           <div>
-            <h1 className="text-xl font-black text-white tracking-tight uppercase">Portal de Licitações</h1>
-            <p className="text-xs text-slate-400 font-medium">Assessor Inteligente Multi-Tenant Supabase</p>
+            <h1 className="text-2xl font-black text-white tracking-tight uppercase font-sans">HORASIS</h1>
+            <p className="text-xs text-indigo-400 font-medium mt-0.5">Plataforma Inteligente de Licitações Públicas</p>
           </div>
         </div>
 

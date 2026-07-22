@@ -96,7 +96,7 @@ export function getConnectedUserEmail(): string | null {
   return auth.currentUser?.email || null;
 }
 
-export function addSyncedItem(name: string, type: "document" | "sheet" | "proposal" | "declaration", content: string, pathPrefix = "Analisador_Pregões/") {
+export function addSyncedItem(name: string, type: "document" | "sheet" | "proposal" | "declaration", content: string, pathPrefix = "HORASIS_Licitações/") {
   const items = getSyncedItems();
   
   const ext = type === "sheet" ? "" : ".md";
