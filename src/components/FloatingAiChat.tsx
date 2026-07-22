@@ -14,7 +14,8 @@ import {
   callSupabaseGeminiEdgeFunction,
   fetchChatSessionsFromSupabase,
   saveChatSessionToSupabase,
-  deleteChatSessionFromSupabase
+  deleteChatSessionFromSupabase,
+  clearAllChatSessionsInSupabase
 } from "../utils/supabaseClient";
 
 interface FloatingAiChatProps {
@@ -399,17 +400,46 @@ PARECER E ESTRATÉGIA:
     return titleWords.join(" ");
   };
 
+  const [isLoadedFromDb, setIsLoadedFromDb] = useState(false);
+
   // Load from Supabase on mount
   useEffect(() => {
     async function loadChatSessions() {
       try {
         const dbSessions = await fetchChatSessionsFromSupabase();
-        if (dbSessions && dbSessions.length > 0) {
-          setSessions(dbSessions);
-          setActiveSessionId(dbSessions[0].id);
+        if (dbSessions !== null) {
+          if (dbSessions.length > 0) {
+            setSessions(dbSessions);
+            setActiveSessionId(dbSessions[0].id);
+            localStorage.setItem("aip_chat_sessions", JSON.stringify(dbSessions));
+          } else {
+            // Se no Supabase a lista de conversas estiver vazia (ex: usuário deletou todas),
+            // limpa o localStorage também para não ressuscitar chats deletados
+            const newDefaultId = `chat-${Date.now()}`;
+            const defaultS: ChatSession = {
+              id: newDefaultId,
+              title: "Chat Principal",
+              selectedEditalId: activeEdital ? "active" : "",
+              messages: [
+                {
+                  id: `msg-init-${Date.now()}`,
+                  role: "assistant",
+                  content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
+                  timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+                }
+              ],
+              createdAt: new Date().toLocaleString("pt-BR")
+            };
+            setSessions([defaultS]);
+            setActiveSessionId(newDefaultId);
+            localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
+            saveChatSessionToSupabase(defaultS).catch(() => {});
+          }
         }
       } catch (e) {
         console.warn("Erro ao carregar sessões de chat do Supabase:", e);
+      } finally {
+        setIsLoadedFromDb(true);
       }
     }
     loadChatSessions();
@@ -417,6 +447,9 @@ PARECER E ESTRATÉGIA:
 
   // Sync sessions with localStorage, Supabase and update scroll
   useEffect(() => {
+    // IMPORTANTE: Só sincroniza com Supabase APÓS ter carregado do banco de dados na inicialização
+    if (!isLoadedFromDb) return;
+
     localStorage.setItem("aip_chat_sessions", JSON.stringify(sessions));
     
     // Sync to Supabase in background
@@ -427,7 +460,7 @@ PARECER E ESTRATÉGIA:
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [sessions, activeSessionId, isOpen]);
+  }, [sessions, activeSessionId, isOpen, isLoadedFromDb]);
 
   const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
 
@@ -467,18 +500,17 @@ PARECER E ESTRATÉGIA:
   const handleDeleteChat = async (e: React.MouseEvent, idToDelete: string) => {
     e.stopPropagation();
     
-    // Deleta permanentemente no banco de dados Supabase
+    // 1. Deleta permanentemente no Supabase
     try {
       await deleteChatSessionFromSupabase(idToDelete);
     } catch (err) {
       console.warn("Erro ao deletar sessão de chat do Supabase:", err);
     }
 
-    // Atualiza o estado local removendo a sessão
+    // 2. Atualiza estado local e localStorage
     const updated = sessions.filter(s => s.id !== idToDelete);
     
     if (updated.length === 0) {
-      // Se apagar todas as conversas, cria uma nova limpa
       const newDefaultId = `chat-${Date.now()}`;
       const defaultS: ChatSession = {
         id: newDefaultId,
@@ -497,7 +529,7 @@ PARECER E ESTRATÉGIA:
       setSessions([defaultS]);
       setActiveSessionId(newDefaultId);
       localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
-      saveChatSessionToSupabase(defaultS).catch(() => {});
+      await saveChatSessionToSupabase(defaultS).catch(() => {});
     } else {
       setSessions(updated);
       localStorage.setItem("aip_chat_sessions", JSON.stringify(updated));
@@ -506,9 +538,43 @@ PARECER E ESTRATÉGIA:
       }
     }
 
-    // Comemoração visual da exclusão concluída
     confetti({ particleCount: 30, spread: 40, colors: ["#ef4444", "#f87171"] });
     setShowSidebarMobile(true);
+  };
+
+  const handleClearAllChats = async () => {
+    if (!window.confirm("Tem certeza que deseja APAGAR DEFINITIVAMENTE todas as conversas do histórico e banco de dados?")) {
+      return;
+    }
+
+    try {
+      await clearAllChatSessionsInSupabase();
+    } catch (err) {
+      console.warn("Erro ao limpar histórico no Supabase:", err);
+    }
+
+    const newDefaultId = `chat-${Date.now()}`;
+    const defaultS: ChatSession = {
+      id: newDefaultId,
+      title: "Chat Principal",
+      selectedEditalId: activeEdital ? "active" : "",
+      messages: [
+        {
+          id: `msg-init-${Date.now()}`,
+          role: "assistant",
+          content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
+          timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+        }
+      ],
+      createdAt: new Date().toLocaleString("pt-BR")
+    };
+
+    setSessions([defaultS]);
+    setActiveSessionId(newDefaultId);
+    localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
+    await saveChatSessionToSupabase(defaultS).catch(() => {});
+
+    confetti({ particleCount: 50, spread: 60, colors: ["#ef4444", "#f87171"] });
   };
 
   const handleStartRename = (e: React.MouseEvent, s: ChatSession) => {
@@ -874,7 +940,7 @@ PARECER E ESTRATÉGIA:
                       )}
 
                       {!isEditing && (
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                           <button
                             onClick={(e) => handleStartRename(e, s)}
                             className="p-1 text-slate-400 hover:text-white hover:bg-white/10 rounded"
@@ -885,7 +951,7 @@ PARECER E ESTRATÉGIA:
                           <button
                             onClick={(e) => handleDeleteChat(e, s.id)}
                             className="p-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded"
-                            title="Apagar chat (limpa do DB)"
+                            title="Apagar chat definitivamente"
                           >
                             <Trash2 className="w-3 h-3" />
                           </button>
@@ -909,9 +975,19 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Sidebar Footer */}
-            <div className="p-3 border-t border-white/10 bg-slate-950/20 text-[10px] text-slate-400 flex flex-col gap-1 select-none">
-              <p>📌 *Banco de Dados*: Supabase + Local Storage</p>
-              <p>🗑️ A exclusão apaga definitivamente no banco e layout.</p>
+            <div className="p-3 border-t border-white/10 bg-slate-950/20 text-[10px] text-slate-400 flex flex-col gap-2 select-none">
+              <div className="flex flex-col gap-0.5">
+                <p>📌 *Banco de Dados*: Supabase + Local Storage</p>
+                <p>🗑️ A exclusão apaga definitivamente no banco e layout.</p>
+              </div>
+              <button
+                onClick={handleClearAllChats}
+                className="w-full py-1.5 px-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                title="Apagar todas as conversas do histórico"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Limpar Histórico Completo</span>
+              </button>
             </div>
           </div>
 

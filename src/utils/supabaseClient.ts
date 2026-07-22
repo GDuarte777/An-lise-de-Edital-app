@@ -465,18 +465,21 @@ export async function deleteCompetitorFromSupabase(id: string): Promise<boolean>
 }
 
 // 4. Sessões de Chat (sessoes_chat)
-export async function fetchChatSessionsFromSupabase(): Promise<any[]> {
+export async function fetchChatSessionsFromSupabase(): Promise<any[] | null> {
   const client = getSupabaseClient();
-  if (!client) return [];
+  if (!client) return null;
   try {
     const user = await getActiveUser();
-    if (!user) return [];
+    if (!user) return null;
     const { data, error } = await client
       .from("sessoes_chat")
       .select("*")
       .eq("user_id", user.id)
       .order("updated_at", { ascending: false });
-    if (error) return [];
+    if (error) {
+      console.warn("fetchChatSessionsFromSupabase error:", error.message);
+      return null;
+    }
     return (data || []).map(item => ({
       id: item.id,
       title: item.title,
@@ -484,8 +487,9 @@ export async function fetchChatSessionsFromSupabase(): Promise<any[]> {
       messages: item.messages,
       createdAt: item.created_at
     }));
-  } catch {
-    return [];
+  } catch (err: any) {
+    console.warn("fetchChatSessionsFromSupabase exception:", err?.message || err);
+    return null;
   }
 }
 
