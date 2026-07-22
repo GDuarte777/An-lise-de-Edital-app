@@ -2,12 +2,13 @@ import { useState, useEffect, useRef } from "react";
 import { 
   FileText, ShieldCheck, Database, FolderGit, FileSpreadsheet, CloudLightning, 
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, CheckCircle, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Menu, X, ChevronLeft, ChevronRight, Search, AlertTriangle, ChevronDown, Check
+  Menu, X, ChevronLeft, ChevronRight, Search, AlertTriangle, ChevronDown, Check, FileEdit
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
 import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
 import CompanyDocsTab from "./components/CompanyDocsTab";
+import CreateDocTab from "./components/CreateDocTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
 import ProductComparatorTab from "./components/ProductComparatorTab";
 import LanceBotTab from "./components/LanceBotTab";
@@ -44,7 +45,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab ] = useState<"analyzer" | "radar" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
+  const [activeTab, setActiveTab ] = useState<"analyzer" | "radar" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
@@ -612,6 +613,26 @@ export default function App() {
               <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Radar de Oportunidades</span>
             </button>
 
+            {/* Nav item: Criar Documentos */}
+            <button
+              id="tab-btn-create-doc"
+              onClick={() => {
+                setActiveTab("createDoc");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "createDoc"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Criar Documentos"
+            >
+              <FileEdit className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Criar Documentos</span>
+            </button>
+
             {/* Nav item: Gestão de Certidões */}
             <button
               id="tab-btn-documents"
@@ -854,6 +875,7 @@ export default function App() {
             <p className="text-slate-400 text-xs mt-0.5">
               {activeTab === "analyzer" ? "Carregamento e Inteligência Artificial de Editais" :
                activeTab === "radar" ? "Radar de Licitações Públicas Federais (PNCP)" :
+               activeTab === "createDoc" ? "Estúdio de Criação de Documentos & Propostas (Google Docs + IA)" :
                activeTab === "documents" ? "Gestão de Habilitação Jurídica e Fiscal" :
                activeTab === "calculator" ? "Modelagem Financeira e BDI de Licitações" :
                activeTab === "comparator" ? "Compatibilização Técnica de Especificações" :
@@ -915,6 +937,7 @@ export default function App() {
                   activeEdital={activeEdital}
                   setActiveEdital={setActiveEdital}
                   onOpenDocPreview={handleOpenDocPreview}
+                  onNavigateToCreateDoc={() => setActiveTab("createDoc")}
                 />
               ) : activeTab === "radar" ? (
                 <RadarOportunidadesTab 
@@ -925,6 +948,12 @@ export default function App() {
                       window.dispatchEvent(new Event("aip_trigger_external_text"));
                     }, 50);
                   }}
+                />
+              ) : activeTab === "createDoc" ? (
+                <CreateDocTab
+                  companyData={companyData}
+                  activeEdital={activeEdital}
+                  onOpenDocPreview={handleOpenDocPreview}
                 />
               ) : activeTab === "documents" ? (
                 <CompanyDocsTab 

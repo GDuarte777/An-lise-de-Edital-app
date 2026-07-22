@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { 
   X, FileText, Printer, Code, Eye, HardDriveDownload, Save, 
   CheckCircle, Database, FileSpreadsheet, ExternalLink, RefreshCw 
@@ -490,19 +491,25 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
         </div>
 
         {/* Content Viewer pane */}
-        <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-950/30">
-          {isEditing ? (
-            <textarea
-              value={markdownText}
-              onChange={(e) => setMarkdownText(e.target.value)}
-              className="w-full h-full p-4 border border-white/10 rounded-xl font-mono text-xs md:text-sm leading-relaxed focus:ring-1 focus:ring-indigo-500 focus:outline-none bg-slate-950/60 text-white placeholder-slate-500"
-              placeholder="Escreva aqui seu modelo estruturado..."
-            />
-          ) : (
-            <div className="markdown-body bg-slate-900/60 border border-white/10 rounded-2xl p-6 md:p-10 shadow-xl max-w-3xl mx-auto h-auto min-h-full text-slate-100">
-              <ReactMarkdown>{markdownText}</ReactMarkdown>
-            </div>
-          )}
+        <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-900/40">
+          <div 
+            className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-8 md:p-14 shadow-2xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
+            style={{ backgroundColor: "#ffffff", color: "#0f172a" }}
+          >
+            {isEditing ? (
+              <textarea
+                value={markdownText}
+                onChange={(e) => setMarkdownText(e.target.value)}
+                className="w-full h-full min-h-[500px] bg-white text-slate-900 font-sans text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500 border border-slate-300 p-4 rounded-lg selection:bg-indigo-100"
+                style={{ backgroundColor: "#ffffff", color: "#0f172a", lineHeight: "1.7" }}
+                placeholder="Escreva aqui seu modelo estruturado..."
+              />
+            ) : (
+              <div className="markdown-body text-slate-900">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdownText}</ReactMarkdown>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Sync Indicator footer */}

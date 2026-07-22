@@ -165,7 +165,140 @@ aside,
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* Document styling */
+/* Document styling - Force 100% Light/White Paper appearance in all dark/light modes */
+.official-a4-paper,
+.official-a4-paper * {
+  box-sizing: border-box;
+  color-scheme: light !important;
+}
+
+.official-a4-paper,
+.official-a4-paper.markdown-body,
+.official-a4-paper .markdown-body {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+.official-a4-paper h1,
+.official-a4-paper .markdown-body h1 {
+  font-size: 1.1rem !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+  background-color: #f1f5f9 !important;
+  border: 1px solid #cbd5e1 !important;
+  padding: 0.75rem 1rem !important;
+  border-radius: 0.5rem !important;
+  text-align: center !important;
+  text-transform: uppercase !important;
+  margin-top: 1rem !important;
+  margin-bottom: 1rem !important;
+}
+
+.official-a4-paper h2,
+.official-a4-paper .markdown-body h2 {
+  font-size: 0.95rem !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+  padding-bottom: 0.35rem !important;
+  text-align: center !important;
+  text-transform: uppercase !important;
+  margin-top: 1rem !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.official-a4-paper h3,
+.official-a4-paper .markdown-body h3 {
+  font-size: 0.85rem !important;
+  font-weight: 700 !important;
+  color: #0369a1 !important;
+  background-color: #e0f2fe !important;
+  border-left: 4px solid #0284c7 !important;
+  border-top: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  padding: 0.5rem 0.85rem !important;
+  border-radius: 0 0.375rem 0.375rem 0 !important;
+  text-transform: uppercase !important;
+  margin-top: 1.25rem !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.official-a4-paper p,
+.official-a4-paper .markdown-body p {
+  color: #1e293b !important;
+  line-height: 1.7 !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.official-a4-paper table,
+.official-a4-paper .markdown-body table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  background-color: #ffffff !important;
+  margin-top: 1rem !important;
+  margin-bottom: 1rem !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
+.official-a4-paper th,
+.official-a4-paper .markdown-body th {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+  font-weight: 700 !important;
+  border: 1px solid #cbd5e1 !important;
+  padding: 0.6rem 0.75rem !important;
+  font-size: 0.75rem !important;
+  text-transform: uppercase !important;
+}
+
+.official-a4-paper td,
+.official-a4-paper .markdown-body td {
+  background-color: #ffffff !important;
+  color: #1e293b !important;
+  border: 1px solid #e2e8f0 !important;
+  padding: 0.6rem 0.75rem !important;
+  font-size: 0.75rem !important;
+}
+
+.official-a4-paper tr:nth-child(even) td {
+  background-color: #f8fafc !important;
+}
+
+.official-a4-paper textarea,
+.official-a4-paper input {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #cbd5e1 !important;
+}
+
+.official-a4-paper textarea::placeholder,
+.official-a4-paper input::placeholder {
+  color: #94a3b8 !important;
+}
+
+.official-a4-paper blockquote,
+.official-a4-paper .markdown-body blockquote {
+  background-color: #f8fafc !important;
+  border-left: 4px solid #6366f1 !important;
+  color: #334155 !important;
+  padding: 0.5rem 1rem !important;
+  margin-bottom: 1rem !important;
+}
+
+.official-a4-paper strong,
+.official-a4-paper .markdown-body strong {
+  color: #0f172a !important;
+  font-weight: 700 !important;
+}
+
+.official-a4-paper hr,
+.official-a4-paper .markdown-body hr {
+  border-color: #e2e8f0 !important;
+  margin-top: 1.25rem !important;
+  margin-bottom: 1.25rem !important;
+}
+
 .markdown-body {
   line-height: 1.7;
   color: #cbd5e1;

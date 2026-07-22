@@ -33,9 +33,10 @@ interface EditalAnalyzerTabProps {
   activeEdital: EditalAnalysis | null;
   setActiveEdital: (analysis: EditalAnalysis | null) => void;
   onOpenDocPreview: (title: string, markdown: string, type: "proposal" | "declaration") => void;
+  onNavigateToCreateDoc?: (templateId?: string) => void;
 }
 
-export default function EditalAnalyzerTab({ companyData, activeEdital, setActiveEdital, onOpenDocPreview }: EditalAnalyzerTabProps) {
+export default function EditalAnalyzerTab({ companyData, activeEdital, setActiveEdital, onOpenDocPreview, onNavigateToCreateDoc }: EditalAnalyzerTabProps) {
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [fileDetails, setFileDetails] = useState<{ name: string; size: string; type: string } | null>(null);
@@ -1469,14 +1470,26 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
           {/* Action Trigger Area: Document Creation Station */}
           <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-5 md:p-6 space-y-6">
-            <div className="flex items-center gap-2.5 border-b border-white/10 pb-4">
-              <div className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 p-2 rounded-lg">
-                <Edit3 className="w-5 h-5" />
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 p-2 rounded-lg">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">Estúdio Criar Documentos & Propostas</h3>
+                  <p className="text-slate-400 text-xs">Gere minutas de habilitação, atestados, recursos e propostas com o Agente IA e edite diretamente no papel timbrado</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-bold text-white text-base">Terminal de Automação de Documentos</h3>
-                <p className="text-slate-400 text-xs">Gere minutas de habilitações e propostas pré-preenchidas com inteligência artificial</p>
-              </div>
+
+              {onNavigateToCreateDoc && (
+                <button
+                  onClick={() => onNavigateToCreateDoc()}
+                  className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all cursor-pointer shrink-0 self-start sm:self-auto"
+                >
+                  <Sparkles className="w-4 h-4 text-indigo-200" />
+                  <span>Abrir Estúdio Completo Criar Documentos</span>
+                </button>
+              )}
             </div>
 
             {/* Custom inputs row */}
