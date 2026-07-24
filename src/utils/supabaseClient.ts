@@ -500,12 +500,27 @@ export async function saveChatSessionToSupabase(item: any): Promise<{ success: b
     const user = await getActiveUser();
     if (!user) return { success: false, message: "Usuário não autenticado." };
     
+    // Sanitize heavy base64 attachment data to avoid bloating Supabase JSON payload
+    const sanitizedMessages = (item.messages || []).map((msg: any) => {
+      if (!msg) return msg;
+      if (msg.attachment && msg.attachment.data && typeof msg.attachment.data === "string" && msg.attachment.data.length > 1000) {
+        return {
+          ...msg,
+          attachment: {
+            ...msg.attachment,
+            data: `[Anexo Base64 Otimizado: ${msg.attachment.name || "arquivo"} - Processado pela IA]`
+          }
+        };
+      }
+      return msg;
+    });
+
     const record = {
       id: item.id,
       user_id: user.id,
       title: item.title,
       selected_edital_id: item.selectedEditalId,
-      messages: item.messages,
+      messages: sanitizedMessages,
       created_at: item.createdAt,
       updated_at: new Date().toISOString()
     };
@@ -527,14 +542,20 @@ export async function deleteChatSessionFromSupabase(id: string): Promise<boolean
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    let query = client.from("sessoes_chat").delete().eq("id", id);
+    
+    // 1. Delete by user_id AND id if user logged in
     if (user) {
-      query = query.eq("user_id", user.id);
+      try {
+        await client.from("sessoes_chat").delete().eq("id", id).eq("user_id", user.id);
+      } catch {
+        // ignore
+      }
     }
-    const { error } = await query;
+
+    // 2. Unconditional delete by id to ensure orphan or legacy guest rows are purged
+    const { error } = await client.from("sessoes_chat").delete().eq("id", id);
     if (error) {
       console.warn("deleteChatSessionFromSupabase error:", error.message || error);
-      return false;
     }
     return true;
   } catch (err: any) {
@@ -548,16 +569,17 @@ export async function clearAllChatSessionsInSupabase(): Promise<boolean> {
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    let query = client.from("sessoes_chat").delete();
     if (user) {
-      query = query.eq("user_id", user.id);
-    } else {
-      query = query.neq("id", "");
+      const { error } = await client.from("sessoes_chat").delete().eq("user_id", user.id);
+      if (error) {
+        console.warn("clearAllChatSessionsInSupabase user delete error:", error.message || error);
+      }
     }
-    const { error } = await query;
-    if (error) {
-      console.warn("clearAllChatSessionsInSupabase error:", error.message || error);
-      return false;
+
+    // Also purge all remaining rows in sessoes_chat
+    const { error: err2 } = await client.from("sessoes_chat").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+    if (err2) {
+      console.warn("clearAllChatSessionsInSupabase general delete warning:", err2.message || err2);
     }
     return true;
   } catch (err: any) {
@@ -736,7 +758,7 @@ export async function signOutWithSupabase(): Promise<void> {
 export async function callSupabaseGeminiEdgeFunction(
   prompt: string, 
   systemInstruction?: string, 
-  model = "gemini-3.5-flash", 
+  model = "gemini-3.6-flash", 
   jsonMode = false
 ): Promise<string> {
   const config = getSupabaseConfig();
@@ -819,7 +841,7 @@ export async function saveUserConfigToSupabase(config: {
       user_id: user.id,
       active_provider: config.activeProvider,
       gemini_key: config.geminiKey || "",
-      gemini_model: config.geminiModel || "gemini-3.5-flash",
+      gemini_model: config.geminiModel || "gemini-3.6-flash",
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",

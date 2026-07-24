@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import { EditalAnalysis, CompanyData, SyncItem } from "../types";
+import { EditalAnalysis, CompanyData, SyncItem, Certificate } from "../types";
 import { 
   FileUp, FileText, CheckCircle2, AlertTriangle, Clock, ArrowRight, Loader2, Play, 
   Sparkles, RefreshCw, ChevronRight, FileCode, CheckSquare, Edit3, Settings, ClipboardPaste, 
   Coins, HelpCircle, HardDriveDownload, MonitorCheck, Save, Send, Database, FileSpreadsheet, Eye,
-  Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge, Plus, X
+  Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge, Plus, X,
+  LayoutGrid, List, Search, Check
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { addSyncedItem, syncAnalysisToGoogleSheets } from "../utils/googleSync";
@@ -17,7 +18,7 @@ import {
   deleteEditalFromSupabase
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer } from "../utils/aiClientHelper";
 
 function cleanMarkdownText(text: string | undefined): string {
   if (!text) return "";
@@ -36,11 +37,25 @@ interface EditalAnalyzerTabProps {
   onNavigateToCreateDoc?: (templateId?: string) => void;
 }
 
+interface AttachedFile {
+  id: string;
+  name: string;
+  size: string;
+  type: string;
+  base64: string;
+}
+
 export default function EditalAnalyzerTab({ companyData, activeEdital, setActiveEdital, onOpenDocPreview, onNavigateToCreateDoc }: EditalAnalyzerTabProps) {
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [fileDetails, setFileDetails] = useState<{ name: string; size: string; type: string } | null>(null);
-  const [fileBase64, setFileBase64] = useState<string | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+
+  // File size error popup modal state (>60MB)
+  const [fileSizeErrorModal, setFileSizeErrorModal] = useState<{
+    show: boolean;
+    fileName: string;
+    fileSizeMb: string;
+  } | null>(null);
 
   // Extra Prompt/Customization states for document creation
   const [extraInstructions, setExtraInstructions] = useState("");
@@ -64,6 +79,168 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   const [originalEdital, setOriginalEdital] = useState<EditalAnalysis | null>(null);
   const [refining, setRefining] = useState(false);
   const [isRefined, setIsRefined] = useState(false);
+
+  // Modern Item Selector UI states
+  const [itemSelectorViewMode, setItemSelectorViewMode] = useState<"compact" | "detailed">("compact");
+  const [itemSearchQuery, setItemSearchQuery] = useState("");
+  const [hoveredItemNumber, setHoveredItemNumber] = useState<number | null>(null);
+
+  // Certificate Management Intelligence state
+  const [userCertificates, setUserCertificates] = useState<Certificate[]>([]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("aip_certificates");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setUserCertificates(parsed);
+        }
+      } catch (e) {
+        setUserCertificates([]);
+      }
+    }
+  }, [activeEdital]);
+
+  const matchAndEvaluateCertificate = (docText: string) => {
+    if (!docText) return {
+      matchedCert: null,
+      statusType: "not_registered" as const,
+      badgeText: "Sem Cadastro",
+      badgeColor: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+      message: "Não localizado na sua Gestão de Certidões.",
+      isWarning: false
+    };
+
+    const norm = docText.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    const candidate = userCertificates.find(c => {
+      const cName = c.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const cId = c.id.toLowerCase();
+
+      if (norm.includes("receita federal") || norm.includes("tributos federais") || norm.includes("divida ativa da uniao") || norm.includes("inss") || (norm.includes("federal") && norm.includes("debito"))) {
+        return cId.includes("receita") || cName.includes("receita") || cName.includes("federal");
+      }
+      if (norm.includes("estadual") || norm.includes("sefaz") || norm.includes("fazenda estadual")) {
+        return cId.includes("estadual") || cName.includes("estadual");
+      }
+      if (norm.includes("municipal") || norm.includes("iptu") || norm.includes("iss") || norm.includes("fazenda municipal")) {
+        return cId.includes("municipal") || cName.includes("municipal");
+      }
+      if (norm.includes("trabalhista") || norm.includes("cndt") || norm.includes("debitos trabalhistas")) {
+        return cId.includes("trabalhista") || cName.includes("trabalhista") || cName.includes("cndt");
+      }
+      if (norm.includes("fgts") || norm.includes("crf") || norm.includes("caixa economica")) {
+        return cId.includes("fgts") || cName.includes("fgts") || cName.includes("crf");
+      }
+      if (norm.includes("falencia") || norm.includes("concordata") || norm.includes("recuperacao judicial")) {
+        return cId.includes("falencia") || cName.includes("falencia");
+      }
+      if (norm.includes("sicaf") || norm.includes("crc")) {
+        return cId.includes("sicaf") || cName.includes("sicaf");
+      }
+      if (norm.includes("balanco") || norm.includes("demostrativ") || norm.includes("contabil") || norm.includes("livro diario")) {
+        return cId.includes("balanco") || cId.includes("contabil") || cName.includes("balanco") || cName.includes("contabil") || cName.includes("livro");
+      }
+      if (norm.includes("atestado") || norm.includes("capacidade tecnica")) {
+        return cId.includes("atestado") || cName.includes("atestado");
+      }
+      if (norm.includes("contrato social") || norm.includes("estatuto")) {
+        return cId.includes("contrato") || cName.includes("contrato") || cName.includes("estatuto");
+      }
+      if (norm.includes("alvara") || norm.includes("licenca")) {
+        return cId.includes("alvara") || cName.includes("alvara") || cName.includes("licenca");
+      }
+
+      const words = cName.split(" ").filter(w => w.length > 3);
+      return words.some(w => norm.includes(w));
+    });
+
+    if (!candidate) {
+      return {
+        matchedCert: null,
+        statusType: "not_registered" as const,
+        badgeText: "Verificar Acervo",
+        badgeColor: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+        message: "Não localizado explicitamente na Gestão de Certidões. Verifique seu acervo.",
+        isWarning: false
+      };
+    }
+
+    if (!candidate.fileUploaded) {
+      return {
+        matchedCert: candidate,
+        statusType: "not_uploaded" as const,
+        badgeText: "Sem Arquivo",
+        badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+        message: `Cadastrado como "${candidate.name}", mas nenhum arquivo PDF foi anexado.`,
+        isWarning: true
+      };
+    }
+
+    if (!candidate.expirationDate) {
+      return {
+        matchedCert: candidate,
+        statusType: "no_date" as const,
+        badgeText: "Data Pendente",
+        badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+        message: `Defina a data de validade de "${candidate.name}" na Gestão de Certidões.`,
+        isWarning: true
+      };
+    }
+
+    const parts = candidate.expirationDate.split("-");
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const expDate = new Date(year, month, day, 23, 59, 59, 999);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const diffTime = expDate.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const formattedDate = `${day.toString().padStart(2, '0')}/${(month + 1).toString().padStart(2, '0')}/${year}`;
+
+      if (diffDays <= 0) {
+        return {
+          matchedCert: candidate,
+          statusType: "expired" as const,
+          badgeText: "VENCIDA",
+          badgeColor: "bg-rose-500/20 text-rose-300 border-rose-500/40",
+          message: `🚨 A certidão "${candidate.name}" VENCEU em ${formattedDate}. Regularize na Gestão de Certidões!`,
+          isWarning: true
+        };
+      } else if (diffDays <= 15) {
+        return {
+          matchedCert: candidate,
+          statusType: "expiring_soon" as const,
+          badgeText: `Vence em ${diffDays}d`,
+          badgeColor: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+          message: `⚠️ Atenção: "${candidate.name}" vence em ${diffDays} dia(s) (${formattedDate}).`,
+          isWarning: true
+        };
+      } else {
+        return {
+          matchedCert: candidate,
+          statusType: "valid" as const,
+          badgeText: "Válida & Regular",
+          badgeColor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+          message: `Válida e regular até ${formattedDate}.`,
+          isWarning: false
+        };
+      }
+    }
+
+    return {
+      matchedCert: candidate,
+      statusType: "valid" as const,
+      badgeText: "Válida",
+      badgeColor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+      message: "Cadastrada e regular.",
+      isWarning: false
+    };
+  };
 
   useEffect(() => {
     if (activeEdital?.itensEdital) {
@@ -347,7 +524,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        throw new Error("Erro de processamento.");
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || "Erro de processamento da proposta.");
       }
 
       const data = await response.json();
@@ -401,8 +579,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       const extText = localStorage.getItem("aip_auto_analyze_text");
       if (extText) {
         setTextInput(extText);
-        setFileDetails(null);
-        setFileBase64(null);
+        setAttachedFiles([]);
         localStorage.removeItem("aip_auto_analyze_text");
         
         // Trigger auto analysis after a tiny delay so the state update is processed
@@ -423,39 +600,111 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     };
   }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processSelectedFiles = (fileList: File[]) => {
+    const maxSizeBytes = 60 * 1024 * 1024; // 60 MB
 
-    setFileDetails({
-       name: file.name,
-       size: `${(file.size / 1024).toFixed(1)} KB`,
-       type: file.type || "application/octet-stream"
+    fileList.forEach((file) => {
+      if (file.size > maxSizeBytes) {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+        setFileSizeErrorModal({
+          show: true,
+          fileName: file.name,
+          fileSizeMb: sizeMb
+        });
+        return;
+      }
+
+      let resolvedType = file.type;
+      const lowerName = file.name.toLowerCase();
+      if (!resolvedType || resolvedType === "application/octet-stream") {
+        if (lowerName.endsWith(".pdf")) {
+          resolvedType = "application/pdf";
+        } else if (lowerName.endsWith(".txt")) {
+          resolvedType = "text/plain";
+        } else {
+          resolvedType = "application/pdf";
+        }
+      }
+
+      const reader = new FileReader();
+
+      if (resolvedType === "text/plain") {
+        reader.onload = (event) => {
+          const txtContent = (event.target?.result as string) || "";
+          let base64String = "";
+          try {
+            base64String = btoa(unescape(encodeURIComponent(txtContent)));
+          } catch (e) {
+            base64String = "";
+          }
+          
+          setAttachedFiles(prev => {
+            const filtered = prev.filter(f => f.name !== file.name);
+            return [
+              ...filtered,
+              {
+                id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                name: file.name,
+                size: `${(file.size / 1024).toFixed(1)} KB`,
+                type: "text/plain",
+                base64: base64String
+              }
+            ];
+          });
+        };
+        reader.readAsText(file);
+      } else {
+        reader.onload = (event) => {
+          const resultStr = (event.target?.result as string) || "";
+          const base64String = resultStr.includes(",") ? resultStr.split(",")[1] : resultStr;
+          
+          setAttachedFiles(prev => {
+            const filtered = prev.filter(f => f.name !== file.name);
+            return [
+              ...filtered,
+              {
+                id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+                name: file.name,
+                size: `${(file.size / 1024).toFixed(1)} KB`,
+                type: resolvedType,
+                base64: base64String
+              }
+            ];
+          });
+        };
+        reader.readAsDataURL(file);
+      }
     });
+  };
 
-    const reader = new FileReader();
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    processSelectedFiles(Array.from(files));
+    e.target.value = "";
+  };
 
-    if (file.type === "text/plain") {
-      reader.onload = (event) => {
-        setTextInput(event.target?.result as string);
-        setFileBase64(null);
-      };
-      reader.readAsText(file);
-    } else {
-      // PDF or other documents are converted to Base64 to be sent to Gemini multimodal interface
-      reader.onload = (event) => {
-        const base64String = (event.target?.result as string).split(",")[1];
-        setFileBase64(base64String);
-        // Clear text input since we will prioritize native file reading by Gemini
-        setTextInput("");
-      };
-      reader.readAsDataURL(file);
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processSelectedFiles(Array.from(e.dataTransfer.files));
+      e.dataTransfer.clearData();
     }
   };
 
+  const handleRemoveFile = (id: string) => {
+    setAttachedFiles(prev => prev.filter(f => f.id !== id));
+  };
+
   const handleAnalyze = async () => {
-    if (!textInput && !fileBase64) {
-      alert("Por favor, cole o texto do edital ou faça upload de um arquivo primeiro.");
+    if (!textInput.trim() && attachedFiles.length === 0) {
+      alert("Por favor, cole o texto do edital ou faça upload de um ou mais arquivos anexos primeiro.");
       return;
     }
 
@@ -463,52 +712,32 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     try {
       let data: any;
 
-      console.log("[Analyzer] Routing analysis...");
-        const systemInstruction = `Você é um Analista de Licitações Públicas sênior. Sua missão é ler o edital/termo de referência anexado e gerar uma análise completa estruturada rigidamente como um JSON com as chaves correspondentes.`;
-        
-        // Prepare a prompt that fits the requested JSON schema
-        const fullPrompt = `Analise o edital a seguir e retorne a resposta no formato JSON estruturado com os 6 pilares de inteligência.
-        
-        Edital de licitação:
-        ${textInput || "Conteúdo do arquivo anexado (Base64)"}
-        
-        Retorne exatamente no formato JSON com as seguintes chaves de dados:
-        - pontosPositivos (array de strings)
-        - pontosAlerta (array de strings)
-        - prazoEntrega (string)
-        - prazoPagamento (string)
-        - descricaoProduto (string)
-        - documentosExigidos (array de strings)
-        - identificacaoCertame (objeto com: orgaoComprador, modalidade, identificacaoNumerica, dataHoraSessao)
-        - especificacoesTecnicas (objeto com: exigenciasFisicas, pegadinhasOcultas)
-        - burocraciaBarreiras (objeto com: exigeAmostra, exigeCartaSolidariedade, exigenciaGarantia, consorcioSubcontratacao)
-        - logisticaCronograma (objeto com: prazoEntregaReal, classificacaoPrazo, enderecoEntrega, prazoGarantia)
-        - viabilidadeFinanceira (objeto com: valorEstimado, distorcoesPreco, prazoPagamento)
-        - parecerFinal (objeto com: veredito, grauRisco, estrategiaLances)
-        - reportMarkdown (string markdown formatada em 6 pilares com tabelas e bullet points)
+      console.log(`[Analyzer] Processing edital analysis with ${attachedFiles.length} file attachments...`);
 
-        Importante: Não coloque marcadores de código como \`\`\`json ou quebras estranhas. Retorne apenas a string JSON válida.`;
+      const preparedAttachments = await prepareAttachmentsForServer(attachedFiles);
 
-        const response = await apiFetch("/api/analyze-edital", {
-            method: "POST",
-            body: {
-              textInput: textInput,
-              fileBase64: fileBase64,
-              fileName: fileDetails?.name,
-              fileType: fileDetails?.type
-            }
-          });
-
-        if (!response.ok) {
-          throw new Error("Erro na resposta do servidor.");
+      const response = await apiFetch("/api/analyze-edital", {
+        method: "POST",
+        body: {
+          textInput: textInput,
+          attachments: preparedAttachments
         }
+      });
 
-        data = await response.json();
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || "Erro na resposta do servidor.");
+      }
+
+      data = await response.json();
 
       if (data && data.analysis) {
+        const fileNamesSummary = attachedFiles.length > 0
+          ? `Anexos (${attachedFiles.length}): ${attachedFiles.map(f => f.name).join(", ")}`
+          : "Edital em Texto";
         const analysisResult: EditalAnalysis = {
           ...data.analysis,
-          rawText: textInput || `Arquivo: ${fileDetails?.name || "Edital Upload"}`
+          rawText: textInput || fileNamesSummary
         };
         
         setActiveEdital(analysisResult);
@@ -518,11 +747,12 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
 
         // Salvar no Histórico Local e no Supabase Privado
+        const firstFileName = attachedFiles.length > 0 ? attachedFiles[0].name : null;
         const newHistoryItem = {
           id: Date.now().toString(),
           title: analysisResult.descricaoProduto 
             ? `Análise - ${analysisResult.descricaoProduto.slice(0, 45)}${analysisResult.descricaoProduto.length > 45 ? "..." : ""}` 
-            : (fileDetails?.name ? `Arquivo: ${fileDetails.name}` : `Análise S/N`),
+            : (firstFileName ? `Anexo: ${firstFileName}` : `Análise S/N`),
           date: new Date().toLocaleString("pt-BR"),
           analysis: analysisResult
         };
@@ -542,7 +772,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     } catch (e: any) {
       console.error(e);
-      alert("Houve um problema ao enviar o arquivo para análise ao Gemini. Por favor, verifique se seu servidor de backend está ativo.");
+      alert(e?.message || "Houve um problema ao processar a análise do edital com o Gemini. Tente novamente.");
     } finally {
       setLoading(false);
     }
@@ -586,9 +816,88 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     return `[Descrição Focada nos Itens Selecionados]\n` + selected.map(it => `• Item ${String(it.numero).padStart(2, '0')}: ${it.descricao} (Qtd: ${it.quantidade} ${it.unidade || "un"}${it.valorEstimado ? ` - Estimado: ${it.valorEstimado}` : ""})`).join("\n\n");
   };
 
+  const parseCurrencyValue = (valStr?: string): number => {
+    if (!valStr) return 0;
+    const totalMatch = valStr.match(/total\s*:?\s*r\$\s*([0-9.]+,[0-9]{2})/i);
+    if (totalMatch) {
+      const cleaned = totalMatch[1].replace(/\./g, "").replace(",", ".");
+      const n = parseFloat(cleaned);
+      if (!isNaN(n)) return n;
+    }
+
+    const match = valStr.match(/([0-9.]+,[0-9]{2})/);
+    if (match) {
+      const cleaned = match[1].replace(/\./g, "").replace(",", ".");
+      const n = parseFloat(cleaned);
+      if (!isNaN(n)) return n;
+    }
+
+    const numOnly = valStr.replace(/[^\d.,]/g, "").replace(/\./g, "").replace(",", ".");
+    const n = parseFloat(numOnly);
+    return isNaN(n) ? 0 : n;
+  };
+
+  const getSelectedItemsStats = () => {
+    if (!activeEdital?.itensEdital || activeEdital.itensEdital.length === 0) {
+      return {
+        count: 0,
+        totalEditalCount: 0,
+        totalQuantity: 0,
+        totalValorEstimado: 0,
+        hasValidValues: false,
+        formattedValorEstimado: activeEdital?.viabilidadeFinanceira?.valorEstimado || "Não informado"
+      };
+    }
+
+    const totalEditalCount = activeEdital.itensEdital.length;
+    const selected = activeEdital.itensEdital.filter(it => selectedItemNumbers.includes(it.numero));
+
+    let totalQuantity = 0;
+    let totalValorEstimado = 0;
+    let hasValidValues = false;
+
+    selected.forEach(it => {
+      const qty = it.quantidade || 1;
+      totalQuantity += qty;
+
+      if (it.valorEstimado) {
+        const val = parseCurrencyValue(it.valorEstimado);
+        if (val > 0) {
+          hasValidValues = true;
+          const isTotalExplicit = /total|global/i.test(it.valorEstimado);
+          if (isTotalExplicit) {
+            totalValorEstimado += val;
+          } else {
+            totalValorEstimado += val * qty;
+          }
+        }
+      }
+    });
+
+    let formattedValorEstimado = "R$ 0,00";
+    if (hasValidValues && totalValorEstimado > 0) {
+      formattedValorEstimado = totalValorEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    } else if (selected.length === totalEditalCount && activeEdital?.viabilidadeFinanceira?.valorEstimado) {
+      formattedValorEstimado = activeEdital.viabilidadeFinanceira.valorEstimado;
+    } else if (selected.length === 0) {
+      formattedValorEstimado = "R$ 0,00";
+    } else {
+      formattedValorEstimado = activeEdital?.viabilidadeFinanceira?.valorEstimado || "Consulte os itens";
+    }
+
+    return {
+      count: selected.length,
+      totalEditalCount,
+      totalQuantity,
+      totalValorEstimado,
+      hasValidValues,
+      formattedValorEstimado
+    };
+  };
+
   const handleRefineWithAi = async () => {
     if (!activeEdital) return;
-    if (!textInput && !fileBase64) {
+    if (!textInput.trim() && attachedFiles.length === 0) {
       alert("Para realizar o refinamento avançado com IA, o edital precisa ter sido enviado/carregado nesta sessão ativa.");
       return;
     }
@@ -596,29 +905,32 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     setRefining(true);
     try {
       const selectedItemsObjects = activeEdital.itensEdital?.filter(it => selectedItemNumbers.includes(it.numero)) || [];
-      
+      const preparedAttachments = await prepareAttachmentsForServer(attachedFiles);
+
       const response = await apiFetch("/api/analyze-edital", {
         method: "POST",
         body: {
           textInput: textInput,
-          fileBase64: fileBase64,
-          fileName: fileDetails?.name,
-          fileType: fileDetails?.type,
+          attachments: preparedAttachments,
           selectedItems: selectedItemsObjects
         }
       });
 
       if (!response.ok) {
-        throw new Error("Erro de processamento.");
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || "Erro de processamento no refinamento.");
       }
 
       const data = await response.json();
       if (data && data.analysis) {
+        const fileNamesSummary = attachedFiles.length > 0
+          ? `Anexos (${attachedFiles.length}): ${attachedFiles.map(f => f.name).join(", ")}`
+          : "Edital em Texto";
         const refinedResult: EditalAnalysis = {
           ...data.analysis,
           // Preserve full items list so we don't lock out the selection controls!
           itensEdital: activeEdital.itensEdital,
-          rawText: textInput || `Arquivo: ${fileDetails?.name || "Edital Upload"}`
+          rawText: textInput || fileNamesSummary
         };
 
         setActiveEdital(refinedResult);
@@ -665,7 +977,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        throw new Error("Erro de processamento.");
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || "Erro de processamento do documento.");
       }
 
       const data = await response.json();
@@ -710,8 +1023,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                 onClick={() => {
                   setActiveEdital(null);
                   setTextInput("");
-                  setFileDetails(null);
-                  setFileBase64(null);
+                  setAttachedFiles([]);
                 }}
                 className="px-3.5 py-1.5 text-xs font-semibold rounded-md border border-rose-500/35 text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 transition-colors flex items-center gap-1.5 cursor-pointer"
               >
@@ -724,27 +1036,61 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         {/* Drag and drop panel */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="space-y-4">
-            <div className="border-2 border-dashed border-white/10 hover:border-indigo-500/40 rounded-xl p-5 bg-white/5 transition-all text-center relative">
+            <div 
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              className="border-2 border-dashed border-white/10 hover:border-indigo-500/40 rounded-xl p-5 bg-white/5 transition-all text-center relative"
+            >
               <input 
                 type="file" 
                 id="edital-file-upload" 
                 accept=".txt,.pdf"
+                multiple
                 onChange={handleFileChange}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
               />
               <FileUp className="w-8 h-8 text-indigo-400/80 mx-auto mb-2" />
-              <p className="text-xs font-semibold text-white">Arraste seu edital ou Clique para buscar</p>
-              <p className="text-[10px] text-slate-400 mt-1">Formatos suportados: PDF ou TXT (Max 20MB)</p>
+              <p className="text-xs font-semibold text-white">Arraste seus anexos ou Clique para selecionar arquivos</p>
+              <p className="text-[10px] text-slate-400 mt-1">Selecione 1 ou mais arquivos (PDF ou TXT) do edital e anexos (Max 60MB cada)</p>
 
-              {fileDetails && (
-                <div className="mt-3 bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-2 flex items-center justify-between text-left text-xs text-indigo-300">
-                  <div className="flex items-center gap-2 truncate">
-                    <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
-                    <span className="font-semibold truncate">{fileDetails.name}</span>
+              {attachedFiles.length > 0 && (
+                <div className="mt-4 space-y-2 text-left relative z-10" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-300 border-b border-white/10 pb-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      Anexos Prontos para Análise ({attachedFiles.length}):
+                    </span>
+                    <button 
+                      type="button" 
+                      onClick={() => setAttachedFiles([])}
+                      className="text-[10px] text-rose-400 hover:underline cursor-pointer"
+                    >
+                      Remover todos
+                    </button>
                   </div>
-                  <span className="shrink-0 font-medium text-slate-300 text-[10px] ml-2 bg-white/5 px-1.5 py-0.5 rounded border border-white/10">
-                    {fileDetails.size}
-                  </span>
+                  <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
+                    {attachedFiles.map((f) => (
+                      <div key={f.id} className="bg-indigo-500/15 border border-indigo-500/30 rounded-lg p-2 flex items-center justify-between text-xs text-indigo-200">
+                        <div className="flex items-center gap-2 truncate pr-2">
+                          <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
+                          <span className="font-semibold truncate">{f.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-medium text-slate-300 text-[10px] bg-white/10 px-1.5 py-0.5 rounded border border-white/10">
+                            {f.size}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveFile(f.id)}
+                            className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-rose-500/20 transition-colors cursor-pointer"
+                            title="Remover anexo"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -753,13 +1099,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               <span className="text-xs font-semibold text-slate-400">Ou cole a íntegra ou partes do texto do edital:</span>
               <textarea 
                 value={textInput}
-                onChange={(e) => {
-                  setTextInput(e.target.value);
-                  if (fileDetails) {
-                    setFileDetails(null);
-                    setFileBase64(null);
-                  }
-                }}
+                onChange={(e) => setTextInput(e.target.value)}
                 className="w-full h-44 border border-white/10 rounded-xl p-3 text-xs bg-white/5 focus:bg-slate-900/60 text-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed"
                 placeholder="Cole as seções do edital sobre objeto, prazo, contraprestação e documentos de habilitação..."
               />
@@ -768,7 +1108,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             <button
               id="trigger-analyze-btn"
               onClick={handleAnalyze}
-              disabled={loading || (!textInput && !fileBase64)}
+              disabled={loading || (!textInput.trim() && attachedFiles.length === 0)}
               className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:bg-white/5 disabled:from-white/5 disabled:to-white/5 disabled:text-slate-500 text-white font-bold py-2.5 rounded-lg text-sm transition-all shadow-lg flex items-center justify-center gap-2 border border-white/10 cursor-pointer"
             >
               {loading ? (
@@ -787,36 +1127,6 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
           {/* Column 2: Info & History */}
           <div className="space-y-4">
-            {/* System Instructions Guidance helper info */}
-            <div className="bg-white/5 rounded-xl p-4 md:p-5 border border-white/10 flex flex-col justify-between space-y-4 text-xs text-slate-300">
-              <div className="space-y-3 leading-normal">
-                <h4 className="font-semibold text-white flex items-center gap-1.5 text-sm">
-                  <HelpCircle className="w-4 h-4 text-indigo-400" />
-                  Como funciona a inteligência HORASIS?
-                </h4>
-                <p>
-                  O processador utiliza o modelo <strong>Gemini 3.5-flash</strong> para decifrar a hermenêutica jurídica pesada de editais de licitação, economizando horas cruciais de leitura árdua:
-                </p>
-                <ul className="space-y-1.5 list-disc pl-4 text-slate-400">
-                  <li>Detecta imediatamente riscos financeiros ocultos ou multas diárias abusivas.</li>
-                  <li>Identifica com rigor prazos regimentais de entrega dos produtos comerciais.</li>
-                  <li>Estrutura o checklist específico de habilitações criminais, jurídicas e fiscais.</li>
-                  <li>Habilita a automação de propostas comerciais de venda direta ao governo.</li>
-                </ul>
-              </div>
-
-              <div className="border-t border-white/10 pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-slate-400 text-[11px]">
-                <span className="flex items-center gap-1">
-                  <Database className="w-3.5 h-3.5 text-indigo-400" />
-                  Durable Workspace Storage
-                </span>
-                <span className="flex items-center gap-1">
-                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                  Sincronismo com Google Sheets & Drive
-                </span>
-              </div>
-            </div>
-
             {/* Histórico Local de Editais */}
             <div className="bg-white/5 border border-white/10 rounded-xl p-4 md:p-5 space-y-3 text-xs">
               <div className="flex items-center justify-between border-b border-white/10 pb-2">
@@ -885,16 +1195,10 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                             setOriginalEdital(item.analysis);
                             setIsRefined(false);
                             if (item.analysis.rawText) {
-                              if (item.analysis.rawText.startsWith("Arquivo: ")) {
-                                setFileDetails({
-                                  name: item.analysis.rawText.replace("Arquivo: ", ""),
-                                  size: "Histórico",
-                                  type: "application/pdf"
-                                });
+                              if (item.analysis.rawText.startsWith("Arquivo: ") || item.analysis.rawText.startsWith("Anexos")) {
                                 setTextInput("");
                               } else {
                                 setTextInput(item.analysis.rawText);
-                                setFileDetails(null);
                               }
                             }
                           }}
@@ -919,7 +1223,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                             if (isSelected) {
                               setActiveEdital(null);
                               setTextInput("");
-                              setFileDetails(null);
+                              setAttachedFiles([]);
                             }
                           }}
                           className="text-slate-500 hover:text-rose-400 p-1 bg-white/5 hover:bg-rose-500/10 rounded transition-colors cursor-pointer shrink-0 ml-1 border border-white/5 hover:border-rose-500/20"
@@ -946,17 +1250,42 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       )}
 
       {/* Analysis Results Display */}
-      {activeEdital && !loading && (
+      {activeEdital && !loading && (() => {
+        const selectedStats = getSelectedItemsStats();
+        return (
         <div className="space-y-6 animate-fade-in" id="analysis-results-section">
           
           {/* Executive Overview Cards */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             
             <div className="bg-white/5 border border-white/10 backdrop-blur-md text-white p-5 rounded-xl shadow-md space-y-2 max-h-[160px] overflow-y-auto">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Descrição Principal do Objeto</span>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Descrição do Objeto</span>
+                <span className="text-[10px] font-bold text-indigo-300 bg-indigo-500/20 px-2 py-0.5 rounded border border-indigo-500/30 shrink-0">
+                  {selectedStats.count} de {selectedStats.totalEditalCount} itens
+                </span>
+              </div>
               <p className="font-semibold text-slate-100 text-xs md:text-sm leading-snug whitespace-pre-line">
                 {getDynamicDescricaoProduto()}
               </p>
+            </div>
+
+            {/* Dynamic Financial Summary Card based on Selected Items */}
+            <div className="bg-cyan-500/10 border border-cyan-500/25 backdrop-blur-md p-5 rounded-xl space-y-1.5 text-cyan-300 shadow-md">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider block">Valor Estimado Selecionado</span>
+                <Coins className="w-4 h-4 text-cyan-400 shrink-0" />
+              </div>
+              <div className="mt-1">
+                <p className="font-bold text-white text-base md:text-lg font-mono tracking-tight leading-tight">
+                  {selectedStats.formattedValorEstimado}
+                </p>
+                <p className="text-[11px] text-cyan-200/80 font-medium mt-1">
+                  {selectedStats.count > 0 
+                    ? `${selectedStats.count} ${selectedStats.count === 1 ? 'item marcado' : 'itens marcados'} (${selectedStats.totalQuantity} un)` 
+                    : "Nenhum item selecionado"}
+                </p>
+              </div>
             </div>
 
             <div className="bg-emerald-500/10 border border-emerald-500/20 backdrop-blur-md p-5 rounded-xl space-y-1.5 text-emerald-300">
@@ -970,7 +1299,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             </div>
 
             <div className="bg-indigo-500/10 border border-indigo-500/20 backdrop-blur-md p-5 rounded-xl space-y-1.5 text-indigo-300">
-              <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block">Condição de Recebimento de Valor</span>
+              <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block">Condição de Pagamento</span>
               <div className="flex items-center gap-2 mt-1">
                 <Coins className="w-5 h-5 text-indigo-400 shrink-0" />
                 <p className="font-bold text-white text-sm md:text-base leading-snug">
@@ -981,117 +1310,259 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
           </div>
 
-          {/* Mapping of Items / Lotes */}
+          {/* Mapping of Items / Lotes - Modern Minimalist Selector */}
           {activeEdital.itensEdital && activeEdital.itensEdital.length > 0 && (
-            <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-5 md:p-6 space-y-4 animate-fade-in">
+            <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-4 md:p-5 space-y-4 animate-fade-in shadow-xl">
+              
+              {/* Header Bar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
                 <div className="flex items-center gap-2.5">
                   <div className="bg-indigo-500/10 text-indigo-400 p-2 rounded-lg border border-indigo-500/20 shrink-0">
-                    <CheckSquare className="w-5 h-5" />
+                    <CheckSquare className="w-4 h-4 md:w-5 md:h-5" />
                   </div>
                   <div>
-                    <h4 className="font-bold text-white text-sm md:text-base">Itens e Lotes Identificados no Edital</h4>
-                    <p className="text-slate-400 text-xs">O Gemini extraiu os itens do edital. Selecione os itens que você deseja cotar ou incluir na proposta automática.</p>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-bold text-white text-sm md:text-base">Itens e Lotes do Certame</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                        {selectedItemNumbers.length} de {activeEdital.itensEdital.length} selecionados
+                      </span>
+                    </div>
+                    <p className="text-slate-400 text-xs mt-0.5">
+                      Selecione os itens desejados para cotar ou gerar a proposta automática.
+                    </p>
                   </div>
                 </div>
-                
-                <div className="flex items-center gap-2 self-start sm:self-center">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedItemNumbers(activeEdital.itensEdital?.map(it => it.numero) || [])}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-white/10 text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
-                  >
-                    Selecionar Todos
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedItemNumbers([])}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-white/10 text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
-                  >
-                    Limpar Seleção
-                  </button>
+
+                {/* Quick Actions & View Switcher */}
+                <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
+                  {/* Search input for 5+ items */}
+                  {activeEdital.itensEdital.length >= 5 && (
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={itemSearchQuery}
+                        onChange={(e) => setItemSearchQuery(e.target.value)}
+                        placeholder="Buscar item..."
+                        className="bg-white/5 border border-white/10 rounded-lg pl-8 pr-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-28 md:w-36 transition-all"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center bg-white/5 p-0.5 rounded-lg border border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => setItemSelectorViewMode("compact")}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-all flex items-center gap-1 cursor-pointer ${
+                        itemSelectorViewMode === "compact"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                      title="Visão Compacta (Pills/Chips)"
+                    >
+                      <LayoutGrid className="w-3 h-3" />
+                      <span className="hidden md:inline">Compacto</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setItemSelectorViewMode("detailed")}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-all flex items-center gap-1 cursor-pointer ${
+                        itemSelectorViewMode === "detailed"
+                          ? "bg-indigo-600 text-white shadow-xs"
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                      title="Visão Detalhada (Lista)"
+                    >
+                      <List className="w-3 h-3" />
+                      <span className="hidden md:inline">Lista</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1 border-l border-white/10 pl-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedItemNumbers(activeEdital.itensEdital?.map(it => it.numero) || [])}
+                      className="px-2.5 py-1 text-[11px] font-medium rounded-md border border-white/10 text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
+                    >
+                      Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedItemNumbers([])}
+                      className="px-2.5 py-1 text-[11px] font-medium rounded-md border border-white/10 text-slate-300 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
+                    >
+                      Nenhum
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {activeEdital.itensEdital.map((it) => {
-                  const isSelected = selectedItemNumbers.includes(it.numero);
+              {/* Filtering items if searchQuery is present */}
+              {(() => {
+                const filteredItens = activeEdital.itensEdital.filter(it => {
+                  if (!itemSearchQuery.trim()) return true;
+                  const q = itemSearchQuery.toLowerCase();
                   return (
-                    <div
-                      key={it.numero}
-                      onClick={() => {
-                        if (isSelected) {
-                          setSelectedItemNumbers(selectedItemNumbers.filter(n => n !== it.numero));
-                        } else {
-                          setSelectedItemNumbers([...selectedItemNumbers, it.numero]);
-                        }
-                      }}
-                      className={`p-4 rounded-xl border transition-all cursor-pointer flex items-start gap-3 select-none ${
-                        isSelected
-                          ? "bg-indigo-500/10 border-indigo-500/40 text-white"
-                          : "bg-white/5 border-white/5 hover:border-white/10 text-slate-300"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => {}} // handled by parent div onClick
-                        className="mt-1 rounded-sm border-white/20 bg-slate-900 text-indigo-500 focus:ring-0 focus:ring-offset-0 w-4 h-4 cursor-pointer font-sans"
-                      />
-                      <div className="space-y-1.5 flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                            isSelected ? "bg-indigo-500/20 text-indigo-300" : "bg-white/10 text-slate-400"
+                    `item ${it.numero}`.includes(q) ||
+                    String(it.numero).includes(q) ||
+                    it.descricao.toLowerCase().includes(q) ||
+                    (it.valorEstimado && it.valorEstimado.toLowerCase().includes(q))
+                  );
+                });
+
+                if (filteredItens.length === 0) {
+                  return (
+                    <div className="py-6 text-center text-xs text-slate-400 bg-white/5 rounded-xl border border-white/5">
+                      Nenhum item encontrado para "{itemSearchQuery}".
+                    </div>
+                  );
+                }
+
+                if (itemSelectorViewMode === "compact") {
+                  const currentHoveredItem = activeEdital.itensEdital.find(it => it.numero === hoveredItemNumber);
+                  return (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-2 max-h-[220px] overflow-y-auto pr-1">
+                        {filteredItens.map((it) => {
+                          const isSelected = selectedItemNumbers.includes(it.numero);
+                          return (
+                            <button
+                              key={it.numero}
+                              type="button"
+                              onMouseEnter={() => setHoveredItemNumber(it.numero)}
+                              onClick={() => {
+                                if (isSelected) {
+                                  setSelectedItemNumbers(selectedItemNumbers.filter(n => n !== it.numero));
+                                } else {
+                                  setSelectedItemNumbers([...selectedItemNumbers, it.numero]);
+                                }
+                              }}
+                              className={`group px-3 py-1.5 rounded-xl border text-xs font-medium transition-all duration-150 flex items-center gap-2 cursor-pointer select-none text-left ${
+                                isSelected
+                                  ? "bg-indigo-500/15 border-indigo-500/50 text-white shadow-sm shadow-indigo-500/10 hover:bg-indigo-500/25"
+                                  : "bg-slate-900/40 border-white/10 text-slate-400 hover:border-white/20 hover:text-slate-200 hover:bg-white/5"
+                              }`}
+                            >
+                              <div className={`w-3.5 h-3.5 rounded flex items-center justify-center shrink-0 border ${
+                                isSelected
+                                  ? "bg-indigo-500 border-indigo-400 text-white"
+                                  : "border-slate-600 bg-slate-800/80 group-hover:border-slate-400"
+                              }`}>
+                                {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                              </div>
+
+                              <span className={`font-bold ${isSelected ? "text-indigo-300" : "text-slate-300"}`}>
+                                Item {String(it.numero).padStart(2, '0')}
+                              </span>
+
+                              <span className="text-slate-400 max-w-[140px] md:max-w-[180px] truncate">
+                                {it.descricao}
+                              </span>
+
+                              {it.valorEstimado && (
+                                <span className={`text-[11px] font-mono font-semibold ml-1 ${isSelected ? "text-emerald-400" : "text-slate-400"}`}>
+                                  {it.valorEstimado}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Dynamic Detail Card on Hover */}
+                      {currentHoveredItem && (
+                        <div className="bg-slate-950/60 border border-white/10 rounded-xl p-3 text-xs space-y-1 animate-fade-in">
+                          <div className="flex items-center justify-between text-indigo-300 font-bold">
+                            <span>Item {String(currentHoveredItem.numero).padStart(2, '0')} &bull; Qtd: {currentHoveredItem.quantidade} {currentHoveredItem.unidade || "un"}</span>
+                            {currentHoveredItem.valorEstimado && <span className="text-emerald-400 font-mono">{currentHoveredItem.valorEstimado}</span>}
+                          </div>
+                          <p className="text-slate-300 text-[11px] leading-relaxed">
+                            {currentHoveredItem.descricao}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                {/* Detailed View Mode (Ultra-clean Table/List) */}
+                return (
+                  <div className="divide-y divide-white/5 border border-white/10 rounded-xl overflow-hidden bg-slate-950/40">
+                    {filteredItens.map((it) => {
+                      const isSelected = selectedItemNumbers.includes(it.numero);
+                      return (
+                        <div
+                          key={it.numero}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedItemNumbers(selectedItemNumbers.filter(n => n !== it.numero));
+                            } else {
+                              setSelectedItemNumbers([...selectedItemNumbers, it.numero]);
+                            }
+                          }}
+                          className={`p-3 transition-colors cursor-pointer flex items-center gap-3 select-none ${
+                            isSelected ? "bg-indigo-500/10 hover:bg-indigo-500/15" : "hover:bg-white/5"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {}}
+                            className="rounded border-white/20 bg-slate-900 text-indigo-500 focus:ring-0 focus:ring-offset-0 w-4 h-4 cursor-pointer"
+                          />
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase shrink-0 ${
+                            isSelected ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30" : "bg-white/5 text-slate-400"
                           }`}>
                             Item {String(it.numero).padStart(2, '0')}
                           </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-slate-200 truncate" title={it.descricao}>
+                              {it.descricao}
+                            </p>
+                          </div>
+                          <span className="text-[11px] text-slate-400 shrink-0 font-mono">
+                            Qtd: <strong className="text-slate-200">{it.quantidade}</strong> {it.unidade || "un"}
+                          </span>
                           {it.valorEstimado && (
-                            <span className="text-xs font-semibold font-mono text-emerald-400 truncate">
+                            <span className="text-xs font-mono font-semibold text-emerald-400 shrink-0 ml-2">
                               {it.valorEstimado}
                             </span>
                           )}
                         </div>
-                        
-                        <p className="text-xs font-semibold leading-tight text-slate-200 line-clamp-2" title={it.descricao}>
-                          {it.descricao}
-                        </p>
-
-                        <div className="flex items-center gap-3 text-[10px] text-slate-400 font-medium">
-                          <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/5">
-                            Qtd: <strong className="text-slate-200 font-semibold">{it.quantidade}</strong> {it.unidade || "un"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="bg-indigo-500/10 border border-indigo-500/25 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs text-indigo-300 mt-2">
-                <div className="flex items-start md:items-center gap-3">
-                  <Sparkles className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5 md:mt-0" />
-                  <div className="space-y-0.5">
-                    <p className="text-slate-200 font-semibold text-sm">
-                      Você selecionou <strong className="font-bold text-indigo-300">{selectedItemNumbers.length}</strong> de <strong className="font-bold text-white">{activeEdital.itensEdital.length}</strong> itens identificados.
-                    </p>
-                    <p className="text-slate-400 text-xs">
-                      O painel de controle e os pontos do dossiê abaixo se filtram instantaneamente para estes itens.
-                    </p>
+                      );
+                    })}
                   </div>
+                );
+              })()}
+
+              {/* Bottom Action / Summary Bar */}
+              <div className="bg-slate-950/50 border border-white/10 rounded-xl p-3 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                <div className="flex flex-wrap items-center gap-2.5 text-slate-300">
+                  <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+                  <span>
+                    <strong className="text-white font-semibold">{selectedStats.count}</strong> de <strong className="text-white">{selectedStats.totalEditalCount}</strong> itens selecionados.
+                  </span>
+                  <span className="hidden sm:inline text-slate-600">|</span>
+                  <span className="bg-cyan-500/15 text-cyan-300 px-2 py-0.5 rounded border border-cyan-500/30 font-mono font-semibold">
+                    Valor Estimado: {selectedStats.formattedValorEstimado}
+                  </span>
+                  <span className="bg-indigo-500/15 text-indigo-300 px-2 py-0.5 rounded border border-indigo-500/30 font-mono font-semibold">
+                    Qtd Total: {selectedStats.totalQuantity} un
+                  </span>
                 </div>
-                
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
+
+                <div className="flex items-center gap-2 shrink-0">
                   {isRefined ? (
                     <>
-                      <span className="px-2 py-1 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30 font-bold text-[10px] uppercase tracking-wider">
-                        Análise Refinada por IA
+                      <span className="px-2 py-1 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30 font-bold text-[10px] uppercase">
+                        Foco Refinado por IA
                       </span>
                       <button
                         type="button"
                         onClick={handleRestoreFullAnalysis}
-                        className="px-3.5 py-2 font-bold text-xs bg-slate-800 hover:bg-slate-700 text-white border border-white/10 rounded-lg shadow-sm cursor-pointer transition-colors flex items-center gap-1.5"
+                        className="px-3 py-1.5 font-bold text-xs bg-slate-800 hover:bg-slate-700 text-white border border-white/10 rounded-lg cursor-pointer transition-colors flex items-center gap-1.5"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
+                        <RefreshCw className="w-3 h-3" />
                         Ver Edital Completo
                       </button>
                     </>
@@ -1101,7 +1572,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         type="button"
                         onClick={handleRefineWithAi}
                         disabled={refining}
-                        className="px-3.5 py-2 font-bold text-xs bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg shadow-md cursor-pointer transition-all flex items-center gap-2 disabled:opacity-50"
+                        className="px-3 py-1.5 font-bold text-xs bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg shadow-sm cursor-pointer transition-all flex items-center gap-1.5 disabled:opacity-50"
                       >
                         {refining ? (
                           <>
@@ -1111,7 +1582,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         ) : (
                           <>
                             <Sparkles className="w-3.5 h-3.5" />
-                            Refinar Análise (Gemini IA)
+                            Refinar Foco (Gemini IA)
                           </>
                         )}
                       </button>
@@ -1119,6 +1590,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                   )}
                 </div>
               </div>
+
             </div>
           )}
 
@@ -1342,8 +1814,19 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                 </div>
                 {activeEdital.viabilidadeFinanceira ? (
                   <div className="text-xs space-y-3 leading-normal">
+                    {activeEdital.itensEdital && activeEdital.itensEdital.length > 0 && (
+                      <div className="bg-cyan-500/10 border border-cyan-500/20 p-2.5 rounded-lg text-cyan-300">
+                        <span className="text-cyan-400 block font-mono text-[9px] uppercase tracking-wider font-bold">Valor Estimado (Itens Selecionados)</span>
+                        <span className="text-white font-mono font-bold text-sm block mt-0.5">
+                          {selectedStats.formattedValorEstimado}
+                        </span>
+                        <span className="text-[10px] text-cyan-200/80 block mt-0.5">
+                          Referente a {selectedStats.count} de {selectedStats.totalEditalCount} itens ({selectedStats.totalQuantity} un)
+                        </span>
+                      </div>
+                    )}
                     <div>
-                      <span className="text-slate-500 block font-mono text-[9px] uppercase tracking-wider">Valor Estimado (Unitário / Global)</span>
+                      <span className="text-slate-500 block font-mono text-[9px] uppercase tracking-wider">Valor Estimado Global (Edital Completo)</span>
                       <span className="text-slate-100 font-semibold">{activeEdital.viabilidadeFinanceira.valorEstimado}</span>
                     </div>
                     <div>
@@ -1439,28 +1922,92 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                 {/* Habilitation Documents checklist */}
                 <div className="lg:col-span-2 bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-5 space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-3">
-                    <h4 className="font-bold text-white flex items-center gap-2 text-sm">
+                    <div className="flex items-center gap-2">
                       <CheckSquare className="w-4 h-4 text-indigo-400 shrink-0" />
-                      Certidões e Documentos Exigidos no Pregão
-                    </h4>
+                      <h4 className="font-bold text-white text-sm">
+                        Certidões e Documentos Exigidos na Disputa
+                      </h4>
+                    </div>
                     <span className="text-xs bg-white/5 text-indigo-300 border border-white/10 px-2.5 py-1 rounded-full font-semibold">
                       Exigências habilitatórias decifradas: {getFilteredArray(activeEdital.documentosExigidos).length}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {getFilteredArray(activeEdital.documentosExigidos).map((doc, idx) => (
-                      <div key={idx} className="flex gap-3 bg-white/5 border border-white/5 hover:border-white/10 rounded-xl p-3 text-xs text-slate-200 transition-colors">
-                        <div className="bg-indigo-500/15 text-indigo-300 border border-indigo-500/20 h-6 w-6 font-bold rounded-lg flex items-center justify-center shrink-0 text-[10px]">
-                          {idx + 1}
-                        </div>
-                        <div className="leading-tight space-y-1">
-                          <span className="font-semibold block text-slate-100">{doc}</span>
-                          <span className="text-[10px] text-slate-500">Verifique compatibilidade no painel ao lado ou aba de portfólios</span>
+                  {(() => {
+                    const docList = getFilteredArray(activeEdital.documentosExigidos);
+                    const evaluatedDocs = docList.map(doc => ({ doc, ...matchAndEvaluateCertificate(doc) }));
+                    const warnings = evaluatedDocs.filter(item => item.isWarning);
+
+                    return (
+                      <div className="space-y-4">
+                        {/* Summary Warning Banner - ONLY SHOWN IF THERE ARE WARNINGS */}
+                        {warnings.length > 0 && (
+                          <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-4 flex items-start gap-3 text-xs text-rose-200 animate-fade-in shadow-md">
+                            <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <h5 className="font-bold text-rose-300 text-sm">
+                                  Alerta Crítico de Habilitação na Disputa
+                                </h5>
+                                <span className="bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-500/40">
+                                  {warnings.length} {warnings.length === 1 ? 'pendência' : 'pendências'}
+                                </span>
+                              </div>
+                              <p className="text-slate-300 leading-relaxed">
+                                Identificamos que {warnings.length === 1 ? '1 documento exigido' : `${warnings.length} documentos exigidos`} nesta disputa consta{warnings.length === 1 ? '' : 'm'} com alertas (vencido, a vencer em breve ou sem arquivo anexado) na sua aba de Gestão de Certidões. Regularize-os antes da disputa para garantir sua habilitação.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          {evaluatedDocs.map((item, idx) => (
+                            <div 
+                              key={idx} 
+                              className={`flex flex-col justify-between gap-3 border rounded-xl p-3.5 text-xs transition-all ${
+                                item.isWarning 
+                                  ? "bg-rose-950/20 border-rose-500/30 hover:border-rose-500/50 shadow-md shadow-rose-950/20" 
+                                  : "bg-white/5 border-white/5 hover:border-white/10 text-slate-200"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-start gap-2.5">
+                                  <div className={`h-6 w-6 font-bold rounded-lg flex items-center justify-center shrink-0 text-[10px] mt-0.5 ${
+                                    item.isWarning ? "bg-rose-500/20 text-rose-300 border border-rose-500/30" : "bg-indigo-500/15 text-indigo-300 border border-indigo-500/20"
+                                  }`}>
+                                    {idx + 1}
+                                  </div>
+                                  <span className="font-semibold text-slate-100 leading-snug">{item.doc}</span>
+                                </div>
+
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase shrink-0 font-mono ${item.badgeColor}`}>
+                                  {item.badgeText}
+                                </span>
+                              </div>
+
+                              {/* Status or warning note */}
+                              <div className={`text-[11px] pt-2 border-t flex flex-wrap items-center justify-between gap-2 ${
+                                item.isWarning 
+                                  ? "border-rose-500/20 text-rose-200 font-medium" 
+                                  : "border-white/5 text-slate-400"
+                              }`}>
+                                <span className="leading-tight flex items-center gap-1.5">
+                                  {item.isWarning && <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />}
+                                  {!item.isWarning && item.statusType === "valid" && <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                                  {item.message}
+                                </span>
+                                {item.matchedCert && (
+                                  <span className="text-[9px] text-slate-500 font-mono shrink-0">
+                                    Vínculo: {item.matchedCert.name}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
                 </div>
 
               </div>
@@ -1468,130 +2015,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           )}
 
 
-          {/* Action Trigger Area: Document Creation Station */}
-          <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-5 md:p-6 space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 p-2 rounded-lg">
-                  <Edit3 className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-white text-base">Estúdio Criar Documentos & Propostas</h3>
-                  <p className="text-slate-400 text-xs">Gere minutas de habilitação, atestados, recursos e propostas com o Agente IA e edite diretamente no papel timbrado</p>
-                </div>
-              </div>
 
-              {onNavigateToCreateDoc && (
-                <button
-                  onClick={() => onNavigateToCreateDoc()}
-                  className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all cursor-pointer shrink-0 self-start sm:self-auto"
-                >
-                  <Sparkles className="w-4 h-4 text-indigo-200" />
-                  <span>Abrir Estúdio Completo Criar Documentos</span>
-                </button>
-              )}
-            </div>
-
-            {/* Custom inputs row */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
-              <div className="md:col-span-3">
-                <label className="block font-medium text-slate-400 mb-1">Instruções adicionais específicas (Opcional)</label>
-                <input 
-                  type="text"
-                  value={extraInstructions}
-                  onChange={(e) => setExtraInstructions(e.target.value)}
-                  placeholder="Ex: Ofereça parcelamento em 3x ou adicione que nossos notebooks possuem 3 portas USB"
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3.5 py-2.5 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  onClick={() => setShowCustomDocForm(!showCustomDocForm)}
-                  className={`w-full py-2.5 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                    showCustomDocForm 
-                      ? "bg-indigo-600 border border-indigo-500/30 text-white shadow-lg shadow-indigo-600/20" 
-                      : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"
-                  }`}
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  Declaração com Modelo
-                </button>
-              </div>
-            </div>
-
-            {/* Custom Document Template Paste Accordion */}
-            {showCustomDocForm && (
-              <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3 animate-fade-in">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-300 block">Escreva ou Cole o modelo exigido no edital:</span>
-                </div>
-                <textarea 
-                  value={uploadedTemplateText}
-                  onChange={(e) => setUploadedTemplateText(e.target.value)}
-                  className="w-full h-36 border border-white/10 rounded-lg p-3 text-[11px] bg-slate-950/40 text-white leading-relaxed font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  placeholder="Cole aqui o texto da autodeclaração requirida no arquivo de anexos do edital..."
-                />
-                <p className="text-[10px] text-slate-400">A IA substituirá os espaços marcados como [Razão Social], [CNPJ], [Representante], [Endereço], [CPF], etc., pelos dados da sua empresa cadastrados no Portfólio.</p>
-              </div>
-            )}
-
-            {/* Main generation buttons group */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 font-sans">
-              
-              <button
-                disabled={generatingDoc !== null}
-                onClick={handleOpenProposalModal}
-                className="flex flex-col items-center justify-between p-4 bg-gradient-to-br from-indigo-950/30 to-indigo-900/20 hover:from-indigo-950/50 hover:to-indigo-900/40 border border-indigo-500/30 rounded-xl text-center transition-all cursor-pointer group text-white disabled:opacity-50 shadow-md shadow-indigo-950/50"
-              >
-                <div className="bg-gradient-to-tr from-indigo-500 to-indigo-600 text-white p-2.5 rounded-lg group-hover:scale-105 transition-transform bg-indigo-600">
-                  {generatingDoc === "proposal" ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileText className="w-5 h-5" />}
-                </div>
-                <div className="mt-3">
-                  <p className="font-bold text-xs md:text-sm">Criar Proposta Comercial</p>
-                  <p className="text-[10px] text-slate-400 mt-1 leading-normal">Monta a proposta completa de preços e especificações baseando-se no objeto</p>
-                </div>
-                <ChevronRight className="w-4 h-4 text-indigo-400 mt-2 self-end" />
-              </button>
-
-              <button
-                disabled={generatingDoc !== null}
-                onClick={() => triggerDocumentGeneration("joint_declaration")}
-                className="flex flex-col items-center justify-between p-4 bg-gradient-to-br from-emerald-950/30 to-emerald-900/20 hover:from-emerald-950/50 hover:to-emerald-900/40 border border-emerald-500/30 rounded-xl text-center transition-all cursor-pointer group text-white disabled:opacity-50 shadow-md shadow-emerald-950/50"
-              >
-                <div className="bg-gradient-to-tr from-emerald-500 to-emerald-600 text-white p-2.5 rounded-lg group-hover:scale-105 transition-transform bg-emerald-600">
-                  {generatingDoc === "joint_declaration" ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckSquare className="w-5 h-5" />}
-                </div>
-                <div className="mt-3">
-                  <p className="font-bold text-xs md:text-sm">Declaração Conjunta</p>
-                  <p className="text-[10px] text-slate-400 mt-1 leading-normal">Gera autodeclarações de habilitação (Anti-trabalho infantil, ME/EPP, anticorrupção)</p>
-                </div>
-                <ChevronRight className="w-4 h-4 text-emerald-400 mt-2 self-end" />
-              </button>
-
-              <button
-                disabled={generatingDoc !== null || (!uploadedTemplateText && !showCustomDocForm)}
-                onClick={() => triggerDocumentGeneration("custom_declaration")}
-                className="flex flex-col items-center justify-between p-4 bg-gradient-to-br from-blue-950/30 to-blue-900/20 hover:from-blue-950/50 hover:to-blue-900/40 border border-blue-500/30 rounded-xl text-center transition-all cursor-pointer group text-white disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-blue-950/50"
-                title={!uploadedTemplateText && !showCustomDocForm ? "Ative o Modelo acima para preencher uma declaração específica" : ""}
-              >
-                <div className={`p-2.5 rounded-lg group-hover:scale-105 transition-transform text-white ${
-                  uploadedTemplateText ? "bg-gradient-to-tr from-blue-500 to-blue-600 bg-blue-600" : "bg-slate-700"
-                }`}>
-                  {generatingDoc === "custom_declaration" ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileCode className="w-5 h-5" />}
-                </div>
-                <div className="mt-3">
-                  <p className="font-bold text-xs md:text-sm">Criar Declaração Exigida</p>
-                  <p className="text-[10px] text-slate-400 mt-1 leading-normal">Preenche com exatidão as lacunas de um modelo seu baseando-se no edital</p>
-                </div>
-                <ChevronRight className="w-4 h-4 text-blue-400 mt-2 self-end" />
-              </button>
-
-            </div>
-
-          </div>
 
         </div>
-      )}
+        );
+      })()}
 
       {/* PROPOSAL BUILDER MODAL */}
       {showProposalModal && (
@@ -1885,6 +2313,53 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Modal Popup de Alerta de Tamanho de Arquivo Excedido (> 60MB) */}
+      {fileSizeErrorModal && fileSizeErrorModal.show && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5 overflow-hidden text-left">
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-rose-500 via-amber-500 to-rose-600" />
+            
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-rose-500/20 border border-rose-500/30 rounded-xl text-rose-400 shrink-0">
+                <AlertTriangle className="w-7 h-7" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white leading-tight">
+                  Arquivo Maior que 60 MB
+                </h3>
+                <p className="text-xs text-rose-300 font-medium">
+                  Tamanho limite por anexo: <span className="underline font-bold">60 MB</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-white/10 rounded-xl p-4 text-xs space-y-3 text-slate-300">
+              <p className="leading-relaxed">
+                O arquivo <strong className="text-white">"{fileSizeErrorModal.fileName}"</strong> possui <strong className="text-rose-400 font-semibold">{fileSizeErrorModal.fileSizeMb} MB</strong> e excede o limite máximo permitido.
+              </p>
+              <div className="space-y-1.5 text-slate-400 border-t border-white/10 pt-2.5">
+                <p className="font-semibold text-slate-200">💡 Como proceder:</p>
+                <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
+                  <li>Comprima ou divida o PDF em arquivos menores (&lt; 60 MB);</li>
+                  <li>Ou copie o texto do edital e cole no campo de texto livre ao lado.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setFileSizeErrorModal(null)}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-semibold shadow-lg shadow-rose-600/20 transition-all flex items-center gap-2 cursor-pointer border border-rose-400/30 text-xs"
+              >
+                <Check className="w-4 h-4" />
+                Entendido
+              </button>
+            </div>
           </div>
         </div>
       )}

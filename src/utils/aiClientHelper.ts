@@ -101,3 +101,74 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
     throw error;
   }
 }
+
+// Chunked file upload helper for large files (> 2MB) to prevent HTTP 413 Payload Too Large
+export async function prepareAttachmentForServer(fileObj: any): Promise<any> {
+  if (!fileObj) return fileObj;
+
+  const base64Str = fileObj.base64 || fileObj.fileBase64 || fileObj.data || "";
+  // If no base64, or small base64 (< 3MB base64 string ~ 2.2MB binary), or already has uploadId
+  if (fileObj.uploadId || !base64Str || base64Str.length < 3 * 1024 * 1024) {
+    return fileObj;
+  }
+
+  // Large file (> 2.2MB binary) -> upload in 2.5MB base64 chunks to /api/upload-chunk
+  try {
+    const fileName = fileObj.name || fileObj.fileName || "arquivo";
+    const fileType = fileObj.type || fileObj.fileType || "application/pdf";
+
+    const initRes = await apiFetch("/api/upload-chunk/init", {
+      method: "POST",
+      body: { name: fileName, type: fileType }
+    });
+
+    if (!initRes.ok) {
+      console.warn("Falha ao inicializar upload por partes, enviando formato bruto.");
+      return fileObj;
+    }
+
+    const { uploadId } = await initRes.json();
+    if (!uploadId) return fileObj;
+
+    const chunkSize = 2.5 * 1024 * 1024; // 2.5MB base64 slice (~1.8MB per chunk)
+    const totalChunks = Math.ceil(base64Str.length / chunkSize);
+
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkBase64 = base64Str.slice(i * chunkSize, (i + 1) * chunkSize);
+      const chunkRes = await apiFetch("/api/upload-chunk", {
+        method: "POST",
+        body: {
+          uploadId,
+          chunkIndex: i,
+          totalChunks,
+          chunkBase64
+        }
+      });
+      if (!chunkRes.ok) {
+        throw new Error(`Falha no envio do bloco ${i + 1}/${totalChunks}`);
+      }
+    }
+
+    // Return sanitized object with uploadId and without the giant base64 payload
+    const { base64, fileBase64, data, ...rest } = fileObj;
+    return {
+      ...rest,
+      name: fileName,
+      type: fileType,
+      uploadId
+    };
+  } catch (err: any) {
+    console.error("Upload em partes falhou, enviando diretamente:", err);
+    return fileObj;
+  }
+}
+
+export async function prepareAttachmentsForServer(attachments: any[]): Promise<any[]> {
+  if (!Array.isArray(attachments)) return [];
+  const processed = [];
+  for (const att of attachments) {
+    processed.push(await prepareAttachmentForServer(att));
+  }
+  return processed;
+}
+

@@ -11,7 +11,7 @@ import {
   FileUp, Loader2, GripVertical, SlidersHorizontal, Sparkles
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentForServer } from "../utils/aiClientHelper";
 
 // Dynamic real-time date extraction for comparative analysis (timezone-safe)
 const getLocalTodayStr = (): string => {
@@ -517,13 +517,17 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       reader.onload = async (e) => {
         try {
           const base64String = (e.target?.result as string).split(",")[1];
-          
+          const resolvedFileType = file.type.startsWith("image/") ? "image/jpeg" : (file.type || "application/pdf");
+          const prepared = await prepareAttachmentForServer({
+            base64: base64String,
+            name: file.name,
+            type: resolvedFileType
+          });
+
           const response = await apiFetch("/api/analyze-cert", {
             method: "POST",
             body: {
-              fileBase64: base64String,
-              fileName: file.name,
-              fileType: file.type.startsWith("image/") ? "image/jpeg" : (file.type || "application/pdf"),
+              ...prepared,
               docName: certs.find(c => c.id === certId)?.name || ""
             }
           });

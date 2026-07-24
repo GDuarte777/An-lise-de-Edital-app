@@ -9,7 +9,7 @@ export default function AiConfigTab() {
   
   // Credentials
   const [geminiKey, setGeminiKey] = useState("");
-  const [geminiModel, setGeminiModel] = useState("gemini-3.5-flash");
+  const [geminiModel, setGeminiModel] = useState("gemini-3.6-flash");
   
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-4o");
@@ -39,7 +39,7 @@ export default function AiConfigTab() {
       setActiveProvider(provider);
 
       setGeminiKey(localStorage.getItem("ai_gemini_key") || "");
-      setGeminiModel(localStorage.getItem("ai_gemini_model") || "gemini-3.5-flash");
+      setGeminiModel(localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash");
 
       setOpenaiKey(localStorage.getItem("ai_openai_key") || "");
       setOpenaiModel(localStorage.getItem("ai_openai_model") || "gpt-4o");
@@ -311,7 +311,7 @@ export default function AiConfigTab() {
                       onChange={(e) => setGeminiModel(e.target.value)}
                       className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
                     >
-                      <option value="gemini-3.5-flash">gemini-3.5-flash (Geração Flash - Padrão)</option>
+                      <option value="gemini-3.6-flash">gemini-3.6-flash (Geração Flash - Padrão)</option>
                       <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Leve, Rápido e Estável)</option>
                       <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Raciocínio Avançado)</option>
                     </select>

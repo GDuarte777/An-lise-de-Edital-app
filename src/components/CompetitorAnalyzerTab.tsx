@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer } from "../utils/aiClientHelper";
 import { CompetitorAnalysis, CompetitorHistoryItem, EditalAnalysis } from "../types";
 
 interface CompetitorAnalyzerTabProps {
@@ -32,6 +32,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
 
   // File upload states for competitor (allows multiple files)
   const [competitorFiles, setCompetitorFiles] = useState<Array<{ name: string; size: string; type: string; base64: string }>>([]);
+  const [fileSizeErrorModal, setFileSizeErrorModal] = useState<{ show: boolean; fileName: string; fileSizeMb: string } | null>(null);
 
   // App UI states
   const [loading, setLoading] = useState(false);
@@ -88,11 +89,19 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
     }
   }, [editalHistory]);
 
+  const maxSizeBytes = 60 * 1024 * 1024; // 60 MB
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     Array.from(files).forEach((file) => {
+      if (file.size > maxSizeBytes) {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+        setFileSizeErrorModal({ show: true, fileName: file.name, fileSizeMb: sizeMb });
+        return;
+      }
+
       const reader = new FileReader();
       if (file.type === "text/plain") {
         reader.onload = (event) => {
@@ -130,6 +139,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
         reader.readAsDataURL(file);
       }
     });
+    e.target.value = "";
   };
 
   const handleRemoveFile = (index: number) => {
@@ -139,6 +149,13 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
   const handleCustomEditalFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (file.size > maxSizeBytes) {
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+      setFileSizeErrorModal({ show: true, fileName: file.name, fileSizeMb: sizeMb });
+      e.target.value = "";
+      return;
+    }
 
     setCustomEditalFileDetails({
       name: file.name,
@@ -150,6 +167,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
       setCustomEditalText(event.target?.result as string);
     };
     reader.readAsText(file);
+    e.target.value = "";
   };
 
   // Run audit through API
@@ -184,12 +202,14 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
 
     setLoading(true);
     try {
+      const preparedFiles = await prepareAttachmentsForServer(competitorFiles);
+
       const response = await apiFetch("/api/analyze-competitor", {
         method: "POST",
         body: {
           competitorName: competitorName, // Can be empty, AI extracts it
           competitorDocumentText,
-          files: competitorFiles,
+          files: preparedFiles,
           editalText: editalTextToAnalyze,
           focusItems
         }
@@ -825,6 +845,53 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Modal Popup de Alerta de Tamanho de Arquivo Excedido (> 60MB) */}
+      {fileSizeErrorModal && fileSizeErrorModal.show && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5 overflow-hidden text-left">
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-rose-500 via-amber-500 to-rose-600" />
+            
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-rose-500/20 border border-rose-500/30 rounded-xl text-rose-400 shrink-0">
+                <AlertTriangle className="w-7 h-7" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white leading-tight">
+                  Arquivo Maior que 60 MB
+                </h3>
+                <p className="text-xs text-rose-300 font-medium">
+                  Tamanho limite por anexo: <span className="underline font-bold">60 MB</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-white/10 rounded-xl p-4 text-xs space-y-3 text-slate-300">
+              <p className="leading-relaxed">
+                O arquivo <strong className="text-white">"{fileSizeErrorModal.fileName}"</strong> possui <strong className="text-rose-400 font-semibold">{fileSizeErrorModal.fileSizeMb} MB</strong> e excede o limite máximo permitido.
+              </p>
+              <div className="space-y-1.5 text-slate-400 border-t border-white/10 pt-2.5">
+                <p className="font-semibold text-slate-200">💡 Como proceder:</p>
+                <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
+                  <li>Comprima ou divida o PDF em arquivos menores (&lt; 60 MB);</li>
+                  <li>Ou copie o texto relevante do documento e cole no campo de texto livre.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setFileSizeErrorModal(null)}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-semibold shadow-lg shadow-rose-600/20 transition-all flex items-center gap-2 cursor-pointer border border-rose-400/30 text-xs"
+              >
+                <Check className="w-4 h-4" />
+                Entendido
+              </button>
+            </div>
           </div>
         </div>
       )}

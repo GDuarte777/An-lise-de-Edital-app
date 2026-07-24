@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -7,20 +8,28 @@ dotenv.config();
 
 // Helper: resolve the active AI config for a user from Supabase using their JWT
 function normalizeGeminiModel(model: string | undefined): string {
-  if (!model) return "gemini-2.5-flash";
-  return model; // Respect the exact model chosen/configured by the user
+  if (!model) return "gemini-3.6-flash";
+  if (
+    model === "gemini-3.5-flash" ||
+    model === "gemini-2.5-flash" ||
+    model === "gemini-2.0-flash" ||
+    model === "gemini-1.5-flash" ||
+    model === "gemini-flash"
+  ) {
+    return "gemini-3.6-flash";
+  }
+  return model;
 }
 
 // Get the fallback list of Gemini models, trying stable production models if preview models fail
 function getFallbackModels(primaryModel: string): string[] {
   const baseList = [
     primaryModel,
+    "gemini-3.6-flash",
     "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
-    "gemini-3.1-pro-preview"
+    "gemini-2.5-pro",
+    "gemini-1.5-flash"
   ];
   return Array.from(new Set(baseList.filter(Boolean)));
 }
@@ -30,7 +39,7 @@ function getFallbackModels(primaryModel: string): string[] {
 async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: any): Promise<{ provider: string; apiKey: string; model: string } | null> {
   console.log(`[AI Config] resolveAiConfig called. clientAiConfig present: ${!!clientAiConfig}, apiKey length: ${clientAiConfig?.apiKey?.length || 0}`);
 
-  let fallbackModel = "gemini-2.5-flash";
+  let fallbackModel = "gemini-3.6-flash";
   if (clientAiConfig?.provider === "gemini" && clientAiConfig.model) {
     fallbackModel = normalizeGeminiModel(clientAiConfig.model);
   }
@@ -130,7 +139,7 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
       deepseek: row.deepseek_key || ""
     };
     const modelMap: Record<string, string> = {
-      gemini: row.gemini_model || "gemini-2.5-flash",
+      gemini: row.gemini_model || "gemini-3.6-flash",
       openai: row.openai_model || "gpt-4o",
       anthropic: row.anthropic_model || "claude-3-7-sonnet-20250219",
       deepseek: row.deepseek_model || "deepseek-chat"
@@ -192,13 +201,272 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
+function getAiClientForConfig(aiConfig?: any): GoogleGenAI {
+  if (aiConfig && aiConfig.provider === "gemini" && aiConfig.apiKey && aiConfig.apiKey.trim().length > 10) {
+    return new GoogleGenAI({
+      apiKey: aiConfig.apiKey.trim(),
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+  }
+  return getAiClient();
+}
+
 function cleanAndParseJson(text: string): any {
   if (!text) return {};
   let cleaned = text.trim();
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```[a-zA-Z]*\n/, "").replace(/```$/, "").trim();
+  
+  // Remove code block backticks if present
+  cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
+
+  // Extract json object or array boundaries if surrounded by text
+  const firstBrace = cleaned.search(/[\{\[]/);
+  const lastBrace = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
   }
-  return JSON.parse(cleaned);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    // Attempt parsing with fixes for common AI JSON output issues
+    try {
+      const fixedJson = cleaned
+        .replace(/,\s*([\}\]])/g, "$1") // trailing commas
+        .replace(/[\u0000-\u001F\u007F-\u009F]/g, (match) => { // control chars
+          if (match === "\n") return "\\n";
+          if (match === "\r") return "\\r";
+          if (match === "\t") return "\\t";
+          return "";
+        });
+      return JSON.parse(fixedJson);
+    } catch {
+      console.warn("[cleanAndParseJson] Erro ao analisar JSON da IA:", err);
+      return {};
+    }
+  }
+}
+
+function collectUniqueFiles(sources: any[]): any[] {
+  const seen = new Set<string>();
+  const uniqueList: any[] = [];
+
+  for (const item of sources) {
+    if (!item) continue;
+    if (Array.isArray(item)) {
+      for (const f of item) {
+        if (!f) continue;
+        const b64 = f.base64 || f.fileBase64 || f.data || "";
+        const uploadId = f.uploadId || "";
+        if (!b64 && !uploadId) continue;
+        const key = uploadId ? `uploadId:${uploadId}` : ((f.name || f.fileName || "") + ":" + b64.slice(0, 100));
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueList.push(f);
+        }
+      }
+    } else if (typeof item === "object") {
+      const b64 = item.base64 || item.fileBase64 || item.data || "";
+      const uploadId = item.uploadId || "";
+      if (b64 || uploadId) {
+        const key = uploadId ? `uploadId:${uploadId}` : ((item.name || item.fileName || "") + ":" + b64.slice(0, 100));
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueList.push(item);
+        }
+      }
+    }
+  }
+  return uniqueList;
+}
+
+interface ProcessedAttachmentResult {
+  part: any;
+  tempFilePath?: string;
+  uploadedFileName?: string;
+}
+
+async function processFileAttachmentAsync(
+  file: any,
+  aiClient?: GoogleGenAI
+): Promise<ProcessedAttachmentResult | null> {
+  if (!file) return null;
+
+  const fname = file.name || file.fileName || "";
+  let mtype = file.type || file.fileType || file.mimeType || "";
+  const lowerName = fname.toLowerCase();
+
+  // Infer mime type if missing or generic octet-stream
+  if (!mtype || mtype === "application/octet-stream" || mtype === "binary/octet-stream" || mtype === "") {
+    if (lowerName.endsWith(".pdf")) {
+      mtype = "application/pdf";
+    } else if (lowerName.endsWith(".txt") || lowerName.endsWith(".log") || lowerName.endsWith(".md") || lowerName.endsWith(".csv")) {
+      mtype = "text/plain";
+    } else if (lowerName.endsWith(".png")) {
+      mtype = "image/png";
+    } else if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) {
+      mtype = "image/jpeg";
+    } else {
+      mtype = "application/pdf";
+    }
+  }
+
+  // Case 1: File uploaded in chunks to /tmp/uploads/${uploadId}
+  if (file.uploadId) {
+    const chunkFilePath = path.join("/tmp", "uploads", String(file.uploadId).replace(/[^a-zA-Z0-9_-]/g, ""));
+    if (fs.existsSync(chunkFilePath)) {
+      const stats = fs.statSync(chunkFilePath);
+      console.log(`[processFileAttachmentAsync] Using chunked upload file: ${chunkFilePath} (${(stats.size / (1024 * 1024)).toFixed(1)} MB)`);
+
+      // Text files
+      if (mtype.startsWith("text/") || mtype === "application/json" || lowerName.endsWith(".txt") || lowerName.endsWith(".csv") || lowerName.endsWith(".md")) {
+        try {
+          const decodedText = fs.readFileSync(chunkFilePath, "utf-8");
+          if (decodedText && decodedText.trim().length > 0) {
+            return {
+              part: {
+                text: `\n\n--- INÍCIO DO ANEXO (${fname || "Anexo de Texto"}) ---\n${decodedText}\n--- FIM DO ANEXO (${fname || "Anexo de Texto"}) ---\n\n`
+              },
+              tempFilePath: chunkFilePath
+            };
+          }
+        } catch (err) {
+          console.warn("[processFileAttachment] Erro ao ler arquivo de texto chunked:", err);
+        }
+      }
+
+      // Binary files / PDFs -> upload directly from disk to Gemini Files API
+      if (aiClient) {
+        try {
+          console.log(`[Gemini Files API] Uploading assembled chunked file ${fname || "file"} (${(stats.size / (1024 * 1024)).toFixed(1)} MB) to Files API...`);
+          const uploadRes = await aiClient.files.upload({
+            file: chunkFilePath,
+            config: { mimeType: mtype, displayName: fname || "Edital" }
+          });
+          console.log(`[Gemini Files API] Upload successful! URI: ${uploadRes.uri} (Name: ${uploadRes.name})`);
+
+          return {
+            part: {
+              fileData: {
+                fileUri: uploadRes.uri,
+                mimeType: uploadRes.mimeType || mtype
+              }
+            },
+            tempFilePath: chunkFilePath,
+            uploadedFileName: uploadRes.name
+          };
+        } catch (uploadErr: any) {
+          console.warn(`[Gemini Files API] Upload of chunked file failed:`, uploadErr.message || uploadErr);
+        }
+      }
+
+      // Fallback: read disk file to base64 inlineData
+      const buf = fs.readFileSync(chunkFilePath);
+      return {
+        part: {
+          inlineData: {
+            data: buf.toString("base64"),
+            mimeType: mtype
+          }
+        },
+        tempFilePath: chunkFilePath
+      };
+    }
+  }
+
+  // Case 2: Standard base64 in body
+  const rawB64 = file.base64 || file.fileBase64 || file.data;
+  if (!rawB64) return null;
+
+  const cleanB64 = rawB64.replace(/^data:[^;]+;base64,/, "").trim();
+  if (!cleanB64) return null;
+
+  // Text files MUST be sent as plain text strings because Gemini inlineData rejects text/plain with 400 Bad Request
+  if (mtype.startsWith("text/") || mtype === "application/json" || mtype === "application/xml" || lowerName.endsWith(".txt") || lowerName.endsWith(".csv") || lowerName.endsWith(".md")) {
+    try {
+      const decodedText = Buffer.from(cleanB64, "base64").toString("utf-8");
+      if (decodedText && decodedText.trim().length > 0) {
+        return {
+          part: {
+            text: `\n\n--- INÍCIO DO ANEXO (${fname || "Anexo de Texto"}) ---\n${decodedText}\n--- FIM DO ANEXO (${fname || "Anexo de Texto"}) ---\n\n`
+          }
+        };
+      }
+    } catch (err) {
+      console.warn("[processFileAttachment] Erro ao decodificar arquivo de texto:", err);
+    }
+  }
+
+  // Binary files (PDFs, Images, Office docs)
+  const buffer = Buffer.from(cleanB64, "base64");
+
+  // If we have aiClient and (buffer > 4MB OR is PDF), use Gemini Files API upload to avoid 20MB inline limit
+  if (aiClient && (buffer.length > 4 * 1024 * 1024 || mtype === "application/pdf")) {
+    try {
+      const tempExt = lowerName.endsWith(".pdf") ? ".pdf" : (lowerName.endsWith(".png") ? ".png" : (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") ? ".jpg" : ".bin"));
+      const tempFilePath = path.join("/tmp", `edital_upload_${Date.now()}_${Math.random().toString(36).substring(2, 7)}${tempExt}`);
+      fs.writeFileSync(tempFilePath, buffer);
+
+      console.log(`[Gemini Files API] Uploading ${fname || "file"} (${(buffer.length / (1024 * 1024)).toFixed(1)} MB) to Files API...`);
+      const uploadRes = await aiClient.files.upload({
+        file: tempFilePath,
+        config: { mimeType: mtype, displayName: fname || "Edital" }
+      });
+
+      console.log(`[Gemini Files API] Upload successful! URI: ${uploadRes.uri} (Name: ${uploadRes.name})`);
+
+      return {
+        part: {
+          fileData: {
+            fileUri: uploadRes.uri,
+            mimeType: uploadRes.mimeType || mtype
+          }
+        },
+        tempFilePath,
+        uploadedFileName: uploadRes.name
+      };
+    } catch (uploadErr: any) {
+      console.warn(`[Gemini Files API] Upload via Files API failed, falling back to inlineData:`, uploadErr.message || uploadErr);
+    }
+  }
+
+  // Fallback to inlineData if file is small or Files API upload failed
+  return {
+    part: {
+      inlineData: {
+        data: cleanB64,
+        mimeType: mtype
+      }
+    }
+  };
+}
+
+async function cleanupAttachmentResources(
+  tempFiles: string[],
+  geminiFileNames: string[],
+  aiClient?: GoogleGenAI
+) {
+  for (const tmpFile of tempFiles) {
+    try {
+      if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    } catch (e) {
+      console.warn("Erro ao excluir arquivo temp local:", e);
+    }
+  }
+  if (aiClient) {
+    for (const gName of geminiFileNames) {
+      if (!gName) continue;
+      try {
+        await aiClient.files.delete({ name: gName });
+        console.log(`[Gemini Files API] Arquivo ${gName} removido da nuvem da IA.`);
+      } catch (e) {
+        console.warn("Erro ao remover arquivo da Gemini Files API:", e);
+      }
+    }
+  }
 }
 
 function normalizeContents(contents: any[]): any[] {
@@ -232,6 +500,9 @@ function normalizeContents(contents: any[]): any[] {
       if (c.inlineData) {
         return { inlineData: c.inlineData };
       }
+      if (c.fileData) {
+        return { fileData: c.fileData };
+      }
       return c;
     }
     return { text: String(c) };
@@ -245,10 +516,35 @@ function normalizeContents(contents: any[]): any[] {
   ];
 }
 
+function sanitizeAiTextResponse(text: string): string {
+  if (!text) return "";
+  let cleaned = text;
+
+  // Replace LaTeX block/inline math delimiters ($$ ... $$ and $ ... $)
+  cleaned = cleaned.replace(/\$\$(.*?)\$\$/gs, (_, formula) => formula);
+  cleaned = cleaned.replace(/\$(.*?)\$/g, (_, formula) => formula);
+
+  // Replace common LaTeX expressions with clean Portuguese / Unicode text
+  cleaned = cleaned
+    .replace(/\\text\{([^}]*)\}/g, "$1")
+    .replace(/\\times/g, "x")
+    .replace(/\\cdot/g, "x")
+    .replace(/\\rightarrow/g, "→")
+    .replace(/\\leftarrow/g, "←")
+    .replace(/\\Rightarrow/g, "=>")
+    .replace(/\\approx/g, "≈")
+    .replace(/\\le/g, "≤")
+    .replace(/\\ge/g, "≥")
+    .replace(/\\neq/g, "≠")
+    .replace(/\\/g, ""); // Clean any remaining loose backslashes from LaTeX
+
+  return cleaned;
+}
+
 // Robust content generation helper with automatic fallback for high demand/503 errors
 async function generateContentWithFallback(params: any): Promise<any> {
   const client = getAiClient();
-  const primaryModel = normalizeGeminiModel(params.model || "gemini-2.5-flash");
+  const primaryModel = normalizeGeminiModel(params.model || "gemini-3.6-flash");
   const modelsToTry = getFallbackModels(primaryModel);
 
   const normalizedContents = normalizeContents(params.contents);
@@ -256,7 +552,7 @@ async function generateContentWithFallback(params: any): Promise<any> {
   let lastError: any = null;
   for (const model of modelsToTry) {
     let attempt = 0;
-    const maxAttempts = 3;
+    const maxAttempts = 2;
     let delay = 1000;
     
     while (attempt < maxAttempts) {
@@ -267,6 +563,9 @@ async function generateContentWithFallback(params: any): Promise<any> {
           contents: normalizedContents,
           model,
         });
+        if (response && response.text) {
+          response.text = sanitizeAiTextResponse(response.text);
+        }
         return response;
       } catch (error: any) {
         attempt++;
@@ -294,7 +593,12 @@ async function generateContentWithFallback(params: any): Promise<any> {
             error.message.toLowerCase().includes("overloaded")
           ));
 
-        if ((isQuotaOrRateLimit || isTransient) && attempt < maxAttempts) {
+        // If quota limit, immediately switch to next model without wasting retries
+        if (isQuotaOrRateLimit) {
+          break;
+        }
+
+        if (isTransient && attempt < maxAttempts) {
           console.log(`[Gemini API] Retrying model ${model} in ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
           delay *= 2;
@@ -348,7 +652,7 @@ async function generateAiResponse(params: {
               try {
                 const extractionResponse = await generateContentWithFallback({
                   contents: [{ parts: [p, { text: "Extraia todo o texto contido neste documento na íntegra de forma exata, mantendo a estrutura original e tabelas se houver. Não faça comentários ou introduções, apenas retorne o texto do documento." }] }],
-                  model: "gemini-3.5-flash"
+                  model: "gemini-3.6-flash"
                 });
                 const extractedText = extractionResponse.text || "";
                 newParts.push({ text: `[Conteúdo extraído do arquivo]:\n${extractedText}` });
@@ -403,7 +707,8 @@ async function generateAiResponse(params: {
         throw new Error(`OpenAI Error: ${response.status} - ${errorText}`);
       }
       const data = await response.json();
-      const text = data.choices?.[0]?.message?.content || "";
+      const rawText = data.choices?.[0]?.message?.content || "";
+      const text = sanitizeAiTextResponse(rawText);
       return {
         text,
         candidates: [{ content: { parts: [{ text }] } }]
@@ -430,7 +735,8 @@ async function generateAiResponse(params: {
         throw new Error(`Anthropic Error: ${response.status} - ${errorText}`);
       }
       const data = await response.json();
-      const text = data.content?.[0]?.text || "";
+      const rawText = data.content?.[0]?.text || "";
+      const text = sanitizeAiTextResponse(rawText);
       return {
         text,
         candidates: [{ content: { parts: [{ text }] } }]
@@ -458,7 +764,8 @@ async function generateAiResponse(params: {
         throw new Error(`DeepSeek Error: ${response.status} - ${errorText}`);
       }
       const data = await response.json();
-      const text = data.choices?.[0]?.message?.content || "";
+      const rawText = data.choices?.[0]?.message?.content || "";
+      const text = sanitizeAiTextResponse(rawText);
       return {
         text,
         candidates: [{ content: { parts: [{ text }] } }]
@@ -466,46 +773,44 @@ async function generateAiResponse(params: {
     }
 
     if (provider === "gemini") {
-      const primaryModel = normalizeGeminiModel(activeModel || "gemini-2.5-flash");
+      const customClient = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+      const primaryModel = normalizeGeminiModel(activeModel || "gemini-3.6-flash");
       const uniqueModels = getFallbackModels(primaryModel);
       
       let lastError: any = null;
       for (const geminiModelName of uniqueModels) {
         let attempt = 0;
-        const maxAttempts = 3;
+        const maxAttempts = 2;
         let delay = 1000;
         
         while (attempt < maxAttempts) {
           try {
-            console.log(`[Dynamic AI Router] Requesting Gemini content generation using model: ${geminiModelName} (Attempt ${attempt + 1}/${maxAttempts})`);
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelName}:generateContent?key=${apiKey}`;
-            const payload: any = {
+            console.log(`[Dynamic AI Router] Requesting Gemini content generation via SDK model: ${geminiModelName} (Attempt ${attempt + 1}/${maxAttempts})`);
+            
+            const reqConfig: any = {};
+            if (systemInstruction) reqConfig.systemInstruction = systemInstruction;
+            if (jsonMode) reqConfig.responseMimeType = "application/json";
+            if (responseSchema) reqConfig.responseSchema = responseSchema;
+            if (tools) reqConfig.tools = tools;
+
+            const response = await customClient.models.generateContent({
+              model: geminiModelName,
               contents: processedContents,
-              generationConfig: {
-                responseMimeType: jsonMode ? "application/json" : undefined,
-                responseSchema: responseSchema
-              },
-              tools: tools
-            };
-            // systemInstruction must be at ROOT level, not inside generationConfig
-            if (systemInstruction) {
-              payload.systemInstruction = { parts: [{ text: systemInstruction }] };
-            }
-            const response = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
+              ...(Object.keys(reqConfig).length > 0 ? { config: reqConfig } : {})
             });
-            if (!response.ok) {
-              const errorText = await response.text();
-              throw new Error(`Gemini Error: ${response.status} - ${errorText}`);
-            }
-            const data = await response.json();
-            const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+            const text = sanitizeAiTextResponse(response.text || "");
             return {
               text,
-              candidates: data.candidates || [],
-              groundingMetadata: data.candidates?.[0]?.groundingMetadata || null
+              candidates: response.candidates || [],
+              groundingMetadata: (response.candidates?.[0] as any)?.groundingMetadata || null
             };
           } catch (error: any) {
             attempt++;
@@ -533,13 +838,40 @@ async function generateAiResponse(params: {
                 error.message.toLowerCase().includes("overloaded")
               ));
 
-            if ((isQuotaOrRateLimit || isTransient) && attempt < maxAttempts) {
-              console.log(`[Dynamic AI Router] Quota/Transient error hit on ${geminiModelName}. Retrying in ${delay}ms...`);
+            // If tools (like googleSearch) were passed and failed, try calling without tools once
+            if (tools) {
+              console.log(`[Dynamic AI Router] Trying model ${geminiModelName} without tools fallback...`);
+              try {
+                const reqConfigNoTools: any = {};
+                if (systemInstruction) reqConfigNoTools.systemInstruction = systemInstruction;
+                if (jsonMode) reqConfigNoTools.responseMimeType = "application/json";
+                if (responseSchema) reqConfigNoTools.responseSchema = responseSchema;
+
+                const responseNoTools = await customClient.models.generateContent({
+                  model: geminiModelName,
+                  contents: processedContents,
+                  ...(Object.keys(reqConfigNoTools).length > 0 ? { config: reqConfigNoTools } : {})
+                });
+                const text = sanitizeAiTextResponse(responseNoTools.text || "");
+                return {
+                  text,
+                  candidates: responseNoTools.candidates || [],
+                  groundingMetadata: null
+                };
+              } catch (noToolsErr: any) {
+                console.warn(`[Dynamic AI Router] Fallback without tools also failed on ${geminiModelName}:`, noToolsErr.message || noToolsErr);
+              }
+            }
+
+            if (isTransient && attempt < maxAttempts) {
+              console.log(`[Dynamic AI Router] Transient error hit on ${geminiModelName}. Retrying in ${delay}ms...`);
               await new Promise(resolve => setTimeout(resolve, delay));
               delay *= 2;
               continue;
             }
-            break; // Break the retry loop and try the next model
+
+            // For quota error or other non-transient failures, break immediately to try the next model
+            break;
           }
         }
       }
@@ -553,10 +885,15 @@ async function generateAiResponse(params: {
     config: {
       systemInstruction: systemInstruction || undefined,
       responseMimeType: jsonMode ? "application/json" : undefined,
-      responseSchema: responseSchema
+      responseSchema: responseSchema,
+      tools: tools || undefined
     },
-    model: model || "gemini-3.5-flash"
+    model: model || "gemini-3.6-flash"
   });
+
+  if (response && response.text) {
+    response.text = sanitizeAiTextResponse(response.text);
+  }
   return response;
 }
 
@@ -685,12 +1022,47 @@ function parseEditalLocally(text: string): any {
     prazoEntrega: "15 a 30 dias de prazo real.",
     prazoPagamento: "Em até 30 dias após adimplência fiscal.",
     descricaoProduto: produto,
-    documentosExigidos: [
-      "Certidão Negativa de Débitos Federais (Conjunta)",
-      "Prova de regularidade junto ao FGTS (CRF)",
-      "Certidão Negativa de Débitos Trabalhistas (CNDT)",
-      "Balanço Patrimonial do último exercício social registrado"
-    ],
+    documentosExigidos: (() => {
+      const lower = text.toLowerCase();
+      const extracted: string[] = [];
+      if (lower.includes("federal") || lower.includes("receita") || lower.includes("uniao")) {
+        extracted.push("Certidão Conjunta de Tributos Federais e Dívida Ativa da União");
+      }
+      if (lower.includes("estadual") || lower.includes("sefaz")) {
+        extracted.push("Certidão Negativa de Débitos Estaduais (SEFAZ)");
+      }
+      if (lower.includes("municipal") || lower.includes("iss") || lower.includes("iptu") || lower.includes("prefeitura")) {
+        extracted.push("Certidão Negativa de Débitos Municipais");
+      }
+      if (lower.includes("trabalhista") || lower.includes("cndt")) {
+        extracted.push("Certidão Negativa de Débitos Trabalhistas (CNDT)");
+      }
+      if (lower.includes("fgts") || lower.includes("crf")) {
+        extracted.push("Certificado de Regularidade do FGTS (CRF)");
+      }
+      if (lower.includes("falencia") || lower.includes("concordata") || lower.includes("recuperacao")) {
+        extracted.push("Certidão Negativa de Falência e Concordata");
+      }
+      if (lower.includes("sicaf") || lower.includes("crc")) {
+        extracted.push("Comprovante de Regularidade Cadastral no SICAF / CRC");
+      }
+      if (lower.includes("balanco") || lower.includes("balanço") || lower.includes("demonstracao")) {
+        extracted.push("Balanço Patrimonial e Demonstrações Contábeis do último exercício");
+      }
+      if (lower.includes("atestado") || lower.includes("capacidade tecnica") || lower.includes("capacidade técnica")) {
+        extracted.push("Atestado de Capacidade Técnica Operacional");
+      }
+      if (lower.includes("contrato social") || lower.includes("estatuto")) {
+        extracted.push("Contrato Social Consolidado ou Estatuto Social");
+      }
+      if (extracted.length > 0) return extracted;
+      return [
+        "Certidão Negativa de Débitos Federais (Conjunta)",
+        "Prova de regularidade junto ao FGTS (CRF)",
+        "Certidão Negativa de Débitos Trabalhistas (CNDT)",
+        "Balanço Patrimonial do último exercício social registrado"
+      ];
+    })(),
     identificacaoCertame: {
       orgaoComprador: orgao,
       modalidade,
@@ -1035,13 +1407,52 @@ Como posso orientar sua empresa hoje?`;
 const app = express();
 const PORT = 3000;
 
-// Increase payload limit for PDF uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// Increase payload limit for large PDF uploads
+  app.use(express.json({ limit: "250mb" }));
+  app.use(express.urlencoded({ limit: "250mb", extended: true }));
 
   // API Route: Health Check
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", mode: process.env.NODE_ENV || "development" });
+  });
+
+  // API Route: Chunked Upload Init
+  app.post("/api/upload-chunk/init", (req, res): any => {
+    try {
+      const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const uploadDir = path.join("/tmp", "uploads");
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      const filePath = path.join(uploadDir, uploadId);
+      fs.writeFileSync(filePath, "");
+      return res.json({ uploadId });
+    } catch (err: any) {
+      console.error("Erro ao inicializar upload chunk:", err);
+      return res.status(500).json({ error: "Erro ao inicializar upload." });
+    }
+  });
+
+  // API Route: Chunked Upload Chunk
+  app.post("/api/upload-chunk", (req, res): any => {
+    try {
+      const { uploadId, chunkIndex, totalChunks, chunkBase64 } = req.body;
+      if (!uploadId || !chunkBase64) {
+        return res.status(400).json({ error: "uploadId e chunkBase64 são obrigatórios." });
+      }
+      const cleanUploadId = String(uploadId).replace(/[^a-zA-Z0-9_-]/g, "");
+      const uploadDir = path.join("/tmp", "uploads");
+      const filePath = path.join(uploadDir, cleanUploadId);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "Sessão de upload expirada ou não encontrada." });
+      }
+      const chunkBuffer = Buffer.from(chunkBase64, "base64");
+      fs.appendFileSync(filePath, chunkBuffer);
+      return res.json({ success: true, chunkIndex, totalChunks });
+    } catch (err: any) {
+      console.error("Erro ao receber chunk de upload:", err);
+      return res.status(500).json({ error: "Erro ao processar parte do arquivo." });
+    }
   });
 
   // API Route: AI Status - lets users check if their API key is configured and working
@@ -1081,7 +1492,7 @@ const PORT = 3000;
         user_id uuid references auth.users(id) on delete cascade not null primary key,
         active_provider text not null default 'gemini',
         gemini_key text default '',
-        gemini_model text default 'gemini-1.5-flash',
+        gemini_model text default 'gemini-3.6-flash',
         openai_key text default '',
         openai_model text default 'gpt-4o',
         anthropic_key text default '',
@@ -1293,8 +1704,12 @@ const PORT = 3000;
 
   // API Route: Analyze Edital
   app.post("/api/analyze-edital", async (req, res): Promise<any> => {
+    const tempFilesToDelete: string[] = [];
+    const geminiFilesToDelete: string[] = [];
+    let aiClientForCleanup: GoogleGenAI | undefined = undefined;
+
     try {
-      const { textInput, fileBase64, fileName, fileType, aiConfig: clientAiConfig, selectedItems } = req.body;
+      const { textInput, fileBase64, fileName, fileType, attachments, attachedFiles, files, aiConfig: clientAiConfig, selectedItems } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
 
       if (!aiConfig) {
@@ -1304,20 +1719,30 @@ const PORT = 3000;
         });
       }
 
-      if (!textInput && !fileBase64) {
-        return res.status(400).json({ error: "Nenhum conteúdo de edital enviado." });
+      const aiClient = getAiClientForConfig(aiConfig);
+      aiClientForCleanup = aiClient;
+
+      // Collect all file attachments uniquely
+      const rawFileList = collectUniqueFiles([
+        attachments, 
+        attachedFiles, 
+        files, 
+        fileBase64 ? { base64: fileBase64, type: fileType, name: fileName } : null
+      ]);
+
+      if (!textInput && rawFileList.length === 0) {
+        return res.status(400).json({ error: "Nenhum conteúdo de edital ou anexo enviado." });
       }
 
       let contentParts: any[] = [];
 
-      if (fileBase64 && fileType) {
-        // Multi-modal upload
-        contentParts.push({
-          inlineData: {
-            data: fileBase64,
-            mimeType: fileType,
-          }
-        });
+      for (const f of rawFileList) {
+        const processed = await processFileAttachmentAsync(f, aiClient);
+        if (processed) {
+          if (processed.part) contentParts.push(processed.part);
+          if (processed.tempFilePath) tempFilesToDelete.push(processed.tempFilePath);
+          if (processed.uploadedFileName) geminiFilesToDelete.push(processed.uploadedFileName);
+        }
       }
 
       let itemFocusInstructions = "";
@@ -1384,7 +1809,7 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
 
       console.log("Chamando AI Router para análise de edital...");
       const response = await generateAiResponse({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents: contentParts,
         aiConfig,
         jsonMode: true,
@@ -1416,7 +1841,7 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
               documentosExigidos: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
-                description: "Lista de documentos, certidões específicas e atestados exigidos"
+                description: "Lista completa e fidedigna de todos os documentos, certidões negativas (Federais, Estaduais, Municipais, Trabalhistas, FGTS, Falência), atestados de capacidade técnica e habilitações jurídicas efetivamente exigidos no edital."
               },
               identificacaoCertame: {
                 type: Type.OBJECT,
@@ -1504,21 +1929,52 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
 
       const rawJson = response.text || "{}";
       const parsedData = cleanAndParseJson(rawJson);
+
+      if (!parsedData || Object.keys(parsedData).length === 0) {
+        throw new Error("A IA não retornou um formato de JSON estruturado válido.");
+      }
+
       return res.json({ analysis: parsedData });
     } catch (error: any) {
-      console.warn("Erro na análise do edital, aplicando fallback inteligente local...", error.message || error);
+      console.error("[analyze-edital] Erro na análise do edital com a IA:", error.message || error);
+      
       try {
-        const { textInput } = req.body;
-        const fallbackData = parseEditalLocally(textInput || "");
+        const { textInput, fileBase64, fileName, attachments, attachedFiles, files } = req.body;
+        let extractedTextFromFiles = "";
+        const rawFileList = collectUniqueFiles([
+          attachments, 
+          attachedFiles, 
+          files, 
+          fileBase64 ? { base64: fileBase64, name: fileName } : null
+        ]);
+        for (const f of rawFileList) {
+          const processed = await processFileAttachmentAsync(f, aiClientForCleanup);
+          if (processed?.part?.text) {
+            extractedTextFromFiles += "\n" + processed.part.text;
+          }
+        }
+        const combinedText = ((textInput || "") + "\n" + extractedTextFromFiles).trim();
+        console.log("[analyze-edital] Aplicando fallback local estruturado para garantir resposta contínua ao usuário...");
+        const fallbackData = parseEditalLocally(combinedText.length > 5 ? combinedText : "Edital de Licitação Pública");
         return res.json({ analysis: fallbackData });
       } catch (fallbackError: any) {
-        return res.status(500).json({ error: "Erro ao processar análise do edital local." });
+        console.error("[analyze-edital] Falha no fallback local:", fallbackError);
       }
+
+      return res.status(500).json({ 
+        error: `Erro ao processar a leitura e análise do edital: ${error.message || "Falha na resposta do servidor."}` 
+      });
+    } finally {
+      await cleanupAttachmentResources(tempFilesToDelete, geminiFilesToDelete, aiClientForCleanup);
     }
   });
 
   // API Route: Analyze Competitor Documents
   app.post("/api/analyze-competitor", async (req, res): Promise<any> => {
+    const tempFilesToDelete: string[] = [];
+    const geminiFilesToDelete: string[] = [];
+    let aiClientForCleanup: GoogleGenAI | undefined = undefined;
+
     try {
       const { competitorName, competitorDocumentText, fileBase64, fileType, files, editalText, focusItems, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
@@ -1530,30 +1986,27 @@ Além do texto estruturado em Markdown em "reportMarkdown", extraia as chaves es
         });
       }
 
-      if (!competitorDocumentText && !fileBase64 && (!files || files.length === 0)) {
+      const aiClient = getAiClientForConfig(aiConfig);
+      aiClientForCleanup = aiClient;
+
+      const rawFileList = collectUniqueFiles([
+        files, 
+        fileBase64 ? { base64: fileBase64, type: fileType } : null
+      ]);
+
+      if (!competitorDocumentText && rawFileList.length === 0) {
         return res.status(400).json({ error: "Nenhum documento do concorrente enviado." });
       }
 
       let contentParts: any[] = [];
 
-      if (files && Array.isArray(files)) {
-        for (const f of files) {
-          if (f.base64 && f.type) {
-            contentParts.push({
-              inlineData: {
-                data: f.base64,
-                mimeType: f.type,
-              }
-            });
-          }
+      for (const f of rawFileList) {
+        const processed = await processFileAttachmentAsync(f, aiClient);
+        if (processed) {
+          if (processed.part) contentParts.push(processed.part);
+          if (processed.tempFilePath) tempFilesToDelete.push(processed.tempFilePath);
+          if (processed.uploadedFileName) geminiFilesToDelete.push(processed.uploadedFileName);
         }
-      } else if (fileBase64 && fileType) {
-        contentParts.push({
-          inlineData: {
-            data: fileBase64,
-            mimeType: fileType,
-          }
-        });
       }
 
       const basePrompt = `
@@ -1591,7 +2044,7 @@ O formato de retorno DEVE ser obrigatoriamente um objeto JSON com o esquema defi
 
       console.log("Chamando AI Router para auditoria jurídica do concorrente...");
       const response = await generateAiResponse({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents: contentParts,
         aiConfig,
         jsonMode: true,
@@ -1715,11 +2168,17 @@ Identificamos **2 irregularidades de gravidade ALTA** que servem como fundamenta
 - O concorrente apresentou preço menor, porém com produto defasado. O recurso deve frisar o desvio técnico para convencer o pregoeiro de que o produto ofertado trará prejuízos à administração pública.`
       };
       return res.json({ analysis: fallbackData });
+    } finally {
+      await cleanupAttachmentResources(tempFilesToDelete, geminiFilesToDelete, aiClientForCleanup);
     }
   });
 
   // API Route: Analyze Certificate / Document
   app.post("/api/analyze-cert", async (req, res): Promise<any> => {
+    const tempFilesToDelete: string[] = [];
+    const geminiFilesToDelete: string[] = [];
+    let aiClientForCleanup: GoogleGenAI | undefined = undefined;
+
     try {
       const { fileBase64, fileName, fileType, docName, aiConfig: clientAiConfig } = req.body;
       const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
@@ -1735,15 +2194,18 @@ Identificamos **2 irregularidades de gravidade ALTA** que servem como fundamenta
         return res.status(400).json({ error: "Nenhum arquivo ou nome de arquivo enviado para análise." });
       }
 
+      const aiClient = getAiClientForConfig(aiConfig);
+      aiClientForCleanup = aiClient;
+
       let contentParts: any[] = [];
 
-      if (fileBase64 && fileType) {
-        contentParts.push({
-          inlineData: {
-            data: fileBase64,
-            mimeType: fileType,
-          }
-        });
+      if (fileBase64) {
+        const processed = await processFileAttachmentAsync({ base64: fileBase64, type: fileType, name: fileName }, aiClient);
+        if (processed) {
+          if (processed.part) contentParts.push(processed.part);
+          if (processed.tempFilePath) tempFilesToDelete.push(processed.tempFilePath);
+          if (processed.uploadedFileName) geminiFilesToDelete.push(processed.uploadedFileName);
+        }
       }
 
       contentParts.push({
@@ -1798,7 +2260,7 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
 
       console.log(`Chamando AI Router para análise da certidão: ${docName || fileName}...`);
       const response = await generateAiResponse({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents: contentParts,
         systemInstruction,
         aiConfig,
@@ -1848,6 +2310,8 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
       } catch (fallbackError: any) {
         return res.status(500).json({ error: "Erro ao processar certidão local." });
       }
+    } finally {
+      await cleanupAttachmentResources(tempFilesToDelete, geminiFilesToDelete, aiClientForCleanup);
     }
   });
 
@@ -1971,7 +2435,7 @@ Manter a redação original do modelo fornecido pelo usuário, apenas aprimorand
 
       console.log(`Chamando AI Router para gerar documento (${docType})...`);
       const response = await generateAiResponse({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents: [{ text: prompt }],
         aiConfig,
       });
@@ -2057,7 +2521,7 @@ Retorne sua resposta estritamente no seguinte formato JSON, sem comentários nem
 Retorne exclusivamente o JSON bruto estruturado e validável.`;
 
             const response = await generateAiResponse({
-              model: "gemini-3.5-flash",
+              model: "gemini-3.6-flash",
               contents: [{ text: prompt }],
               aiConfig,
               jsonMode: true,
@@ -2139,27 +2603,50 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
 
       // In the system instruction (or prepended context), we provide info about the company certs and active edital analysis if present!
       const contextPrefix = `
-Você é o HORASIS AI, o Assessor Inteligente Especialista em Licitações e Pregões Eletrônicos da plataforma HORASIS.
-Seu papel é ajudar o usuário a triunfar em licitações federais, estaduais e municipais (pregões eletrônicos).
-Você é consultivo, estratégico e focado em produtividade. Forneça respostas diretas, úteis e juridicamente amparadas.
+Você é a HORASIS AI, a Assessora e Consultora Inteligente de Licitações, Pregões Eletrônicos e Cotações de Mercado da plataforma HORASIS.
+Sua missão é dar respostas ultra-claras, diretas, resumidas e perfeitamente explicadas para os fornecedores e licitantes.
 
-Informações sobre a Empresa do Usuário:
-${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyData.cnpj}\n- Representante: ${companyData.representativeName}` : "Não fornecida ainda."}
+🎯 DIRETRIZES FUNDAMENTAIS DE RESPOSTA (OBRIGATÓRIO):
+1. **RESPOSTAS DIRETAS, RESUMIDAS E EXPLICÁVEIS**:
+   - Responda com clareza e sem enrolação nas primeiras linhas. Os usuários querem praticidade e facilidade.
+   - Apresente os resultados, conclusões e valores numéricos diretamente logo de início.
 
-Análise de Edital Ativo em Memória:
-${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum edital analisado nesta sessão."}
+2. **PROIBIDO QUALQUER CÓDIGO OU SÍMBOLO DE FÓRMULA LATEX**:
+   - ❌ NUNCA USE '$$', '\\text{}', '\\times', '\\rightarrow', '\\cdot' ou qualquer marcação matemática LaTeX.
+   - ✅ Escreva todas as fórmulas, equações e cálculos em português simples e legível.
+   - Exemplo correto de cálculo de lucro e margem:
+     • **Preço de Venda do Governo:** R$ 800,00/mês
+     • **Custo do Produto/Serviço:** R$ 550,00/mês
+     • **Impostos Estimados (~6% Simples):** R$ 48,00/mês
+     • **Lucro Líquido Real:** **R$ 202,00 por mês** (Lucro Anual: R$ 2.424,00)
 
-Se o usuário perguntar sobre editais, propostas ou conformidade ("minha empresa se encaixa?"), analise se as certidões e documentos cadastrados atendem às obrigatoriedades listadas no edital atual.
-Escreva suas respostas de forma polida e profissional utilizando formatação Markdown adequada.
+3. **REGRAS SOBRE EDITAIS E DOCUMENTOS ANEXOS**:
+   - Só analise, mencione ou tome como base um edital se o usuário tiver explicitamente SELECIONADO um edital no Foco do Chat ou se tiver enviado um arquivo/documento em anexo.
+   - Se NENHUM edital estiver selecionado e nenhum anexo for enviado na mensagem, responda a qualquer dúvida do usuário de forma totalmente geral, direta e útil, sem inventar nem assumir nenhum edital prévio.
+
+4. **PESQUISA AUTÔNOMA NA INTERNET (WEB SEARCH) EM TEMPO REAL**:
+   - Você possui autonomia e ferramenta ativa de pesquisa no Google em tempo real.
+   - Sempre que o usuário solicitar preços de produtos, serviços, licenças de software (ex: Claude, ChatGPT, ERPs, softwares de IA), equipamentos, insumos ou cotações de mercado, PESQUISE imediatamente dados atualizados na internet.
+   - NUNCA invente preços ou dados se não souber. Se pesquisar, traga os valores e estimativas reais de mercado vigentes no Brasil.
+
+5. **ESTRUTURA LEGÍVEL E FORMATO**:
+   - Organize as respostas usando marcadores em tópicos (• ou -) com títulos destacados em negrito.
+   - Em cenários com tabelas, garanta que cada linha esteja formatada corretamente e seja fácil de ler no celular e computador.
+
+Informações da Empresa do Usuário:
+${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyData.cnpj}\n- Representante: ${companyData.representativeName}` : "Empresa não fornecida."}
+
+Edital Selecionado pelo Usuário nesta Conversa:
+${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum edital selecionado pelo usuário para esta conversa."}
 `;
 
-      // Prepend context to the first message, or use it systemInstruction
-      // We can invoke with a specific system instruction.
-      console.log("Chamando Gemini API Chat...");
+      // Invoke Gemini API with system instruction & Google Search grounding
+      console.log("Chamando Gemini API Chat com Web Search ativo...");
       const response = await generateAiResponse({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents: formattedHistory,
         systemInstruction: contextPrefix,
+        tools: [{ googleSearch: {} }],
         aiConfig,
       });
 
@@ -2191,7 +2678,7 @@ Dúvida do usuário: "${message.substring(0, 500)}"`;
 
       console.log("Chamando Gemini API para gerar título de conversa...");
       const response = await generateAiResponse({
-        model: "gemini-3.5-flash",
+        model: "gemini-3.6-flash",
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         aiConfig,
       });
@@ -2232,7 +2719,7 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
       let generatedDescription = "";
       if (aiConfig) {
         const response = await generateAiResponse({
-          model: "gemini-3.5-flash",
+          model: "gemini-3.6-flash",
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           aiConfig,
         });

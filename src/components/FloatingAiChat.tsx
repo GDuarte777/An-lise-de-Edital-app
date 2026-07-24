@@ -5,7 +5,7 @@ import {
   MessageSquare, X, Send, Bot, User, Sparkles, Loader2, Plus, Trash2, 
   Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw,
   FolderOpen, FileCheck, Download, Eye, ClipboardCopy, CheckSquare, Globe, Database, Printer,
-  ChevronDown, Search
+  ChevronDown, Search, AlertTriangle
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
@@ -30,9 +30,53 @@ const CONSTANT_SUGGESTIONS = [
   "Me passe conselhos para uma ME/EPP vencer pregões."
 ];
 
+const DELETED_SESSIONS_KEY = "aip_deleted_chat_session_ids";
+
+function getDeletedSessionIds(): string[] {
+  try {
+    const saved = localStorage.getItem(DELETED_SESSIONS_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addDeletedSessionId(id: string) {
+  try {
+    const current = getDeletedSessionIds();
+    if (!current.includes(id)) {
+      current.push(id);
+      localStorage.setItem(DELETED_SESSIONS_KEY, JSON.stringify(current));
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function addMultipleDeletedSessionIds(ids: string[]) {
+  try {
+    const current = new Set(getDeletedSessionIds());
+    ids.forEach(id => current.add(id));
+    localStorage.setItem(DELETED_SESSIONS_KEY, JSON.stringify(Array.from(current)));
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+const MAX_CHATS_PER_USER = 20;
+const MAX_MESSAGES_PER_CHAT = 200;
+
 export default function FloatingAiChat({ companyData, activeEdital }: FloatingAiChatProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showSidebarMobile, setShowSidebarMobile] = useState(true);
+  
+  // Storage & Message Limit Modal State
+  const [chatLimitModal, setChatLimitModal] = useState<{
+    show: boolean;
+    reason: "chat_count" | "message_count";
+    currentCount: number;
+    maxCount: number;
+  } | null>(null);
   
   // Track unread messages status (defaults to true for visibility on first load)
   const [hasUnread, setHasUnread] = useState(() => {
@@ -50,6 +94,7 @@ export default function FloatingAiChat({ companyData, activeEdital }: FloatingAi
   
   // Loaded edital history
   const [editalHistory, setEditalHistory] = useState<any[]>([]);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
   // States for the modernized custom selector
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -120,12 +165,16 @@ export default function FloatingAiChat({ companyData, activeEdital }: FloatingAi
 
   // Multiple sessions state
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    const deletedIds = getDeletedSessionIds();
     const saved = localStorage.getItem("aip_chat_sessions");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          const valid = parsed.filter((s: ChatSession) => s && s.id && !deletedIds.includes(s.id));
+          if (valid.length > 0) {
+            return valid;
+          }
         }
       } catch (e) {
         console.error("Erro ao carregar sessões de chat:", e);
@@ -137,7 +186,7 @@ export default function FloatingAiChat({ companyData, activeEdital }: FloatingAi
       {
         id: "chat-default",
         title: "Chat Principal",
-        selectedEditalId: "active",
+        selectedEditalId: "",
         messages: [
           {
             id: "msg-init",
@@ -186,8 +235,34 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
     return text.trim().split(/\s+/).filter(w => w.length > 0).length;
   };
 
+  const cleanMathAndLatex = (text: string) => {
+    if (!text) return "";
+    let cleaned = text;
+
+    // Clean $$ ... $$ and $ ... $
+    cleaned = cleaned.replace(/\$\$(.*?)\$\$/gs, (_, formula) => formula);
+    cleaned = cleaned.replace(/\$(.*?)\$/g, (_, formula) => formula);
+
+    // Replace LaTeX symbols with readable text
+    cleaned = cleaned
+      .replace(/\\text\{([^}]*)\}/g, "$1")
+      .replace(/\\times/g, "x")
+      .replace(/\\cdot/g, "x")
+      .replace(/\\rightarrow/g, "→")
+      .replace(/\\leftarrow/g, "←")
+      .replace(/\\Rightarrow/g, "=>")
+      .replace(/\\approx/g, "≈")
+      .replace(/\\le/g, "≤")
+      .replace(/\\ge/g, "≥")
+      .replace(/\\neq/g, "≠")
+      .replace(/\\/g, "");
+
+    return cleaned;
+  };
+
   // Parse message content into text blocks and generated_document blocks
-  const parseMessageContent = (content: string) => {
+  const parseMessageContent = (rawContent: string) => {
+    const content = cleanMathAndLatex(rawContent);
     const parts: { type: "text" | "document"; content: string; title?: string }[] = [];
     const regex = /<generated_document\s+title="([^"]+)">([\s\S]*?)<\/generated_document>/gi;
     
@@ -407,19 +482,29 @@ PARECER E ESTRATÉGIA:
     async function loadChatSessions() {
       try {
         const dbSessions = await fetchChatSessionsFromSupabase();
+        const deletedIds = getDeletedSessionIds();
+
         if (dbSessions !== null) {
-          if (dbSessions.length > 0) {
-            setSessions(dbSessions);
-            setActiveSessionId(dbSessions[0].id);
-            localStorage.setItem("aip_chat_sessions", JSON.stringify(dbSessions));
+          // Re-trigger deletion on Supabase if any deleted session returned from DB query
+          const dbDeleted = dbSessions.filter(s => s && s.id && deletedIds.includes(s.id));
+          for (const s of dbDeleted) {
+            deleteChatSessionFromSupabase(s.id).catch(() => {});
+          }
+
+          const validDbSessions = dbSessions.filter(s => s && s.id && !deletedIds.includes(s.id));
+
+          if (validDbSessions.length > 0) {
+            setSessions(validDbSessions);
+            setActiveSessionId(validDbSessions[0].id);
+            localStorage.setItem("aip_chat_sessions", JSON.stringify(validDbSessions));
           } else {
-            // Se no Supabase a lista de conversas estiver vazia (ex: usuário deletou todas),
-            // limpa o localStorage também para não ressuscitar chats deletados
+            // Se no Supabase a lista de conversas estiver vazia ou com chats deletados,
+            // limpa o localStorage e define o chat padrão com novo ID único
             const newDefaultId = `chat-${Date.now()}`;
             const defaultS: ChatSession = {
               id: newDefaultId,
               title: "Chat Principal",
-              selectedEditalId: activeEdital ? "active" : "",
+              selectedEditalId: "",
               messages: [
                 {
                   id: `msg-init-${Date.now()}`,
@@ -450,10 +535,13 @@ PARECER E ESTRATÉGIA:
     // IMPORTANTE: Só sincroniza com Supabase APÓS ter carregado do banco de dados na inicialização
     if (!isLoadedFromDb) return;
 
-    localStorage.setItem("aip_chat_sessions", JSON.stringify(sessions));
+    const deletedIds = getDeletedSessionIds();
+    const validSessions = sessions.filter(s => s && s.id && !deletedIds.includes(s.id));
+
+    localStorage.setItem("aip_chat_sessions", JSON.stringify(validSessions));
     
     // Sync to Supabase in background
-    sessions.forEach(session => {
+    validSessions.forEach(session => {
       saveChatSessionToSupabase(session).catch(e => console.warn("Erro de sincronismo de chat no Supabase:", e));
     });
 
@@ -476,11 +564,21 @@ PARECER E ESTRATÉGIA:
   };
 
   const handleNewChat = () => {
+    if (sessions.length >= MAX_CHATS_PER_USER) {
+      setChatLimitModal({
+        show: true,
+        reason: "chat_count",
+        currentCount: sessions.length,
+        maxCount: MAX_CHATS_PER_USER
+      });
+      return;
+    }
+
     const newId = `chat-${Date.now()}`;
     const newSession: ChatSession = {
       id: newId,
       title: `Conversa ${sessions.length + 1}`,
-      selectedEditalId: activeEdital ? "active" : "",
+      selectedEditalId: "",
       messages: [
         {
           id: `msg-init-${Date.now()}`,
@@ -500,14 +598,17 @@ PARECER E ESTRATÉGIA:
   const handleDeleteChat = async (e: React.MouseEvent, idToDelete: string) => {
     e.stopPropagation();
     
-    // 1. Deleta permanentemente no Supabase
+    // 1. Grava no registro local de exclusões permanentes
+    addDeletedSessionId(idToDelete);
+
+    // 2. Deleta permanentemente no Supabase
     try {
       await deleteChatSessionFromSupabase(idToDelete);
     } catch (err) {
       console.warn("Erro ao deletar sessão de chat do Supabase:", err);
     }
 
-    // 2. Atualiza estado local e localStorage
+    // 3. Atualiza estado local e localStorage
     const updated = sessions.filter(s => s.id !== idToDelete);
     
     if (updated.length === 0) {
@@ -547,12 +648,21 @@ PARECER E ESTRATÉGIA:
       return;
     }
 
+    // 1. Adiciona todas as sessões existentes na blacklist permanente de exclusão
+    const currentIds = sessions.map(s => s.id);
+    addMultipleDeletedSessionIds(currentIds);
+
+    // 2. Apaga no Supabase
     try {
       await clearAllChatSessionsInSupabase();
     } catch (err) {
       console.warn("Erro ao limpar histórico no Supabase:", err);
     }
 
+    // 3. Limpa localStorage
+    localStorage.removeItem("aip_chat_sessions");
+
+    // 4. Inicia um novo chat padrão com ID único
     const newDefaultId = `chat-${Date.now()}`;
     const defaultS: ChatSession = {
       id: newDefaultId,
@@ -667,6 +777,16 @@ PARECER E ESTRATÉGIA:
   const handleSend = async (text: string) => {
     if (!text.trim() && !selectedAttachment) return;
 
+    if (activeSession.messages && activeSession.messages.length >= MAX_MESSAGES_PER_CHAT) {
+      setChatLimitModal({
+        show: true,
+        reason: "message_count",
+        currentCount: activeSession.messages.length,
+        maxCount: MAX_MESSAGES_PER_CHAT
+      });
+      return;
+    }
+
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: "user",
@@ -721,7 +841,7 @@ PARECER E ESTRATÉGIA:
     }
 
     try {
-      const selectedEditalObj = getSelectedEditalObject(activeSession.selectedEditalId);
+      const selectedEditalObj = activeSession.selectedEditalId ? getSelectedEditalObject(activeSession.selectedEditalId) : null;
       let replyText = "";
 
       const response = await apiFetch("/api/chat", {
@@ -881,12 +1001,16 @@ PARECER E ESTRATÉGIA:
             <div className="p-4 border-b border-white/10 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-300 tracking-wider uppercase flex items-center gap-1.5">
                 <MessageSquare className="w-4 h-4 text-indigo-400" />
-                Canais de Chat
+                Canais ({sessions.length}/{MAX_CHATS_PER_USER})
               </span>
               <button
                 onClick={handleNewChat}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white p-1.5 rounded-lg flex items-center gap-1 text-[11px] font-semibold hover:scale-[1.02] active:scale-95 transition-all cursor-pointer"
-                title="Novo canal de chat"
+                className={`p-1.5 rounded-lg flex items-center gap-1 text-[11px] font-semibold hover:scale-[1.02] active:scale-95 transition-all cursor-pointer ${
+                  sessions.length >= MAX_CHATS_PER_USER
+                    ? "bg-amber-600/80 hover:bg-amber-500 text-white"
+                    : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                }`}
+                title={sessions.length >= MAX_CHATS_PER_USER ? "Limite de 20 chats atingido" : "Novo canal de chat"}
               >
                 <Plus className="w-3.5 h-3.5" />
                 Novo
@@ -975,11 +1099,52 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Sidebar Footer */}
-            <div className="p-3 border-t border-white/10 bg-slate-950/20 text-[10px] text-slate-400 flex flex-col gap-2 select-none">
-              <div className="flex flex-col gap-0.5">
-                <p>📌 *Banco de Dados*: Supabase + Local Storage</p>
-                <p>🗑️ A exclusão apaga definitivamente no banco e layout.</p>
+            <div className="p-3 border-t border-white/10 bg-slate-950/40 text-[10px] text-slate-400 flex flex-col gap-2 select-none">
+              {/* Cota & Armazenamento Bar */}
+              <div className="space-y-1 bg-slate-900/60 p-2 rounded-lg border border-white/5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-slate-300 flex items-center gap-1">
+                    <Database className="w-3 h-3 text-indigo-400" />
+                    Cota de Canais
+                  </span>
+                  <span className={`font-bold ${
+                    sessions.length >= MAX_CHATS_PER_USER 
+                      ? "text-rose-400" 
+                      : sessions.length >= 17 
+                      ? "text-amber-400" 
+                      : "text-emerald-400"
+                  }`}>
+                    {sessions.length} / {MAX_CHATS_PER_USER} chats
+                  </span>
+                </div>
+                
+                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                  <div 
+                    className={`h-full transition-all duration-300 ${
+                      sessions.length >= MAX_CHATS_PER_USER 
+                        ? "bg-rose-500" 
+                        : sessions.length >= 17 
+                        ? "bg-amber-500" 
+                        : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${Math.min(100, (sessions.length / MAX_CHATS_PER_USER) * 100)}%` }}
+                  />
+                </div>
+
+                {sessions.length >= 17 && (
+                  <p className="text-[10px] text-amber-300 font-medium pt-0.5 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 shrink-0 text-amber-400" />
+                    {sessions.length >= MAX_CHATS_PER_USER 
+                      ? "Limite de 20 chats atingido! Apague algum para criar novos." 
+                      : "Próximo do limite de 20 chats."}
+                  </p>
+                )}
               </div>
+
+              <div className="flex flex-col gap-0.5 text-[9px] text-slate-500">
+                <p>📌 *Nuvem*: Sincronizado no Supabase</p>
+              </div>
+
               <button
                 onClick={handleClearAllChats}
                 className="w-full py-1.5 px-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
@@ -1077,10 +1242,7 @@ PARECER E ESTRATÉGIA:
                 >
                   <span className="truncate">
                     {activeSession.selectedEditalId === "" && "💬 Nenhum Edital (Conversa Geral)"}
-                    {activeSession.selectedEditalId === "active" && (
-                      `✨ Edital Ativo (${activeEdital?.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Em Análise"}...)`
-                    )}
-                    {activeSession.selectedEditalId !== "" && activeSession.selectedEditalId !== "active" && (
+                    {activeSession.selectedEditalId !== "" && (
                       (() => {
                         const found = editalHistory.find(h => h.id === activeSession.selectedEditalId);
                         const ed = found?.analysis || found;
@@ -1137,31 +1299,6 @@ PARECER E ESTRATÉGIA:
                         </button>
                       )}
 
-                      {/* Group: Active Edital */}
-                      {activeEdital && (!dropdownSearch || (activeEdital.identificacaoCertame?.orgaoComprador || "").toLowerCase().includes(dropdownSearch.toLowerCase())) && (
-                        <div>
-                          <div className="px-3 py-1 bg-white/2 text-[9px] font-extrabold uppercase tracking-wider text-indigo-300 shrink-0">
-                            ✨ Edital Ativo em Análise
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              handleSelectEdital("active");
-                              setIsDropdownOpen(false);
-                              setDropdownSearch("");
-                            }}
-                            className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center justify-between transition-colors ${activeSession.selectedEditalId === "active" ? "text-indigo-400 font-bold bg-indigo-500/5" : "text-slate-300"}`}
-                          >
-                            <span className="flex items-center gap-2 truncate">
-                              <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                              <span className="truncate">
-                                {activeEdital.identificacaoCertame?.orgaoComprador || "Edital Carregado"}
-                              </span>
-                            </span>
-                            {activeSession.selectedEditalId === "active" && <Check className="w-3.5 h-3.5 text-indigo-450 shrink-0" />}
-                          </button>
-                        </div>
-                      )}
 
                       {/* Group: History */}
                       {(() => {
@@ -1234,10 +1371,25 @@ PARECER E ESTRATÉGIA:
               </div>
             </div>
 
+            {/* Warning Banner if Chat message count is near/at limit */}
+            {activeSession.messages && activeSession.messages.length >= 180 && (
+              <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex items-center justify-between text-xs text-amber-300 shrink-0">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>
+                    Este canal possui <strong>{activeSession.messages.length}/200</strong> mensagens. 
+                    {activeSession.messages.length >= MAX_MESSAGES_PER_CHAT 
+                      ? " Cota máxima atingida! Crie um novo chat para continuar conversando."
+                      : " Ao atingir 200 mensagens, crie um novo canal de chat."}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Scrollable Messages Area */}
             <div 
               ref={scrollRef}
-              className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/10 select-text"
+              className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/10"
             >
               {activeSession.messages.map((m) => (
                 <div
@@ -1247,21 +1399,40 @@ PARECER E ESTRATÉGIA:
                   }`}
                 >
                   {m.role === "assistant" && (
-                    <div className="bg-white/5 border border-white/10 text-indigo-400 p-2 rounded-lg h-7 w-7 flex items-center justify-center shrink-0">
+                    <div className="bg-white/5 border border-white/10 text-indigo-400 p-2 rounded-lg h-7 w-7 flex items-center justify-center shrink-0 select-none">
                       <Bot className="w-4 h-4" />
                     </div>
                   )}
                   
                   <div
-                    className={`max-w-[80%] rounded-2xl p-3 leading-normal border shadow-sm select-text ${
+                    className={`group relative max-w-[85%] sm:max-w-[80%] rounded-2xl p-3.5 leading-normal border shadow-sm ${
                       m.role === "user"
                         ? "bg-indigo-600/80 border-indigo-500/30 text-white rounded-tr-none"
                         : "bg-white/5 text-slate-100 border-white/10 rounded-tl-none"
                     }`}
                   >
+                    {/* Hover copy button */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(m.content);
+                        setCopiedMsgId(m.id);
+                        setTimeout(() => setCopiedMsgId(null), 2000);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2 p-1.5 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white rounded-md border border-white/15 select-none cursor-pointer z-10 shadow-lg"
+                      title="Copiar mensagem"
+                    >
+                      {copiedMsgId === m.id ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <ClipboardCopy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+
                     {/* Render attachment if any */}
                     {m.attachment && (
-                      <div className="mb-2.5 bg-slate-950/40 p-2 rounded-xl border border-white/10 text-slate-300 flex items-center gap-2 max-w-sm">
+                      <div className="mb-2.5 bg-slate-950/40 p-2 rounded-xl border border-white/10 text-slate-300 flex items-center gap-2 max-w-sm select-none">
                         {m.attachment.type === "application/system-doc" ? (
                           <div className="flex items-center gap-2 w-full">
                             <div className="bg-indigo-500/15 text-indigo-400 p-1.5 rounded-lg border border-indigo-500/30">
@@ -1306,7 +1477,7 @@ PARECER E ESTRATÉGIA:
                       </div>
                     )}
 
-                    <div className="text-xs leading-normal select-text space-y-3">
+                    <div className="text-xs md:text-sm leading-relaxed space-y-3 select-text">
                       {m.role === "assistant" ? (
                         parseMessageContent(m.content).map((part, pIdx) => {
                           if (part.type === "document") {
@@ -1317,7 +1488,7 @@ PARECER E ESTRATÉGIA:
                             return (
                               <div 
                                 key={pIdx} 
-                                className="my-3 bg-slate-950/60 rounded-xl border border-indigo-500/35 overflow-hidden shadow-xl"
+                                className="my-3 bg-slate-950/60 rounded-xl border border-indigo-500/35 overflow-hidden shadow-xl select-none"
                               >
                                 {/* Doc Card Header */}
                                 <div className="bg-indigo-950/50 px-3.5 py-2.5 border-b border-indigo-500/25 flex items-center justify-between">
@@ -1418,12 +1589,12 @@ PARECER E ESTRATÉGIA:
                               <ReactMarkdown 
                                 key={pIdx}
                                 components={{
-                                  p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 select-text whitespace-pre-wrap leading-normal font-sans" {...props} />,
-                                  strong: ({node, ...props}) => <strong className="font-bold select-text text-indigo-200 font-extrabold" {...props} />,
-                                  ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
-                                  ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
-                                  li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap" {...props} />,
-                                  code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono select-text" {...props} />,
+                                  p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 leading-normal font-sans" {...props} />,
+                                  strong: ({node, ...props}) => <strong className="font-bold text-indigo-200 font-extrabold" {...props} />,
+                                  ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1" {...props} />,
+                                  ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1" {...props} />,
+                                  li: ({node, ...props}) => <li className="leading-normal" {...props} />,
+                                  code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono" {...props} />,
                                 }}
                               >
                                 {part.content}
@@ -1434,19 +1605,19 @@ PARECER E ESTRATÉGIA:
                       ) : (
                         <ReactMarkdown 
                           components={{
-                            p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 select-text whitespace-pre-wrap leading-normal font-sans" {...props} />,
-                            strong: ({node, ...props}) => <strong className="font-bold select-text text-white font-black" {...props} />,
-                            ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
-                            ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
-                            li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap" {...props} />,
-                            code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono select-text" {...props} />,
+                            p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 leading-normal font-sans" {...props} />,
+                            strong: ({node, ...props}) => <strong className="font-bold text-white font-black" {...props} />,
+                            ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1" {...props} />,
+                            ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1" {...props} />,
+                            li: ({node, ...props}) => <li className="leading-normal" {...props} />,
+                            code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono" {...props} />,
                           }}
                         >
                           {m.content}
                         </ReactMarkdown>
                       )}
                     </div>
-                    <span className={`text-[9px] block text-right mt-1.5 ${
+                    <span className={`text-[9px] block text-right mt-1.5 select-none ${
                       m.role === "user" ? "text-indigo-200" : "text-slate-400"
                     }`}>
                       {m.timestamp}
@@ -1454,7 +1625,7 @@ PARECER E ESTRATÉGIA:
                   </div>
 
                   {m.role === "user" && (
-                    <div className="bg-white/10 border border-white/10 text-white p-2 rounded-lg h-7 w-7 flex items-center justify-center shrink-0">
+                    <div className="bg-white/10 border border-white/10 text-white p-2 rounded-lg h-7 w-7 flex items-center justify-center shrink-0 select-none">
                       <User className="w-4 h-4" />
                     </div>
                   )}
@@ -1585,29 +1756,8 @@ PARECER E ESTRATÉGIA:
               <div className="space-y-2 select-text">
                 <h5 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider text-left select-none">📄 Editais e Análises</h5>
                 <div className="space-y-1.5">
-                  {/* Active edital option */}
-                  {activeEdital ? (
-                    <button
-                      type="button"
-                      onClick={() => handleSelectSystemEdital({ title: "Edital_Ativo.txt", analysis: activeEdital })}
-                      className="w-full text-left bg-indigo-500/10 hover:bg-indigo-500/25 border border-indigo-500/30 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-slate-200 truncate">★ Edital Ativo em Memória</p>
-                        <p className="text-[9px] text-indigo-300 truncate">
-                          {activeEdital.identificacaoCertame?.orgaoComprador || "Órgão Licitante"}
-                        </p>
-                      </div>
-                      <span className="bg-indigo-500/20 text-indigo-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-indigo-400/25">Anexar</span>
-                    </button>
-                  ) : (
-                    <p className="text-[10px] text-slate-500 italic px-2 text-left select-none">Nenhum edital ativo em foco no momento.</p>
-                  )}
-
-                  {/* Historical editais options */}
-                  {editalHistory.length > 0 && (
-                    <div className="pt-1.5 space-y-1">
-                      <p className="text-[9px] text-slate-400 font-bold text-left select-none font-mono">Histórico de Editais Analisados:</p>
+                  {editalHistory.length > 0 ? (
+                    <div className="space-y-1">
                       {editalHistory.map((item, idx) => {
                         const ed = item.analysis || item;
                         const organ = ed.identificacaoCertame?.orgaoComprador || "Histórico";
@@ -1628,6 +1778,8 @@ PARECER E ESTRATÉGIA:
                         );
                       })}
                     </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-500 italic px-2 text-left select-none">Nenhum edital no histórico no momento.</p>
                   )}
                 </div>
               </div>
@@ -1782,14 +1934,14 @@ PARECER E ESTRATÉGIA:
               <div className="w-full max-w-2xl bg-white text-slate-900 shadow-xl rounded-xl p-8 sm:p-12 border border-slate-200 select-text overflow-y-auto font-sans text-xs md:text-sm text-left">
                 <ReactMarkdown
                   components={{
-                    p: ({node, ...props}) => <p className="mb-4 select-text leading-relaxed font-sans text-slate-800 text-justify" {...props} />,
-                    strong: ({node, ...props}) => <strong className="font-bold select-text text-slate-950" {...props} />,
+                    p: ({node, ...props}) => <p className="mb-4 leading-relaxed font-sans text-slate-800 text-justify" {...props} />,
+                    strong: ({node, ...props}) => <strong className="font-bold text-slate-950" {...props} />,
                     h1: ({node, ...props}) => <h1 className="text-base md:text-lg font-bold border-b pb-2 mb-4 text-slate-900 tracking-tight text-center uppercase" {...props} />,
                     h2: ({node, ...props}) => <h2 className="text-xs md:text-sm font-bold mb-3 text-slate-900 mt-6 border-b pb-1 border-slate-100" {...props} />,
                     h3: ({node, ...props}) => <h3 className="text-[11px] md:text-xs font-bold mb-2 text-slate-800 mt-4" {...props} />,
-                    ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-1 select-text text-slate-700" {...props} />,
-                    ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-1 select-text text-slate-700" {...props} />,
-                    li: ({node, ...props}) => <li className="select-text whitespace-pre-wrap leading-relaxed" {...props} />,
+                    ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-1 text-slate-700" {...props} />,
+                    ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-1 text-slate-700" {...props} />,
+                    li: ({node, ...props}) => <li className="leading-relaxed" {...props} />,
                     table: ({node, ...props}) => (
                       <div className="overflow-x-auto my-4 border border-slate-150 rounded-lg">
                         <table className="min-w-full divide-y divide-slate-200" {...props} />
@@ -1799,7 +1951,7 @@ PARECER E ESTRATÉGIA:
                     tbody: ({node, ...props}) => <tbody className="divide-y divide-slate-100" {...props} />,
                     tr: ({node, ...props}) => <tr className="hover:bg-slate-50/50" {...props} />,
                     th: ({node, ...props}) => <th className="px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-wider text-slate-600 border-b bg-slate-50" {...props} />,
-                    td: ({node, ...props}) => <td className="px-3 py-1.5 text-[11px] text-slate-700 border-b select-text whitespace-pre-wrap" {...props} />,
+                    td: ({node, ...props}) => <td className="px-3 py-1.5 text-[11px] text-slate-700 border-b" {...props} />,
                     code: ({node, ...props}) => <code className="bg-slate-100 text-slate-800 px-1 py-0.5 rounded text-[11px] font-mono" {...props} />,
                   }}
                 >
@@ -1819,6 +1971,75 @@ PARECER E ESTRATÉGIA:
                 className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Fechar Visualizador
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Popup de Alerta de Cota/Limite Atingido */}
+      {chatLimitModal && chatLimitModal.show && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5 overflow-hidden text-left">
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-500" />
+            
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-400 shrink-0">
+                <AlertTriangle className="w-7 h-7" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white leading-tight">
+                  {chatLimitModal.reason === "chat_count" 
+                    ? "Limite de 20 Chats Atingido" 
+                    : "Limite de Mensagens Atingido"}
+                </h3>
+                <p className="text-xs text-amber-300 font-medium">
+                  {chatLimitModal.reason === "chat_count"
+                    ? `Cota máxima da conta: ${chatLimitModal.currentCount}/${chatLimitModal.maxCount} chats`
+                    : `Cota máxima do canal: ${chatLimitModal.currentCount}/${chatLimitModal.maxCount} mensagens`}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/70 border border-white/10 rounded-xl p-4 text-xs space-y-3 text-slate-300">
+              {chatLimitModal.reason === "chat_count" ? (
+                <>
+                  <p className="leading-relaxed">
+                    Sua conta atingiu o limite máximo de <strong className="text-white">20 canais de chat salvos</strong> no banco de dados Supabase.
+                  </p>
+                  <div className="space-y-1.5 text-slate-400 border-t border-white/10 pt-2.5">
+                    <p className="font-semibold text-slate-200">💡 Como liberar espaço:</p>
+                    <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
+                      <li>Abra o painel lateral de canais;</li>
+                      <li>Clique no ícone de lixeira do chat que deseja excluir;</li>
+                      <li>Após apagar um chat antigo, você poderá criar uma nova conversa imediatamente.</li>
+                    </ul>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="leading-relaxed">
+                    Este canal de conversa atingiu o limite máximo de <strong className="text-white">200 mensagens</strong> para preservar a alta velocidade no Supabase.
+                  </p>
+                  <div className="space-y-1.5 text-slate-400 border-t border-white/10 pt-2.5">
+                    <p className="font-semibold text-slate-200">💡 Como proceder:</p>
+                    <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
+                      <li>Clique em <strong className="text-indigo-400">"Novo"</strong> no painel de canais para iniciar um novo chat;</li>
+                      <li>Ou apague este chat se desejar liberar espaço.</li>
+                    </ul>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setChatLimitModal(null)}
+                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-semibold shadow-lg shadow-amber-600/20 transition-all flex items-center gap-2 cursor-pointer border border-amber-400/30 text-xs"
+              >
+                <Check className="w-4 h-4" />
+                Entendido
               </button>
             </div>
           </div>

@@ -690,4 +690,26 @@ html.light .pointer-events-none {
   backface-visibility: hidden;
 }
 
+/* Clean text selection rules */
+p, span, h1, h2, h3, h4, h5, h6, li, td, th, code, pre, input, textarea, [contenteditable="true"], .select-text {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Ensure interactive controls, buttons, icons remain non-selectable */
+button, button *, .select-none, svg {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Custom text selection highlight color */
+::selection {
+  background-color: rgba(99, 102, 241, 0.4) !important;
+  color: #ffffff !important;
+}
+::-moz-selection {
+  background-color: rgba(99, 102, 241, 0.4) !important;
+  color: #ffffff !important;
+}
+
 
