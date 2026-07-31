@@ -231,7 +231,7 @@ export default function AiConfigTab() {
               </span>
             </h3>
             <p className="text-slate-400 text-xs mt-1 leading-normal max-w-2xl">
-              Escolha e configure a Inteligência Artificial ativa para toda a plataforma. Insira suas próprias chaves de API para uso ilimitado sem restrições de limites de cota da versão padrão.
+              Escolha e configure o provedor de Inteligência Artificial ativo para toda a plataforma. Insira sua própria chave de API para habilitar os recursos de IA (Gemini, OpenAI, Anthropic ou DeepSeek).
             </p>
           </div>
         </div>

@@ -8,6 +8,7 @@ import {
   LayoutGrid, List, Search, Check
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { addSyncedItem, syncAnalysisToGoogleSheets } from "../utils/googleSync";
 import { 
   syncEditalToSupabase, 
@@ -22,11 +23,20 @@ import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer } from "../uti
 
 function cleanMarkdownText(text: string | undefined): string {
   if (!text) return "";
-  return text
+  let cleaned = text
     .replace(/\\n/gi, "\n")
     .replace(/\\r/gi, "\r")
     .replace(/\\t/gi, "\t")
     .replace(/\\"/g, '"');
+
+  // Repair legacy mangled backslashes (e.g. "NN##", "|N|", "NN 1.", "|N ", "N| ")
+  cleaned = cleaned.replace(/NN(#{1,6}\s)/g, "\n\n$1");
+  cleaned = cleaned.replace(/nn(#{1,6}\s)/g, "\n\n$1");
+  cleaned = cleaned.replace(/([^\n])(\|[\s\w\d\-_Á-Úá-ú]+\|)/g, "$1\n\n$2");
+  cleaned = cleaned.replace(/\|N\|\s*/gi, "|\n| ");
+  cleaned = cleaned.replace(/\|N\s*/gi, "|\n");
+
+  return cleaned;
 }
 
 interface EditalAnalyzerTabProps {
@@ -558,6 +568,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         const dbEditais = await fetchEditaisFromSupabase();
         if (dbEditais && dbEditais.length > 0) {
           setHistory(dbEditais);
+          localStorage.setItem("aip_edital_history", JSON.stringify(dbEditais));
+          window.dispatchEvent(new Event("aip_edital_history_updated"));
           return;
         }
       } catch (e) {
@@ -764,6 +776,9 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           localStorage.setItem("aip_edital_history", JSON.stringify(updated));
           return updated;
         });
+
+        window.dispatchEvent(new Event("aip_edital_history_updated"));
+        window.dispatchEvent(new CustomEvent("aip_edital_analyzed", { detail: newHistoryItem }));
 
         // Auto-sync log results dynamically to Google Sheets/Drive simulation!
         syncAnalysisToGoogleSheets(`Análise Edital - ${analysisResult.descricaoProduto.slice(0, 30)}`, analysisResult);
@@ -1146,6 +1161,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                             });
                             setHistory([]);
                             localStorage.removeItem("aip_edital_history");
+                            window.dispatchEvent(new Event("aip_edital_history_updated"));
                             setActiveEdital(null);
                             setShowConfirmClearHistory(false);
                           }}
@@ -1220,6 +1236,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                             const updated = history.filter((h: any) => h.id !== item.id);
                             setHistory(updated);
                             localStorage.setItem("aip_edital_history", JSON.stringify(updated));
+                            window.dispatchEvent(new Event("aip_edital_history_updated"));
                             if (isSelected) {
                               setActiveEdital(null);
                               setTextInput("");
@@ -1605,7 +1622,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               }`}
             >
               <Sparkles className="w-4 h-4 text-indigo-400" />
-              Parecer Executivo Sênior (6 Pilares)
+              Parecer Executivo
             </button>
             <button
               onClick={() => setAnalysisActiveTab("struc")}
@@ -1640,7 +1657,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               
               {activeEdital.reportMarkdown ? (
                 <div className="prose prose-invert max-w-none text-slate-300 text-xs md:text-sm leading-relaxed space-y-4">
-                  <ReactMarkdown components={{
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                     h1: ({node, ...props}) => <h1 className="text-sm md:text-base font-bold text-white border-b border-white/10 pb-2 mt-6 mb-3 flex items-center gap-2 uppercase tracking-wide text-indigo-300" {...props} />,
                     h2: ({node, ...props}) => <h2 className="text-xs md:text-sm font-bold text-slate-100 mt-5 mb-2 border-b border-white/5 pb-1" {...props} />,
                     h3: ({node, ...props}) => <h3 className="text-xs font-bold text-indigo-300 mt-4 mb-2" {...props} />,
@@ -1667,7 +1684,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                   </div>
                   <h5 className="font-bold text-white text-sm">Parecer Executivo Indisponível</h5>
                   <p className="text-slate-400 text-xs max-w-sm mx-auto leading-normal">
-                    Este item do histórico foi gerado antes da implementação do analista sênior de 6 pilares. Por favor, faça uma nova análise completa do edital para conferir o parecer completo.
+                    Este item do histórico não possui o parecer executivo formato. Faça uma nova análise para visualizar o parecer executivo completo.
                   </p>
                 </div>
               )}

@@ -7,6 +7,7 @@ import {
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
 import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
+import DisputasSheetTab from "./components/DisputasSheetTab";
 import CompanyDocsTab from "./components/CompanyDocsTab";
 import CreateDocTab from "./components/CreateDocTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
@@ -45,7 +46,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab ] = useState<"analyzer" | "radar" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
+  const [activeTab, setActiveTab ] = useState<"analyzer" | "radar" | "disputasSheet" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig">("analyzer");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
@@ -613,6 +614,26 @@ export default function App() {
               <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Radar de Oportunidades</span>
             </button>
 
+            {/* Nav item: Planilha de Disputas */}
+            <button
+              id="tab-btn-disputas-sheet"
+              onClick={() => {
+                setActiveTab("disputasSheet");
+                setMobileMenuOpen(false);
+              }}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
+                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
+              } ${
+                activeTab === "disputasSheet"
+                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
+                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+              }`}
+              title="Planilha de Disputas"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Planilha de Disputas</span>
+            </button>
+
             {/* Nav item: Criar Documentos */}
             <button
               id="tab-btn-create-doc"
@@ -875,6 +896,7 @@ export default function App() {
             <p className="text-slate-400 text-xs mt-0.5">
               {activeTab === "analyzer" ? "Carregamento e Inteligência Artificial de Editais" :
                activeTab === "radar" ? "Radar de Licitações Públicas Federais (PNCP)" :
+               activeTab === "disputasSheet" ? "Planilha de Gestão de Disputas e Pregões" :
                activeTab === "createDoc" ? "Estúdio de Criação de Documentos & Propostas (Google Docs + IA)" :
                activeTab === "documents" ? "Gestão de Habilitação Jurídica e Fiscal" :
                activeTab === "calculator" ? "Modelagem Financeira e BDI de Licitações" :
@@ -895,39 +917,6 @@ export default function App() {
         {/* Content Scrolling Stage Area */}
         <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-visible lg:overflow-y-auto relative z-10 scrollbar-thin">
           <div className="max-w-7xl mx-auto w-full">
-            
-            {aiQuotaWarning && (
-              <div className="mb-6 p-4 rounded-xl border border-rose-500/30 bg-rose-500/10 backdrop-blur-md flex flex-col md:flex-row items-center justify-between gap-4 animate-fade-in">
-                <div className="flex items-center gap-3">
-                  <div className="bg-rose-500/20 text-rose-300 p-2 rounded-lg">
-                    <AlertTriangle className="w-5 h-5 text-rose-400" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-rose-200 uppercase tracking-wide">Aviso de Limite de Cota</h4>
-                    <p className="text-xs text-rose-300/90 mt-0.5 leading-relaxed">{aiQuotaWarning}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
-                  <button
-                    onClick={() => {
-                      setActiveTab("aiConfig");
-                      setAiQuotaWarning(null);
-                    }}
-                    className="flex-1 md:flex-none text-center bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs px-4 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-rose-500/20"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Configurar Minha Chave
-                  </button>
-                  <button
-                    onClick={() => setAiQuotaWarning(null)}
-                    className="p-2 hover:bg-white/5 border border-white/10 hover:border-white/20 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
-                    title="Ignorar aviso"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            )}
 
             {/* Active Render Stage Tab Component */}
             <div className="select-text w-full">
@@ -948,6 +937,11 @@ export default function App() {
                       window.dispatchEvent(new Event("aip_trigger_external_text"));
                     }, 50);
                   }}
+                />
+              ) : activeTab === "disputasSheet" ? (
+                <DisputasSheetTab
+                  activeEdital={activeEdital}
+                  onNavigateToAnalyzer={() => setActiveTab("analyzer")}
                 />
               ) : activeTab === "createDoc" ? (
                 <CreateDocTab

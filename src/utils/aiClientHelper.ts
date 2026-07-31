@@ -2,7 +2,34 @@ import { getSupabaseClient } from "./supabaseClient";
 
 export function getActiveAiConfig() {
   const provider = localStorage.getItem("ai_active_provider") || "gemini";
-  const apiKey = (localStorage.getItem(`ai_${provider}_key`) || "").trim();
+  let apiKey = (localStorage.getItem(`ai_${provider}_key`) || "").trim();
+
+  // Check fallback keys for active provider
+  if (!apiKey) {
+    if (provider === "gemini") {
+      apiKey = (localStorage.getItem("gemini_api_key") || localStorage.getItem("GEMINI_API_KEY") || "").trim();
+    } else if (provider === "openai") {
+      apiKey = (localStorage.getItem("openai_api_key") || localStorage.getItem("OPENAI_API_KEY") || "").trim();
+    } else if (provider === "anthropic") {
+      apiKey = (localStorage.getItem("anthropic_api_key") || localStorage.getItem("ANTHROPIC_API_KEY") || "").trim();
+    } else if (provider === "deepseek") {
+      apiKey = (localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
+    }
+  }
+
+  // If still no key for chosen provider, check if ANY provider has a key in localStorage
+  if (!apiKey) {
+    const geminiKey = (localStorage.getItem("ai_gemini_key") || localStorage.getItem("gemini_api_key") || localStorage.getItem("GEMINI_API_KEY") || "").trim();
+    const openaiKey = (localStorage.getItem("ai_openai_key") || localStorage.getItem("openai_api_key") || localStorage.getItem("OPENAI_API_KEY") || "").trim();
+    const anthropicKey = (localStorage.getItem("ai_anthropic_key") || localStorage.getItem("anthropic_api_key") || localStorage.getItem("ANTHROPIC_API_KEY") || "").trim();
+    const deepseekKey = (localStorage.getItem("ai_deepseek_key") || localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
+
+    if (geminiKey) return { provider: "gemini", apiKey: geminiKey, model: localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash" };
+    if (openaiKey) return { provider: "openai", apiKey: openaiKey, model: localStorage.getItem("ai_openai_model") || "gpt-4o" };
+    if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey, model: localStorage.getItem("ai_anthropic_model") || "claude-3-7-sonnet-20250219" };
+    if (deepseekKey) return { provider: "deepseek", apiKey: deepseekKey, model: localStorage.getItem("ai_deepseek_model") || "deepseek-chat" };
+  }
+
   const model = localStorage.getItem(`ai_${provider}_model`) || "";
   return { provider, apiKey, model };
 }
@@ -20,7 +47,7 @@ export async function getSupabaseToken(): Promise<string> {
 }
 
 // Authenticated fetch wrapper: automatically sends JWT + aiConfig on every AI request
-export async function apiFetch(url: string, options: { method?: string; body?: Record<string, any>; headers?: Record<string, string> } = {}): Promise<Response> {
+export async function apiFetch(url: string, options: { method?: string; body?: Record<string, any>; headers?: Record<string, string>; signal?: AbortSignal } = {}): Promise<Response> {
   try {
     const token = await getSupabaseToken();
     const aiConfig = getActiveAiConfig();
@@ -38,6 +65,7 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
     const fetchOptions: RequestInit = {
       method,
       headers,
+      signal: options.signal,
     };
 
     if (method !== "GET" && method !== "HEAD") {
@@ -47,45 +75,6 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
     }
 
     const response = await fetch(url, fetchOptions);
-
-    const hasUserKey = aiConfig?.apiKey && aiConfig.apiKey.trim().length > 10;
-
-    if (response.status === 429) {
-      if (typeof window !== "undefined") {
-        const message = hasUserKey
-          ? "A sua chave de API personalizada atingiu o limite de cota (429 Rate Limit). Verifique o saldo ou limites da sua conta no Google AI Studio."
-          : "A chave de API gratuita e compartilhada do servidor atingiu o limite de cota (429 Rate Limit). Para continuar usando com velocidade ilimitada, por favor insira sua própria chave de API na aba 'IA & Modelos'.";
-        window.dispatchEvent(new CustomEvent("ai-quota-warning", {
-          detail: { message }
-        }));
-      }
-    } else if (!response.ok) {
-      // Clone response to check body for quota-related error messages in JSON
-      try {
-        const cloned = response.clone();
-        cloned.json().then(data => {
-          const errorMsg = data?.error?.message || data?.error || "";
-          if (errorMsg && (
-            errorMsg.toLowerCase().includes("quota") ||
-            errorMsg.toLowerCase().includes("rate limit") ||
-            errorMsg.toLowerCase().includes("429") ||
-            errorMsg.toLowerCase().includes("limit exceeded")
-          )) {
-            if (typeof window !== "undefined") {
-              const message = hasUserKey
-                ? "A sua chave de API personalizada atingiu o limite de cota (429 Rate Limit). Verifique o saldo ou limites da sua conta no Google AI Studio."
-                : "A chave de API gratuita e compartilhada do servidor atingiu o limite de cota (429 Rate Limit). Para continuar usando com velocidade ilimitada, por favor insira sua própria chave de API na aba 'IA & Modelos'.";
-              window.dispatchEvent(new CustomEvent("ai-quota-warning", {
-                detail: { message }
-              }));
-            }
-          }
-        }).catch(() => {});
-      } catch (err) {
-        // Safe catch
-      }
-    }
-
     return response;
   } catch (error: any) {
     if (error?.message?.includes("Failed to fetch") || error?.message?.includes("fetch")) {

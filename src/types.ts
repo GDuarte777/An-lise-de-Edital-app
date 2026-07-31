@@ -132,3 +132,23 @@ export interface CompetitorHistoryItem {
   editalTitle?: string;
   analysis: CompetitorAnalysis;
 }
+
+export type DisputaStatus = "Agendada" | "Em Disputa" | "Vencida" | "Perdida" | "Em Recurso" | "Homologada" | "Cancelada";
+
+export interface DisputaRow {
+  id: string;
+  orgao: string; // Nome do Órgão
+  uasgUndCompradora: string; // UASG / Código da Unidade Compradora
+  numeroLicitacao: string; // Nº Pregão/Processo (ex: PE 45/2026)
+  portal: string; // Portal da disputa (ex: Compras.gov.br, BLL, PNCP)
+  produtoItem: string; // Produto / Item / Objeto
+  quantidade: number; // Qtd
+  unidadeMedida: string; // Und (ex: Unidade, Caixa, Kit)
+  valorEstimadoItem: number; // R$ Valor Estimado
+  nossoValorAlvo: number; // R$ Nosso Lance Alvo / Proposta
+  valorMinimoPiso: number; // R$ Nosso Preço Mínimo (Piso)
+  dataHoraDisputa: string; // Data e Hora da disputa
+  status: DisputaStatus; // Status da Disputa
+  observacoes?: string; // Anotações / Estratégia
+}
+

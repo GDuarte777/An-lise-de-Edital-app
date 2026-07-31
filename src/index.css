@@ -7,9 +7,9 @@
 }
 
 :root {
-  --bg-app: #121316;          /* "preto nao muito escuro" for dark mode */
-  --bg-card: #18191d;         /* Card background in dark mode */
-  --bg-sidebar: #15161a;      /* Sidebar background in dark mode */
+  --bg-app: #09090b;          /* Pure dark neutral zinc for dark mode */
+  --bg-card: #121215;         /* Card background in dark mode - pure dark neutral */
+  --bg-sidebar: #0e0e10;      /* Sidebar background in dark mode */
   --border-color: rgba(255, 255, 255, 0.08);
   --text-primary: #f8fafc;
   --text-secondary: #cbd5e1;
@@ -65,17 +65,35 @@ aside,
 }
 
 .bg-slate-900,
+.bg-slate-900\/65,
 .bg-slate-900\/60,
 .bg-slate-900\/40,
 .bg-slate-900\/50,
+.bg-slate-900\/80,
+.bg-slate-900\/90,
 .bg-slate-950,
+.bg-slate-950\/10,
+.bg-slate-950\/25,
+.bg-slate-950\/40,
 .bg-slate-950\/50,
-.bg-\[\#0a0d16\],
-.bg-\[\#0a0d17\],
-.bg-\[\#111625\],
-.bg-\[\#161c2e\],
-.bg-\[\#13192b\],
-.bg-\[\#131826\] {
+.bg-slate-950\/60,
+.bg-slate-950\/70,
+.bg-slate-950\/80,
+.bg-slate-950\/85,
+.bg-slate-950\/90,
+.bg-slate-950\/95,
+.bg-indigo-950\/50,
+.bg-indigo-950,
+.bg-[#0a0d16],
+.bg-[#0a0d17],
+.bg-[#111625],
+.bg-[#161c2e],
+.bg-[#13192b],
+.bg-[#131826],
+.bg-[#070b13],
+.bg-[#0a0f1d],
+.bg-[#0b132b],
+.bg-[#0f172a] {
   background-color: var(--bg-card) !important;
   border-color: var(--border-color) !important;
 }
@@ -95,11 +113,11 @@ aside,
 }
 
 .glass-panel-deep {
-  background: rgba(15, 23, 42, 0.65);
+  background: rgba(18, 18, 22, 0.85);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.5);
 }
 
 .glass-card {
@@ -691,24 +709,29 @@ html.light .pointer-events-none {
 }
 
 /* Clean text selection rules */
-p, span, h1, h2, h3, h4, h5, h6, li, td, th, code, pre, input, textarea, [contenteditable="true"], .select-text {
-  user-select: text;
-  -webkit-user-select: text;
+p, span, h1, h2, h3, h4, h5, h6, li, td, th, code, pre, input, textarea, [contenteditable="true"], .select-text, .select-text * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }
 
-/* Ensure interactive controls, buttons, icons remain non-selectable */
-button, button *, .select-none, svg {
+/* Ensure interactive controls, buttons, icons remain non-selectable by default, unless marked select-text */
+button, .select-none, svg {
   user-select: none;
   -webkit-user-select: none;
 }
 
+button .select-text, button .select-text * {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
 /* Custom text selection highlight color */
 ::selection {
-  background-color: rgba(99, 102, 241, 0.4) !important;
+  background-color: #4f46e5 !important;
   color: #ffffff !important;
 }
 ::-moz-selection {
-  background-color: rgba(99, 102, 241, 0.4) !important;
+  background-color: #4f46e5 !important;
   color: #ffffff !important;
 }
 

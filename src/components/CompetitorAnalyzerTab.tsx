@@ -9,6 +9,7 @@ import {
   Copy, Check, Scale, ShieldAlert, Users, Award, Download, ArrowRight, ClipboardPaste, Info, FileUp, ListTodo, History, Settings2, HelpCircle
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer } from "../utils/aiClientHelper";
 import { CompetitorAnalysis, CompetitorHistoryItem, EditalAnalysis } from "../types";
@@ -50,6 +51,23 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
       return [];
     }
   });
+
+  useEffect(() => {
+    const syncEditalHistory = () => {
+      try {
+        const saved = localStorage.getItem("aip_edital_history");
+        if (saved) {
+          setEditalHistory(JSON.parse(saved));
+        }
+      } catch (e) {}
+    };
+    window.addEventListener("aip_edital_history_updated", syncEditalHistory);
+    window.addEventListener("storage", syncEditalHistory);
+    return () => {
+      window.removeEventListener("aip_edital_history_updated", syncEditalHistory);
+      window.removeEventListener("storage", syncEditalHistory);
+    };
+  }, []);
 
   // Competitor audit history (Supabase with Local fallback)
   const [competitorHistory, setCompetitorHistory] = useState<CompetitorHistoryItem[]>([]);
@@ -640,7 +658,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
                 {/* 1. Markdown Audit Report */}
                 {activeSubTab === "report" && (
                   <div className="bg-slate-900/30 border border-white/5 rounded-xl p-4.5 text-xs text-slate-300 space-y-4 leading-relaxed">
-                    <ReactMarkdown>{activeAnalysis.analiseEstiloMarkdown}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{activeAnalysis.analiseEstiloMarkdown}</ReactMarkdown>
                     
                     {/* Strengths Section */}
                     {activeAnalysis.pontosFortesConcorrente?.length > 0 && (

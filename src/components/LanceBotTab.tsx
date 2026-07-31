@@ -113,15 +113,26 @@ export default function LanceBotTab({ activeEdital }: LanceBotTabProps) {
 
   // Load edital history
   useEffect(() => {
-    const saved = localStorage.getItem("aip_edital_history");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setEditalHistory(parsed);
-      } catch (e) {
-        console.error("Erro ao ler histórico de editais no robô:", e);
+    const loadEditalHistory = () => {
+      const saved = localStorage.getItem("aip_edital_history");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setEditalHistory(parsed);
+        } catch (e) {
+          console.error("Erro ao ler histórico de editais no robô:", e);
+        }
       }
-    }
+    };
+
+    loadEditalHistory();
+    window.addEventListener("aip_edital_history_updated", loadEditalHistory);
+    window.addEventListener("storage", loadEditalHistory);
+
+    return () => {
+      window.removeEventListener("aip_edital_history_updated", loadEditalHistory);
+      window.removeEventListener("storage", loadEditalHistory);
+    };
   }, []);
 
   // Persist token & cookie changes

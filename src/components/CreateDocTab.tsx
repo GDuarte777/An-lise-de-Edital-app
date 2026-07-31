@@ -58,6 +58,7 @@ import {
 } from "lucide-react";
 import { CompanyData, EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
+import { apiFetch } from "../utils/aiClientHelper";
 import confetti from "canvas-confetti";
 
 interface CreateDocTabProps {
@@ -666,14 +667,14 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 2. Substitua TODOS os campos genéricos, lacunas e colchetes por dados reais extraídos do contexto da Empresa e do Edital fornecidos.
 3. Se houver tabela de preços ou proposta comercial, monte uma tabela Markdown limpa com valores realistas e coerentes.
 4. Mantenha tom jurídico formal, impecável e perfeitamente adequado para órgãos públicos.
-5. NÃO inclua saudações, nem texto explicativo antes ou depois do Markdown. Retorne APENAS o documento final pronto para uso.`;
+5. NÃO inclua saudações, nem texto explicativo antes ou depois do Markdown. Retorne APENAS o documento final pronto para uso.
+6. NUNCA inclua frases informais, avisos de sistema, marcas d'água ou rodapés citando IA ou plataformas. O documento deve ser 100% formal para uso oficial.`;
 
-      const response = await fetch("/api/chat", {
+      const response = await apiFetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           messages: [{ role: "user", content: prompt }]
-        })
+        }
       });
 
       if (!response.ok) {
@@ -717,17 +718,30 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 <head><meta charset='utf-8'><title>${docTitle}</title>
 <style>
   body { font-family: 'Arial', sans-serif; font-size: 11pt; line-height: 1.6; color: #111827; padding: 30px; }
-  h1 { font-size: 18pt; font-weight: bold; color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 6px; margin-top: 20px; }
-  h2 { font-size: 14pt; font-weight: bold; color: #1e40af; margin-top: 18px; }
-  h3 { font-size: 12pt; font-weight: bold; color: #1e293b; margin-top: 14px; }
+  h1 { font-size: 16pt; font-weight: bold; color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 6px; margin-top: 20px; text-transform: uppercase; }
+  h2 { font-size: 13pt; font-weight: bold; color: #1e40af; margin-top: 18px; }
+  h3 { font-size: 11pt; font-weight: bold; color: #1e293b; margin-top: 14px; }
   table { border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 10pt; }
   table, th, td { border: 1px solid #94a3b8; padding: 8px; }
   th { background-color: #f1f5f9; font-weight: bold; text-align: left; }
   hr { border: 0; border-top: 1px solid #cbd5e1; margin: 20px 0; }
-  p { margin-bottom: 10px; }
+  p { margin-bottom: 10px; text-align: justify; }
+  .letterhead-header { border-bottom: 2px solid #1e3a8a; padding-bottom: 12px; margin-bottom: 24px; }
+  .letterhead-title { font-size: 14pt; font-weight: bold; color: #1e3a8a; text-transform: uppercase; }
+  .letterhead-details { font-size: 9pt; color: #475569; }
 </style>
-</head><body>`;
-    const footer = "</body></html>";
+</head><body>
+<div class="letterhead-header">
+  <div class="letterhead-title">${companyData.razonSocial || "SUA EMPRESA LTDA"}</div>
+  <div class="letterhead-details">CNPJ: ${companyData.cnpj || "00.000.000/0001-00"} | ${companyData.address || ""}</div>
+  <div class="letterhead-details">Tel: ${companyData.phone || "(11) 99999-0000"} | E-mail: ${companyData.email || "contato@empresa.com.br"}</div>
+</div>
+`;
+    const footer = `
+<div style="margin-top: 40px; border-top: 1px solid #cbd5e1; padding-top: 10px; font-size: 8.5pt; color: #64748b; text-align: center;">
+  ${companyData.razonSocial || "Empresa Licitante"}${companyData.cnpj ? ` • CNPJ: ${companyData.cnpj}` : ''}
+</div>
+</body></html>`;
 
     const htmlBody = documentContent
       .replace(/^# (.*$)/gim, "<h1>$1</h1>")
@@ -763,26 +777,46 @@ REGRAS RÍGIDAS DE GERAÇÃO:
         <title>${docTitle}</title>
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-          @page { size: A4; margin: 2cm; }
-          body { font-family: 'Inter', sans-serif; color: #0f172a; line-height: 1.6; font-size: 11pt; padding: 0; margin: 0; }
-          .letterhead-header { border-bottom: 2px solid #3b82f6; padding-bottom: 12px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
+          @page {
+            size: A4;
+            margin: 0;
+          }
+          @media print {
+            html, body {
+              margin: 0;
+              padding: 0;
+              background-color: #ffffff;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+          }
+          body {
+            font-family: 'Inter', sans-serif;
+            color: #0f172a;
+            line-height: 1.6;
+            font-size: 11pt;
+            padding: 1.5cm 2cm;
+            margin: 0;
+            box-sizing: border-box;
+          }
+          .letterhead-header { border-bottom: 2px solid #1e3a8a; padding-bottom: 12px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
           .letterhead-title { font-size: 14pt; font-weight: 800; color: #1e3a8a; text-transform: uppercase; }
           .letterhead-details { font-size: 8.5pt; color: #475569; text-align: right; }
-          h1 { font-size: 16pt; font-weight: 700; color: #1e3a8a; border-bottom: 2px solid #2563eb; padding-bottom: 6px; text-transform: uppercase; margin-top: 15px; }
+          h1 { font-size: 16pt; font-weight: 700; color: #1e3a8a; border-bottom: 2px solid #1e3a8a; padding-bottom: 6px; text-transform: uppercase; margin-top: 15px; }
           h2 { font-size: 13pt; font-weight: 700; color: #0f172a; margin-top: 18px; }
           h3 { font-size: 11pt; font-weight: 600; color: #334155; margin-top: 14px; }
           table { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 10pt; }
           th, td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; }
           th { background-color: #f8fafc; font-weight: 600; }
           hr { border: 0; height: 1px; background: #e2e8f0; margin: 20px 0; }
-          .letterhead-footer { margin-top: 50px; border-top: 1px solid #cbd5e1; padding-top: 10px; font-size: 8pt; color: #64748b; text-align: center; }
+          .letterhead-footer { margin-top: 40px; border-top: 1px solid #cbd5e1; padding-top: 10px; font-size: 8.5pt; color: #64748b; text-align: center; }
         </style>
       </head>
       <body>
         <div class="letterhead-header">
           <div>
             <div class="letterhead-title">${companyData.razonSocial || "SUA EMPRESA LTDA"}</div>
-            <div style="font-size: 9pt; color: #3b82f6; font-weight: 600;">CNPJ: ${companyData.cnpj || "00.000.000/0001-00"}</div>
+            <div style="font-size: 9pt; color: #1e3a8a; font-weight: 600;">CNPJ: ${companyData.cnpj || "00.000.000/0001-00"}</div>
           </div>
           <div class="letterhead-details">
             ${companyData.address || "Endereço da Empresa"}<br>
@@ -791,7 +825,7 @@ REGRAS RÍGIDAS DE GERAÇÃO:
         </div>
         <div id="content"></div>
         <div class="letterhead-footer">
-          Documento Licitação Oficial • ${companyData.razonSocial || "Empresa Licitante"} • Gerado via HORASIS Assessor IA
+          ${companyData.razonSocial || "Empresa Licitante"}${companyData.cnpj ? ` • CNPJ: ${companyData.cnpj}` : ''}
         </div>
         <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
         <script>
@@ -1408,7 +1442,7 @@ REGRAS RÍGIDAS DE GERAÇÃO:
             {/* PAPEL TIMBRADO: FOOTER */}
             <div className="border-t border-slate-200 pt-4 mt-8 flex items-center justify-between text-[10px] text-slate-400 select-none">
               <div>
-                Documento Licitação Oficial • <strong>{companyData.razonSocial || "Empresa Licitante"}</strong>
+                <strong>{companyData.razonSocial || "Empresa Licitante"}</strong>{companyData.cnpj ? ` • CNPJ: ${companyData.cnpj}` : ''}
               </div>
               <div>
                 Página 1 de 1
@@ -1531,7 +1565,7 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 
               {/* Footer */}
               <div className="border-t border-slate-200 pt-4 mt-8 flex items-center justify-between text-[10px] text-slate-400">
-                <div>Documento Licitação Oficial • {companyData.razonSocial || "Empresa Licitante"}</div>
+                <div>{companyData.razonSocial || "Empresa Licitante"}{companyData.cnpj ? ` • CNPJ: ${companyData.cnpj}` : ''}</div>
                 <div>Página 1 de 1</div>
               </div>
 

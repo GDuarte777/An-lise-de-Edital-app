@@ -10,11 +10,20 @@ import confetti from "canvas-confetti";
 
 function cleanMarkdownText(text: string | undefined): string {
   if (!text) return "";
-  return text
+  let cleaned = text
     .replace(/\\n/gi, "\n")
     .replace(/\\r/gi, "\r")
     .replace(/\\t/gi, "\t")
     .replace(/\\"/g, '"');
+
+  // Repair legacy mangled backslashes (e.g. "NN##", "|N|", "NN 1.", "|N ", "N| ")
+  cleaned = cleaned.replace(/NN(#{1,6}\s)/g, "\n\n$1");
+  cleaned = cleaned.replace(/nn(#{1,6}\s)/g, "\n\n$1");
+  cleaned = cleaned.replace(/([^\n])(\|[\s\w\d\-_Á-Úá-ú]+\|)/g, "$1\n\n$2");
+  cleaned = cleaned.replace(/\|N\|\s*/gi, "|\n| ");
+  cleaned = cleaned.replace(/\|N\s*/gi, "|\n");
+
+  return cleaned;
 }
 
 interface DocPreviewModalProps {
@@ -338,11 +347,27 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
             color: #4a5568 !important;
           }
           
+          @page {
+            size: A4;
+            margin: 0;
+          }
           @media print {
-            body {
-              padding: 0;
+            html, body {
               margin: 0;
+              padding: 0;
+              background-color: #ffffff;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
             }
+          }
+          body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.6;
+            color: #1a202c;
+            background-color: #ffffff;
+            padding: 1.5cm 2cm;
+            margin: 0;
+            box-sizing: border-box;
           }
         </style>
       </head>

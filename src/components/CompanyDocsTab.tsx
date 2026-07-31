@@ -528,6 +528,9 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
             method: "POST",
             body: {
               ...prepared,
+              fileBase64: base64String,
+              fileName: file.name,
+              fileType: resolvedFileType,
               docName: certs.find(c => c.id === certId)?.name || ""
             }
           });
@@ -799,7 +802,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       finalNotes = `Documento ou certidão para comprovar os requisitos de "${formData.name}" no processo licitatório.`;
     }
 
-    const calculatedStatus = finalExpirationDate ? evaluateStatus(finalExpirationDate) : "expired";
+    const calculatedStatus = evaluateStatus(finalExpirationDate);
 
     if (editingCert) {
       // Edit
@@ -974,10 +977,9 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     });
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await apiFetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           messages: [
             {
               role: "user",
@@ -1006,7 +1008,7 @@ Retorne exclusivamente o JSON estruturado.
           ],
           companyData: companyData,
           activeEditalAnalysis: activeEdital
-        })
+        }
       });
 
       const data = await response.json();

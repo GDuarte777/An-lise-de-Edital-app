@@ -5,7 +5,7 @@ import {
   MessageSquare, X, Send, Bot, User, Sparkles, Loader2, Plus, Trash2, 
   Paperclip, Image, FileText, ChevronLeft, Edit2, Check, ArrowRight, RotateCcw,
   FolderOpen, FileCheck, Download, Eye, ClipboardCopy, CheckSquare, Globe, Database, Printer,
-  ChevronDown, Search, AlertTriangle
+  ChevronDown, Search, AlertTriangle, Maximize2, Minimize2, Square
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
@@ -15,7 +15,8 @@ import {
   fetchChatSessionsFromSupabase,
   saveChatSessionToSupabase,
   deleteChatSessionFromSupabase,
-  clearAllChatSessionsInSupabase
+  clearAllChatSessionsInSupabase,
+  fetchEditaisFromSupabase
 } from "../utils/supabaseClient";
 
 interface FloatingAiChatProps {
@@ -92,77 +93,6 @@ export default function FloatingAiChat({ companyData, activeEdital }: FloatingAi
     }
   }, [isOpen]);
   
-  // Loaded edital history
-  const [editalHistory, setEditalHistory] = useState<any[]>([]);
-  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
-
-  // States for the modernized custom selector
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [dropdownSearch, setDropdownSearch] = useState("");
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  // Load edital history from localStorage dynamically
-  const reloadEditalHistory = () => {
-    const saved = localStorage.getItem("aip_edital_history");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          setEditalHistory(parsed);
-        }
-      } catch (e) {
-        console.error("Erro ao carregar histórico de editais:", e);
-      }
-    }
-  };
-
-  // Keep editalHistory always in sync (active listener + periodic sync)
-  useEffect(() => {
-    reloadEditalHistory(); // Sync on mount
-
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "aip_edital_history") {
-        reloadEditalHistory();
-      }
-    };
-
-    const handleFocus = () => {
-      reloadEditalHistory();
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("focus", handleFocus);
-    
-    // Quick polling fallback to handle updates from within the same window
-    const interval = setInterval(reloadEditalHistory, 1500);
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("focus", handleFocus);
-      clearInterval(interval);
-    };
-  }, []);
-
-  // Sync again when chat is opened
-  useEffect(() => {
-    if (isOpen) {
-      reloadEditalHistory();
-    }
-  }, [isOpen]);
-
-  // Click outside to close the custom selector dropdown
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, []);
-
   // Multiple sessions state
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     const deletedIds = getDeletedSessionIds();
@@ -205,6 +135,104 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   const [activeSessionId, setActiveSessionId] = useState<string>(() => {
     return sessions[0]?.id || "chat-default";
   });
+
+  // Loaded edital history
+  const [editalHistory, setEditalHistory] = useState<any[]>([]);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+
+  // States for the modernized custom selector
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [dropdownSearch, setDropdownSearch] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Load edital history from localStorage or Supabase dynamically
+  const reloadEditalHistory = async () => {
+    let list: any[] = [];
+    const saved = localStorage.getItem("aip_edital_history");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          list = parsed;
+        }
+      } catch (e) {
+        console.error("Erro ao carregar histórico de editais:", e);
+      }
+    }
+
+    if (list.length === 0) {
+      try {
+        const dbEditais = await fetchEditaisFromSupabase();
+        if (dbEditais && dbEditais.length > 0) {
+          list = dbEditais;
+          localStorage.setItem("aip_edital_history", JSON.stringify(dbEditais));
+        }
+      } catch (e) {
+        // silent fallback
+      }
+    }
+
+    setEditalHistory(prev => {
+      if (JSON.stringify(prev) === JSON.stringify(list)) {
+        return prev;
+      }
+      return list;
+    });
+  };
+
+  // Keep editalHistory always in sync via event listeners
+  useEffect(() => {
+    reloadEditalHistory(); // Sync on mount
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (!e.key || e.key === "aip_edital_history") {
+        reloadEditalHistory();
+      }
+    };
+
+    const handleCustomUpdate = () => {
+      reloadEditalHistory();
+    };
+
+    const handleEditalAnalyzed = (e: any) => {
+      reloadEditalHistory();
+      if (e?.detail?.id) {
+        setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, selectedEditalId: e.detail.id } : s));
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    window.addEventListener("aip_edital_history_updated", handleCustomUpdate);
+    window.addEventListener("aip_edital_analyzed", handleEditalAnalyzed);
+    window.addEventListener("focus", handleCustomUpdate);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("aip_edital_history_updated", handleCustomUpdate);
+      window.removeEventListener("aip_edital_analyzed", handleEditalAnalyzed);
+      window.removeEventListener("focus", handleCustomUpdate);
+    };
+  }, [activeSessionId]);
+
+  // Sync again when chat is opened
+  useEffect(() => {
+    if (isOpen) {
+      reloadEditalHistory();
+    }
+  }, [isOpen]);
+
+  // Click outside to close the custom selector dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
 
   const [inputVal, setInputVal] = useState("");
   const [loading, setLoading] = useState(false);
@@ -412,6 +440,27 @@ PARECER E ESTRATÉGIA:
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setLoading(false);
+    setSessions(prev => prev.map(s => {
+      if (s.id === activeSessionId) {
+        const cancelMsg: ChatMessage = {
+          id: `msg-cancel-${Date.now()}`,
+          role: "assistant",
+          content: "⏹️ **Envio interrompido pelo usuário.**",
+          timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+        };
+        return { ...s, messages: [...s.messages, cancelMsg] };
+      }
+      return s;
+    }));
+  };
 
   // Resizing configuration & state
   const DEFAULT_WIDTH = 860;
@@ -425,6 +474,7 @@ PARECER E ESTRATÉGIA:
     return saved ? parseInt(saved, 10) : DEFAULT_HEIGHT;
   });
   const [isDesktop, setIsDesktop] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
 
   useEffect(() => {
     const checkIsDesktop = () => setIsDesktop(window.innerWidth >= 768);
@@ -717,7 +767,7 @@ PARECER E ESTRATÉGIA:
     attachmentInputRef.current?.click();
   };
 
-  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -787,6 +837,11 @@ PARECER E ESTRATÉGIA:
       return;
     }
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: "user",
@@ -821,7 +876,8 @@ PARECER E ESTRATÉGIA:
     if (isFirstUserMsg) {
       apiFetch("/api/chat/title", {
         method: "POST",
-        body: { message: text }
+        signal: abortControllerRef.current.signal,
+        body: { message: text, aiConfig: getActiveAiConfig() }
       })
       .then(res => {
         if (res.ok) return res.json();
@@ -846,11 +902,13 @@ PARECER E ESTRATÉGIA:
 
       const response = await apiFetch("/api/chat", {
         method: "POST",
+        signal: abortControllerRef.current.signal,
         body: {
           messages: updatedMessages,
           companyData: companyData,
           activeEditalAnalysis: selectedEditalObj,
-          systemCertificates: loadSystemCertificates()
+          systemCertificates: loadSystemCertificates(),
+          aiConfig: getActiveAiConfig()
         }
       });
 
@@ -883,17 +941,18 @@ PARECER E ESTRATÉGIA:
         localStorage.setItem("aip_chat_has_unread", "true");
       }
     } catch (error: any) {
+      if (error?.name === "AbortError" || error?.message?.includes("aborted")) {
+        console.log("Geração de resposta cancelada pelo usuário.");
+        return;
+      }
       console.error("Erro no chat:", error);
       const errorText = error?.message || String(error);
       const errMessage: ChatMessage = {
         id: `msg-err-${Date.now()}`,
         role: "assistant",
-        content: errorText.startsWith("❌") 
-          ? errorText 
-          : `❌ **Erro na comunicação com a IA:** ${errorText}\n\nVerifique se sua chave de API está configurada corretamente em **IA & Modelos**.`,
+        content: `Desculpe, ocorreu uma breve instabilidade de rede. Por favor, envie sua mensagem novamente em alguns instantes.`,
         timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
       };
-
 
       setSessions(prev => prev.map(s => {
         if (s.id === activeSessionId) {
@@ -921,22 +980,22 @@ PARECER E ESTRATÉGIA:
             setIsOpen(true);
             setShowSidebarMobile(true);
           }}
-          className="flex items-center p-3 rounded-full bg-gradient-to-r from-indigo-600 via-indigo-550 to-violet-600 hover:from-indigo-550 hover:to-violet-550 text-white shadow-xl hover:shadow-indigo-500/25 shadow-slate-950/40 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer relative group border border-white/15 overflow-visible select-none hover:pr-4.5"
+          className="flex items-center p-3 rounded-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:via-indigo-500 hover:to-purple-500 text-white shadow-xl shadow-blue-950/50 hover:shadow-indigo-500/30 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer relative group border border-blue-400/40 overflow-visible select-none hover:pr-4.5"
           id="floating-chat-trigger"
         >
           {/* Inner hover glow */}
-          <span className="absolute inset-0 rounded-full bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+          <span className="absolute inset-0 rounded-full bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
 
           {/* Glowing pulse indicator ONLY if hasUnread is true */}
           {hasUnread && (
             <span className="absolute -top-1 -right-1 flex h-4.5 w-4.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-4.5 w-4.5 bg-emerald-500 border-2 border-slate-900" />
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-4.5 w-4.5 bg-amber-500 border-2 border-zinc-950" />
             </span>
           )}
 
           {/* Animated icon container */}
-          <div className="bg-white/10 p-1.5 rounded-full border border-white/10 flex items-center justify-center shrink-0">
+          <div className="bg-white/15 backdrop-blur-md p-1.5 rounded-full border border-white/20 flex items-center justify-center shrink-0">
             <MessageSquare className="w-4.5 h-4.5 text-white group-hover:scale-110 transition-transform duration-300" />
           </div>
 
@@ -944,16 +1003,16 @@ PARECER E ESTRATÉGIA:
           <div className="flex items-center max-w-0 opacity-0 overflow-hidden group-hover:max-w-[200px] group-hover:opacity-100 transition-all duration-300 ease-out whitespace-nowrap">
             {/* Pill text label */}
             <div className="flex flex-col text-left shrink-0 pr-1.5 pl-2">
-              <span className="text-[9px] font-extrabold uppercase tracking-widest text-indigo-200 leading-none mb-0.5">Online</span>
-              <span className="text-xs font-bold text-white tracking-wide leading-none">Assessor IA</span>
+              <span className="text-[9px] font-black uppercase tracking-widest text-blue-200 leading-none mb-0.5">Online</span>
+              <span className="text-xs font-semibold text-white tracking-wide leading-none">Assessor IA</span>
             </div>
 
             {/* Mini Action Arrow */}
-            <ArrowRight className="w-3.5 h-3.5 text-white/70 group-hover:translate-x-1 transition-transform duration-300 shrink-0 mr-1.5" />
+            <ArrowRight className="w-3.5 h-3.5 text-white/90 group-hover:translate-x-1 transition-transform duration-300 shrink-0 mr-1.5" />
           </div>
 
           {/* Elegant Tooltip overlay */}
-          <span className="absolute right-0 bottom-14 bg-slate-950/95 text-slate-200 text-[10.5px] font-medium py-2 px-3 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 border border-white/10 shadow-2xl backdrop-blur-md pointer-events-none whitespace-nowrap">
+          <span className="absolute right-0 bottom-14 bg-zinc-950/95 text-slate-200 text-[10.5px] font-medium py-2 px-3 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 border border-white/10 shadow-2xl backdrop-blur-md pointer-events-none whitespace-nowrap">
             Dúvidas? Pergunte ao Assessor Inteligente!
           </span>
         </button>
@@ -963,30 +1022,34 @@ PARECER E ESTRATÉGIA:
       {isOpen && (
         <div 
           id="chat-popup-container"
-          className="bg-slate-900/40 border border-white/10 backdrop-blur-xl rounded-2xl shadow-2xl fixed inset-4 md:inset-auto md:bottom-6 md:right-6 w-auto md:w-[780px] lg:w-[860px] h-auto md:h-[580px] flex flex-row overflow-hidden animate-scale-up z-50"
+          className={`bg-[#0b0b0e] border border-white/10 backdrop-blur-2xl rounded-2xl shadow-2xl shadow-black/80 fixed flex flex-row overflow-hidden transition-all duration-300 z-50 ${
+            isFullScreen 
+              ? "inset-2 sm:inset-4 md:inset-5 w-auto h-auto max-w-none max-h-none" 
+              : "inset-4 md:inset-auto md:bottom-6 md:right-6 w-auto md:w-[780px] lg:w-[860px] h-auto md:h-[580px] animate-scale-up"
+          }`}
           style={{
-            width: isDesktop ? `${width}px` : undefined,
-            height: isDesktop ? `${height}px` : undefined,
+            width: (!isFullScreen && isDesktop) ? `${width}px` : undefined,
+            height: (!isFullScreen && isDesktop) ? `${height}px` : undefined,
           }}
         >
           {/* Resize handles */}
-          {isDesktop && (
+          {isDesktop && !isFullScreen && (
             <>
               {/* Left Edge Handle */}
               <div
-                className="absolute left-0 top-1 bottom-1 w-1.5 cursor-ew-resize hover:bg-indigo-500/40 active:bg-indigo-500 transition-colors z-50"
+                className="absolute left-0 top-1 bottom-1 w-1.5 cursor-ew-resize hover:bg-white/10 active:bg-white/20 transition-colors z-50"
                 onMouseDown={(e) => handleResizeStart(e, "left")}
                 title="Arraste para redimensionar largura"
               />
               {/* Top Edge Handle */}
               <div
-                className="absolute top-0 left-1 right-1 h-1.5 cursor-ns-resize hover:bg-indigo-500/40 active:bg-indigo-500 transition-colors z-50"
+                className="absolute top-0 left-1 right-1 h-1.5 cursor-ns-resize hover:bg-white/10 active:bg-white/20 transition-colors z-50"
                 onMouseDown={(e) => handleResizeStart(e, "top")}
                 title="Arraste para redimensionar altura"
               />
               {/* Top-Left Corner Handle */}
               <div
-                className="absolute left-0 top-0 w-3.5 h-3.5 cursor-nwse-resize hover:bg-indigo-500/50 active:bg-indigo-500 transition-colors z-50 border-t-2 border-l-2 border-slate-500/40 rounded-tl"
+                className="absolute left-0 top-0 w-3.5 h-3.5 cursor-nwse-resize hover:bg-white/15 active:bg-white/20 transition-colors z-50 border-t-2 border-l-2 border-white/20 rounded-tl"
                 onMouseDown={(e) => handleResizeStart(e, "top-left")}
                 title="Arraste para redimensionar"
               />
@@ -995,20 +1058,20 @@ PARECER E ESTRATÉGIA:
           {/* LEFT SIDEBAR VIEW - CHATS CATALOG */}
           <div className={`
             ${showSidebarMobile ? "flex w-full" : "hidden md:flex"} 
-            md:w-64 border-r border-white/10 flex-col bg-slate-950/50 shrink-0 h-full
+            md:w-64 border-r border-white/5 flex-col bg-[#08080a] shrink-0 h-full
           `}>
             {/* Sidebar Header */}
-            <div className="p-4 border-b border-white/10 flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-300 tracking-wider uppercase flex items-center gap-1.5">
-                <MessageSquare className="w-4 h-4 text-indigo-400" />
+            <div className="p-3.5 border-b border-white/5 flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 tracking-wider uppercase flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
                 Canais ({sessions.length}/{MAX_CHATS_PER_USER})
               </span>
               <button
                 onClick={handleNewChat}
-                className={`p-1.5 rounded-lg flex items-center gap-1 text-[11px] font-semibold hover:scale-[1.02] active:scale-95 transition-all cursor-pointer ${
+                className={`px-2.5 py-1 rounded-lg flex items-center gap-1 text-[11px] font-medium transition-all cursor-pointer ${
                   sessions.length >= MAX_CHATS_PER_USER
                     ? "bg-amber-600/80 hover:bg-amber-500 text-white"
-                    : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                    : "bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white"
                 }`}
                 title={sessions.length >= MAX_CHATS_PER_USER ? "Limite de 20 chats atingido" : "Novo canal de chat"}
               >
@@ -1031,9 +1094,9 @@ PARECER E ESTRATÉGIA:
                       setActiveSessionId(s.id);
                       setShowSidebarMobile(false);
                     }}
-                    className={`group w-full text-left p-3 rounded-xl transition-all flex flex-col justify-between cursor-pointer border ${
+                    className={`group w-full text-left p-2.5 rounded-xl transition-all flex flex-col justify-between cursor-pointer border ${
                       isActive 
-                        ? "bg-indigo-600/20 border-indigo-500/30 text-white" 
+                        ? "bg-white/8 border-white/10 text-white font-medium shadow-sm" 
                         : "bg-transparent border-transparent hover:bg-white/5 text-slate-300"
                     }`}
                   >
@@ -1047,7 +1110,7 @@ PARECER E ESTRATÉGIA:
                             onKeyDown={(e) => {
                               if (e.key === "Enter") handleSaveRename(s.id);
                             }}
-                            className="bg-slate-900 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-white flex-1 focus:outline-none"
+                            className="bg-zinc-900 border border-white/10 rounded px-1.5 py-0.5 text-xs text-white flex-1 focus:outline-none"
                             autoFocus
                           />
                           <button 
@@ -1058,7 +1121,7 @@ PARECER E ESTRATÉGIA:
                           </button>
                         </div>
                       ) : (
-                        <span className="font-bold text-xs truncate max-w-[150px]">
+                        <span className="font-semibold text-xs truncate max-w-[150px]">
                           {s.title}
                         </span>
                       )}
@@ -1083,12 +1146,12 @@ PARECER E ESTRATÉGIA:
                       )}
                     </div>
 
-                    <div className="mt-1.5 flex items-center justify-between w-full text-[10px] text-slate-400">
+                    <div className="mt-1 flex items-center justify-between w-full text-[10px] text-slate-400">
                       <span className="truncate max-w-[120px]">
                         {lastMsg ? lastMsg.content.slice(0, 30) + (lastMsg.content.length > 30 ? "..." : "") : "Sem mensagens"}
                       </span>
                       {s.selectedEditalId && (
-                        <span className="bg-indigo-500/10 text-indigo-400 border border-indigo-400/20 px-1 rounded truncate max-w-[80px]">
+                        <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1 rounded truncate max-w-[80px]">
                           {s.selectedEditalId === "active" ? "Edital Ativo" : "Histórico"}
                         </span>
                       )}
@@ -1099,15 +1162,15 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Sidebar Footer */}
-            <div className="p-3 border-t border-white/10 bg-slate-950/40 text-[10px] text-slate-400 flex flex-col gap-2 select-none">
+            <div className="p-3 border-t border-white/5 bg-[#08080a] text-[10px] text-slate-400 flex flex-col gap-2 select-none">
               {/* Cota & Armazenamento Bar */}
-              <div className="space-y-1 bg-slate-900/60 p-2 rounded-lg border border-white/5">
+              <div className="space-y-1 bg-white/5 p-2 rounded-xl border border-white/5">
                 <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-semibold text-slate-300 flex items-center gap-1">
-                    <Database className="w-3 h-3 text-indigo-400" />
+                  <span className="font-medium text-slate-300 flex items-center gap-1">
+                    <Database className="w-3 h-3 text-emerald-400" />
                     Cota de Canais
                   </span>
-                  <span className={`font-bold ${
+                  <span className={`font-semibold ${
                     sessions.length >= MAX_CHATS_PER_USER 
                       ? "text-rose-400" 
                       : sessions.length >= 17 
@@ -1118,7 +1181,7 @@ PARECER E ESTRATÉGIA:
                   </span>
                 </div>
                 
-                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                <div className="w-full bg-white/10 rounded-full h-1 overflow-hidden">
                   <div 
                     className={`h-full transition-all duration-300 ${
                       sessions.length >= MAX_CHATS_PER_USER 
@@ -1147,7 +1210,7 @@ PARECER E ESTRATÉGIA:
 
               <button
                 onClick={handleClearAllChats}
-                className="w-full py-1.5 px-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                className="w-full py-1.5 px-2 bg-red-500/5 hover:bg-red-500/15 text-red-400 hover:text-red-300 border border-red-500/15 hover:border-red-500/30 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
                 title="Apagar todas as conversas do histórico"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -1159,10 +1222,10 @@ PARECER E ESTRATÉGIA:
           {/* RIGHT CHAT WINDOW VIEW */}
           <div className={`
             ${!showSidebarMobile ? "flex" : "hidden md:flex"} 
-            flex-1 flex-col h-full bg-slate-900/10
+            flex-1 flex-col h-full bg-[#0b0b0e]
           `}>
             {/* Header */}
-            <div className="bg-white/5 border-b border-white/10 text-white p-4 flex items-center justify-between shrink-0">
+            <div className="bg-[#0e0e12]/80 border-b border-white/5 text-white p-3.5 flex items-center justify-between shrink-0 backdrop-blur-md">
               <div className="flex items-center gap-2">
                 {/* Back to sidebar button on Mobile */}
                 <button
@@ -1172,11 +1235,11 @@ PARECER E ESTRATÉGIA:
                   <ChevronLeft className="w-5 h-5" />
                 </button>
                 
-                <div className="bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 p-1.5 rounded-lg">
-                  <Bot className="w-5 h-5 animate-pulse" />
+                <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-1.5 rounded-lg">
+                  <Bot className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-xs md:text-sm">{activeSession.title}</h3>
+                  <h3 className="font-semibold text-xs md:text-sm">{activeSession.title}</h3>
                   <p className="text-[10px] text-slate-400 flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                     Assessoria Gemini Inteligente
@@ -1187,14 +1250,14 @@ PARECER E ESTRATÉGIA:
               <div className="flex items-center gap-2">
                 <button
                   onClick={(e) => handleDeleteChat(e, activeSession.id)}
-                  className="text-xs text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 bg-red-500/10 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                  className="text-xs text-rose-400/80 hover:text-rose-300 border border-rose-500/20 bg-rose-500/5 hover:bg-rose-500/10 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                   title="Apagar este chat definitivamente do layout e banco de dados"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Excluir Chat</span>
                 </button>
 
-                {isDesktop && (width !== DEFAULT_WIDTH || height !== DEFAULT_HEIGHT) && (
+                {isDesktop && !isFullScreen && (width !== DEFAULT_WIDTH || height !== DEFAULT_HEIGHT) && (
                   <button
                     onClick={() => {
                       setWidth(DEFAULT_WIDTH);
@@ -1202,13 +1265,31 @@ PARECER E ESTRATÉGIA:
                       localStorage.removeItem("aip_chat_width");
                       localStorage.removeItem("aip_chat_height");
                     }}
-                    className="text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-500/20 hover:border-indigo-500/40 bg-indigo-500/10 px-2 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                    className="text-xs text-slate-300 hover:text-white border border-white/10 bg-white/5 hover:bg-white/10 px-2 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                     title="Restaurar o tamanho padrão da janela do chat"
                   >
                     <RotateCcw className="w-3 h-3" />
                     <span>Tamanho Padrão</span>
                   </button>
                 )}
+
+                <button
+                  onClick={() => setIsFullScreen(!isFullScreen)}
+                  className="text-xs text-slate-300 hover:text-white border border-white/10 bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  title={isFullScreen ? "Sair do modo tela cheia" : "Expandir chat para tela cheia"}
+                >
+                  {isFullScreen ? (
+                    <>
+                      <Minimize2 className="w-3.5 h-3.5 text-indigo-400" />
+                      <span className="hidden sm:inline">Restaurar</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize2 className="w-3.5 h-3.5 text-indigo-400" />
+                      <span className="hidden sm:inline">Tela Cheia</span>
+                    </>
+                  )}
+                </button>
 
                 <button
                   onClick={() => setIsOpen(false)}
@@ -1219,14 +1300,14 @@ PARECER E ESTRATÉGIA:
               </div>
             </div>
 
-            {/* Edital Selection Context Ribbon - Ultra Compact & Elegant Custom Dropdown */}
-            <div className="bg-slate-950/70 px-4 py-2 border-b border-white/10 flex items-center justify-between gap-3 shrink-0 select-none text-xs relative z-30">
+            {/* Edital Selection Context Ribbon - Ultra Compact & Minimalist Custom Dropdown */}
+            <div className="bg-[#0a0a0d] px-4 py-2 border-b border-white/5 flex items-center justify-between gap-3 shrink-0 select-none text-xs relative z-30">
               <div className="flex items-center gap-1.5 min-w-0">
-                <Database className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span className="text-[11px] font-bold text-slate-300 shrink-0">Foco do Chat:</span>
+                <Database className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="text-[11px] font-semibold text-slate-300 shrink-0">Foco do Chat:</span>
                 
                 {/* Visual state indicator dot */}
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeSession.selectedEditalId ? "bg-indigo-400 animate-pulse" : "bg-slate-500"}`} />
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${activeSession.selectedEditalId ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`} />
                 
                 <span className="text-[10px] text-slate-400 hidden sm:inline truncate max-w-[120px] md:max-w-[180px]">
                   {activeSession.selectedEditalId ? "Focando em edital específico" : "Geral / Sem edital"}
@@ -1238,11 +1319,14 @@ PARECER E ESTRATÉGIA:
                 <button
                   type="button"
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="max-w-[195px] sm:max-w-[340px] flex items-center justify-between gap-2 bg-slate-900/90 hover:bg-slate-800/95 border border-white/10 hover:border-indigo-500/40 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none transition-all cursor-pointer shadow-sm active:scale-95 text-left"
+                  className="max-w-[195px] sm:max-w-[340px] flex items-center justify-between gap-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-slate-200 focus:outline-none transition-all cursor-pointer active:scale-95 text-left"
                 >
                   <span className="truncate">
                     {activeSession.selectedEditalId === "" && "💬 Nenhum Edital (Conversa Geral)"}
-                    {activeSession.selectedEditalId !== "" && (
+                    {activeSession.selectedEditalId === "active" && (
+                      `⚡ Edital Ativo em Tela (${activeEdital?.descricaoProduto?.slice(0, 20) || activeEdital?.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Em Tela"})`
+                    )}
+                    {activeSession.selectedEditalId !== "" && activeSession.selectedEditalId !== "active" && (
                       (() => {
                         const found = editalHistory.find(h => h.id === activeSession.selectedEditalId);
                         const ed = found?.analysis || found;
@@ -1255,9 +1339,9 @@ PARECER E ESTRATÉGIA:
 
                 {/* Dropdown Popover */}
                 {isDropdownOpen && (
-                  <div className="absolute right-0 mt-1.5 w-64 sm:w-80 bg-slate-950/95 border border-white/15 rounded-xl shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden max-h-72 animate-scale-up">
+                  <div className="absolute right-0 mt-1.5 w-64 sm:w-80 bg-[#0f0f14] border border-white/10 rounded-xl shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden max-h-72 animate-scale-up">
                     {/* Search Field */}
-                    <div className="p-2 border-b border-white/10 flex items-center gap-2 bg-slate-900/40 shrink-0">
+                    <div className="p-2 border-b border-white/5 flex items-center gap-2 bg-white/5 shrink-0">
                       <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-1" />
                       <input
                         type="text"
@@ -1289,13 +1373,37 @@ PARECER E ESTRATÉGIA:
                             setIsDropdownOpen(false);
                             setDropdownSearch("");
                           }}
-                          className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center justify-between transition-colors ${activeSession.selectedEditalId === "" ? "text-indigo-400 font-bold bg-indigo-500/5" : "text-slate-300"}`}
+                          className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex items-center justify-between transition-colors ${activeSession.selectedEditalId === "" ? "text-emerald-400 font-semibold bg-emerald-500/10" : "text-slate-300"}`}
                         >
                           <span className="flex items-center gap-2 truncate">
-                            <MessageSquare className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
+                            <MessageSquare className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
                             <span className="truncate">Nenhum Edital (Conversa Geral)</span>
                           </span>
-                          {activeSession.selectedEditalId === "" && <Check className="w-3.5 h-3.5 text-indigo-450 shrink-0" />}
+                          {activeSession.selectedEditalId === "" && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                        </button>
+                      )}
+
+                      {/* Option: Active Edital on screen if available */}
+                      {activeEdital && (!dropdownSearch || "edital ativo em tela".includes(dropdownSearch.toLowerCase()) || (activeEdital.descricaoProduto || "").toLowerCase().includes(dropdownSearch.toLowerCase()) || (activeEdital.identificacaoCertame?.orgaoComprador || "").toLowerCase().includes(dropdownSearch.toLowerCase())) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSelectEdital("active");
+                            setIsDropdownOpen(false);
+                            setDropdownSearch("");
+                          }}
+                          className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex flex-col justify-center transition-colors border-b border-white/5 ${activeSession.selectedEditalId === "active" ? "text-emerald-400 font-semibold bg-emerald-500/10" : "text-slate-300"}`}
+                        >
+                          <div className="flex items-center justify-between w-full gap-2">
+                            <span className="flex items-center gap-2 truncate font-medium">
+                              <Sparkles className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span className="truncate">⚡ Edital Ativo em Tela</span>
+                            </span>
+                            {activeSession.selectedEditalId === "active" && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                          </div>
+                          <span className="text-[9px] text-slate-400 ml-5 truncate block">
+                            {activeEdital.descricaoProduto ? activeEdital.descricaoProduto.slice(0, 45) : (activeEdital.identificacaoCertame?.orgaoComprador || "Em Análise")}
+                          </span>
                         </button>
                       )}
 
@@ -1315,7 +1423,7 @@ PARECER E ESTRATÉGIA:
                         if (filteredHistory.length > 0) {
                           return (
                             <div>
-                              <div className="px-3 py-1 bg-white/2 text-[9px] font-extrabold uppercase tracking-wider text-slate-400 shrink-0 flex items-center justify-between">
+                              <div className="px-3 py-1 bg-white/5 text-[9px] font-semibold uppercase tracking-wider text-slate-400 shrink-0 flex items-center justify-between">
                                 <span>📂 Editais Analisados ({filteredHistory.length})</span>
                               </div>
                               {filteredHistory.map((item, idx) => {
@@ -1333,14 +1441,14 @@ PARECER E ESTRATÉGIA:
                                       setIsDropdownOpen(false);
                                       setDropdownSearch("");
                                     }}
-                                    className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex flex-col justify-center transition-colors ${isSelected ? "text-indigo-400 font-bold bg-indigo-500/5" : "text-slate-300"}`}
+                                    className={`w-full text-left px-3 py-2 text-[11px] hover:bg-white/5 flex flex-col justify-center transition-colors ${isSelected ? "text-emerald-400 font-semibold bg-emerald-500/10" : "text-slate-300"}`}
                                   >
                                     <div className="flex items-center justify-between w-full gap-2">
                                       <span className="flex items-center gap-2 truncate">
                                         <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                         <span className="truncate">{title}</span>
                                       </span>
-                                      {isSelected && <Check className="w-3.5 h-3.5 text-indigo-450 shrink-0" />}
+                                      {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
                                     </div>
                                     <span className="text-[9px] text-slate-500 ml-5 truncate block">
                                       {desc}
@@ -1389,26 +1497,26 @@ PARECER E ESTRATÉGIA:
             {/* Scrollable Messages Area */}
             <div 
               ref={scrollRef}
-              className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/10"
+              className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#0b0b0e] select-text"
             >
               {activeSession.messages.map((m) => (
                 <div
                   key={m.id}
-                  className={`flex gap-2 text-xs md:text-sm ${
+                  className={`flex gap-2 text-xs md:text-sm select-text ${
                     m.role === "user" ? "justify-end" : "justify-start"
                   }`}
                 >
                   {m.role === "assistant" && (
-                    <div className="bg-white/5 border border-white/10 text-indigo-400 p-2 rounded-lg h-7 w-7 flex items-center justify-center shrink-0 select-none">
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-1.5 rounded-lg h-7 w-7 flex items-center justify-center shrink-0 select-none">
                       <Bot className="w-4 h-4" />
                     </div>
                   )}
                   
                   <div
-                    className={`group relative max-w-[85%] sm:max-w-[80%] rounded-2xl p-3.5 leading-normal border shadow-sm ${
+                    className={`group relative max-w-[85%] sm:max-w-[80%] rounded-2xl p-3.5 leading-normal border shadow-sm select-text ${
                       m.role === "user"
-                        ? "bg-indigo-600/80 border-indigo-500/30 text-white rounded-tr-none"
-                        : "bg-white/5 text-slate-100 border-white/10 rounded-tl-none"
+                        ? "bg-zinc-800/80 text-white border-white/10 rounded-tr-none"
+                        : "bg-[#131318] text-slate-200 border-white/5 rounded-tl-none"
                     }`}
                   >
                     {/* Hover copy button */}
@@ -1420,7 +1528,7 @@ PARECER E ESTRATÉGIA:
                         setCopiedMsgId(m.id);
                         setTimeout(() => setCopiedMsgId(null), 2000);
                       }}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2 p-1.5 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white rounded-md border border-white/15 select-none cursor-pointer z-10 shadow-lg"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2 p-1.5 bg-zinc-900/90 hover:bg-zinc-800 text-slate-300 hover:text-white rounded-md border border-white/10 select-none cursor-pointer z-10 shadow-lg"
                       title="Copiar mensagem"
                     >
                       {copiedMsgId === m.id ? (
@@ -1432,17 +1540,17 @@ PARECER E ESTRATÉGIA:
 
                     {/* Render attachment if any */}
                     {m.attachment && (
-                      <div className="mb-2.5 bg-slate-950/40 p-2 rounded-xl border border-white/10 text-slate-300 flex items-center gap-2 max-w-sm select-none">
+                      <div className="mb-2.5 bg-white/5 p-2 rounded-xl border border-white/10 text-slate-300 flex items-center gap-2 max-w-sm select-text">
                         {m.attachment.type === "application/system-doc" ? (
                           <div className="flex items-center gap-2 w-full">
-                            <div className="bg-indigo-500/15 text-indigo-400 p-1.5 rounded-lg border border-indigo-500/30">
+                            <div className="bg-emerald-500/10 text-emerald-400 p-1.5 rounded-lg border border-emerald-500/20 select-none">
                               <FolderOpen className="w-5 h-5" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-bold truncate text-indigo-200">
+                              <p className="text-xs font-semibold truncate text-white">
                                 {m.attachment.name}
                               </p>
-                              <p className="text-[9px] text-indigo-300 uppercase font-mono font-bold">
+                              <p className="text-[9px] text-slate-400 uppercase font-mono font-medium">
                                 Documento do Sistema
                               </p>
                             </div>
@@ -1452,7 +1560,7 @@ PARECER E ESTRATÉGIA:
                             <img 
                               src={m.attachment.data} 
                               alt="Anexo" 
-                              className="max-h-40 rounded-lg object-contain bg-slate-900 border border-white/10 w-full"
+                              className="max-h-40 rounded-lg object-contain bg-zinc-950 border border-white/10 w-full select-none"
                               referrerPolicy="no-referrer"
                             />
                             <span className="text-[10px] text-slate-400 truncate mt-1">
@@ -1461,11 +1569,11 @@ PARECER E ESTRATÉGIA:
                           </div>
                         ) : (
                           <div className="flex items-center gap-2 w-full">
-                            <div className="bg-red-500/10 text-red-400 p-1.5 rounded-lg">
+                            <div className="bg-rose-500/10 text-rose-400 p-1.5 rounded-lg select-none">
                               <FileText className="w-5 h-5" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-bold truncate text-slate-200">
+                              <p className="text-xs font-semibold truncate text-slate-200">
                                 {m.attachment.name}
                               </p>
                               <p className="text-[9px] text-slate-400 uppercase">
@@ -1488,32 +1596,32 @@ PARECER E ESTRATÉGIA:
                             return (
                               <div 
                                 key={pIdx} 
-                                className="my-3 bg-slate-950/60 rounded-xl border border-indigo-500/35 overflow-hidden shadow-xl select-none"
+                                className="my-3 bg-[#0f0f14] rounded-xl border border-white/10 overflow-hidden shadow-lg select-text"
                               >
                                 {/* Doc Card Header */}
-                                <div className="bg-indigo-950/50 px-3.5 py-2.5 border-b border-indigo-500/25 flex items-center justify-between">
+                                <div className="bg-white/5 px-3.5 py-2.5 border-b border-white/5 flex items-center justify-between select-text">
                                   <div className="flex items-center gap-2">
-                                    <div className="p-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-indigo-400">
+                                    <div className="p-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400 select-none">
                                       <FileText className="w-4 h-4" />
                                     </div>
                                     <div>
-                                      <p className="text-[9px] font-bold uppercase tracking-wider text-indigo-400">Documento Oficial Gerado</p>
-                                      <p className="text-xs font-bold text-slate-100 truncate max-w-[180px] sm:max-w-xs">{docTitle}</p>
+                                      <p className="text-[9px] font-semibold uppercase tracking-wider text-emerald-400">Documento Oficial Gerado</p>
+                                      <p className="text-xs font-semibold text-slate-100 truncate max-w-[180px] sm:max-w-xs">{docTitle}</p>
                                     </div>
                                   </div>
-                                  <span className="bg-indigo-500/10 text-indigo-300 border border-indigo-500/25 px-2 py-0.5 rounded-full text-[9px] font-mono">
+                                  <span className="bg-white/5 text-zinc-300 border border-white/10 px-2 py-0.5 rounded-full text-[9px] font-mono">
                                     {wordCount} palavras
                                   </span>
                                 </div>
 
                                 {/* Doc Card Body with Actions */}
-                                <div className="p-3.5 flex flex-col gap-2 bg-slate-900/10">
-                                  <p className="text-[11px] text-slate-300 flex items-center gap-1.5">
-                                    <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                <div className="p-3.5 flex flex-col gap-2 bg-[#0b0b0e]">
+                                  <p className="text-[11px] text-slate-300 flex items-center gap-1.5 select-text">
+                                    <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0 select-none" />
                                     Pronto para impressão, exportação ou download.
                                   </p>
                                   
-                                  <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/5">
+                                  <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/5 select-none">
                                     {/* Action: Preview */}
                                     <button
                                       type="button"
@@ -1521,7 +1629,7 @@ PARECER E ESTRATÉGIA:
                                         setPreviewDocTitle(docTitle);
                                         setPreviewDocContent(docContent);
                                       }}
-                                      className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-medium transition-all cursor-pointer flex items-center justify-center gap-1"
                                       title="Visualizar documento em tela cheia para impressão"
                                     >
                                       <Eye className="w-3.5 h-3.5" />
@@ -1535,7 +1643,7 @@ PARECER E ESTRATÉGIA:
                                         navigator.clipboard.writeText(docContent);
                                         alert("Documento copiado para a área de transferência!");
                                       }}
-                                      className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-medium transition-all cursor-pointer flex items-center justify-center gap-1"
                                       title="Copiar texto em formato Markdown"
                                     >
                                       <ClipboardCopy className="w-3.5 h-3.5" />
@@ -1555,7 +1663,7 @@ PARECER E ESTRATÉGIA:
                                         link.click();
                                         document.body.removeChild(link);
                                       }}
-                                      className="flex-1 bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/20 hover:border-indigo-500 text-indigo-300 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-medium transition-all cursor-pointer flex items-center justify-center gap-1"
                                       title="Baixar arquivo Markdown (.md)"
                                     >
                                       <Download className="w-3.5 h-3.5" />
@@ -1574,7 +1682,7 @@ PARECER E ESTRATÉGIA:
                                         confetti({ particleCount: 50, spread: 60, colors: ["#10b981", "#059669"] });
                                         alert(`Sucesso! "${docTitle}" foi importado para sua central de sincronismo (Google Drive & Supabase).`);
                                       }}
-                                      className="flex-1 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1"
+                                      className="flex-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 hover:text-white px-2 py-1.5 rounded-lg text-[10px] font-medium transition-all cursor-pointer flex items-center justify-center gap-1"
                                       title="Salvar na Central de Sincronismo"
                                     >
                                       <Database className="w-3.5 h-3.5" />
@@ -1589,12 +1697,12 @@ PARECER E ESTRATÉGIA:
                               <ReactMarkdown 
                                 key={pIdx}
                                 components={{
-                                  p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 leading-normal font-sans" {...props} />,
-                                  strong: ({node, ...props}) => <strong className="font-bold text-indigo-200 font-extrabold" {...props} />,
-                                  ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1" {...props} />,
-                                  ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1" {...props} />,
-                                  li: ({node, ...props}) => <li className="leading-normal" {...props} />,
-                                  code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono" {...props} />,
+                                  p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 leading-normal font-sans select-text" {...props} />,
+                                  strong: ({node, ...props}) => <strong className="font-bold text-white font-extrabold select-text" {...props} />,
+                                  ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                                  ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                                  li: ({node, ...props}) => <li className="leading-normal select-text" {...props} />,
+                                  code: ({node, ...props}) => <code className="bg-zinc-950 px-1 rounded text-[11px] font-mono select-text" {...props} />,
                                 }}
                               >
                                 {part.content}
@@ -1605,27 +1713,27 @@ PARECER E ESTRATÉGIA:
                       ) : (
                         <ReactMarkdown 
                           components={{
-                            p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 leading-normal font-sans" {...props} />,
-                            strong: ({node, ...props}) => <strong className="font-bold text-white font-black" {...props} />,
-                            ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1" {...props} />,
-                            ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1" {...props} />,
-                            li: ({node, ...props}) => <li className="leading-normal" {...props} />,
-                            code: ({node, ...props}) => <code className="bg-slate-950/50 px-1 rounded text-[11px] font-mono" {...props} />,
+                            p: ({node, ...props}) => <p className="mb-1.5 last:mb-0 leading-normal font-sans select-text" {...props} />,
+                            strong: ({node, ...props}) => <strong className="font-bold text-white font-black select-text" {...props} />,
+                            ul: ({node, ...props}) => <ul className="list-disc pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                            ol: ({node, ...props}) => <ol className="list-decimal pl-4 mb-2 mt-1 space-y-1 select-text" {...props} />,
+                            li: ({node, ...props}) => <li className="leading-normal select-text" {...props} />,
+                            code: ({node, ...props}) => <code className="bg-zinc-950 px-1 rounded text-[11px] font-mono select-text" {...props} />,
                           }}
                         >
                           {m.content}
                         </ReactMarkdown>
                       )}
                     </div>
-                    <span className={`text-[9px] block text-right mt-1.5 select-none ${
-                      m.role === "user" ? "text-indigo-200" : "text-slate-400"
+                    <span className={`text-[9px] block text-right mt-1.5 ${
+                      m.role === "user" ? "text-zinc-400" : "text-slate-400"
                     }`}>
                       {m.timestamp}
                     </span>
                   </div>
 
                   {m.role === "user" && (
-                    <div className="bg-white/10 border border-white/10 text-white p-2 rounded-lg h-7 w-7 flex items-center justify-center shrink-0 select-none">
+                    <div className="bg-white/10 border border-white/10 text-white p-1.5 rounded-lg h-7 w-7 flex items-center justify-center shrink-0 select-none">
                       <User className="w-4 h-4" />
                     </div>
                   )}
@@ -1634,7 +1742,7 @@ PARECER E ESTRATÉGIA:
 
               {loading && (
                 <div className="flex gap-2 justify-start items-center text-xs text-slate-400 animate-pulse">
-                  <div className="bg-white/5 border border-white/10 text-indigo-400 p-2 rounded-lg h-7 w-7 flex items-center justify-center shrink-0">
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 p-1.5 rounded-lg h-7 w-7 flex items-center justify-center shrink-0">
                     <Loader2 className="w-4 h-4 animate-spin" />
                   </div>
                   <span>Pesquisando histórico de licitações e estruturando resposta...</span>
@@ -1642,18 +1750,16 @@ PARECER E ESTRATÉGIA:
               )}
             </div>
 
-
-
             {/* PRE-UPLOADED ATTACHMENT TRAY */}
             {selectedAttachment && (
-              <div className="px-4 py-2 bg-slate-950/80 border-t border-white/10 flex items-center justify-between gap-2 text-xs text-slate-300">
+              <div className="px-4 py-2 bg-[#08080a] border-t border-white/5 flex items-center justify-between gap-2 text-xs text-slate-300">
                 <div className="flex items-center gap-2">
                   {selectedAttachment.type.startsWith("image/") ? (
                     <Image className="w-4 h-4 text-emerald-400" />
                   ) : (
                     <FileText className="w-4 h-4 text-rose-400" />
                   )}
-                  <span className="truncate max-w-[200px] font-bold text-white">
+                  <span className="truncate max-w-[200px] font-semibold text-white">
                     {selectedAttachment.name}
                   </span>
                   <span className="text-[10px] text-slate-400">
@@ -1676,7 +1782,7 @@ PARECER E ESTRATÉGIA:
                 e.preventDefault();
                 handleSend(inputVal);
               }}
-              className="p-3 border-t border-white/10 bg-slate-900/65 flex items-center gap-2 shrink-0 select-none"
+              className="p-3 border-t border-white/5 bg-[#0e0e12]/80 backdrop-blur-md flex items-center gap-2 shrink-0 select-none"
             >
               <input 
                 type="file"
@@ -1698,28 +1804,49 @@ PARECER E ESTRATÉGIA:
               <button
                 type="button"
                 onClick={handleOpenSystemDocSelector}
-                className="bg-indigo-600/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-600/20 p-2 rounded-xl transition-all h-9 w-9 flex items-center justify-center cursor-pointer shrink-0"
+                className="bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 p-2 rounded-xl transition-all h-9 w-9 flex items-center justify-center cursor-pointer shrink-0"
                 title="Anexar documento ou edital do sistema"
               >
                 <FolderOpen className="w-4 h-4" />
               </button>
 
-              <input 
-                type="text"
+              <textarea 
+                rows={1}
                 value={inputVal}
                 onChange={(e) => setInputVal(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!loading && (inputVal.trim() || selectedAttachment)) {
+                      handleSend(inputVal);
+                    }
+                  }
+                }}
                 onPaste={handlePaste}
-                placeholder="Escreva sua dúvida, cole uma imagem (Ctrl+V) ou anexe arquivos..."
-                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs md:text-sm text-white placeholder-slate-400 focus:outline-none focus:bg-slate-950/60 focus:ring-1 focus:ring-indigo-500"
+                placeholder="Escreva sua dúvida (Shift+Enter para nova linha, Ctrl+V para colar)..."
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs md:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/40 focus:ring-1 focus:ring-emerald-500/30 transition-all resize-none min-h-[38px] max-h-[120px] overflow-y-auto leading-normal font-sans"
               />
 
-              <button
-                type="submit"
-                disabled={loading || (!inputVal.trim() && !selectedAttachment)}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 text-white disabled:text-slate-500 p-2 rounded-xl hover:scale-[1.02] active:scale-95 transition-all h-9 w-9 flex items-center justify-center cursor-pointer shrink-0"
-              >
-                <Send className="w-4 h-4" />
-              </button>
+              {loading ? (
+                <button
+                  type="button"
+                  onClick={handleStopGeneration}
+                  className="bg-rose-600 hover:bg-rose-500 text-white p-2 rounded-xl hover:scale-[1.02] active:scale-95 transition-all h-9 px-3 flex items-center justify-center cursor-pointer shrink-0 border border-rose-500/30 gap-1.5 text-xs font-semibold shadow-md"
+                  title="Paralisar envio de mensagem"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current text-white" />
+                  <span className="hidden sm:inline">Parar</span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!inputVal.trim() && !selectedAttachment}
+                  className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-white/5 text-white disabled:text-slate-600 p-2 rounded-xl hover:scale-[1.02] active:scale-95 transition-all h-9 w-9 flex items-center justify-center cursor-pointer shrink-0 border border-emerald-500/30 shadow-md"
+                  title="Enviar mensagem (Enter)"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              )}
             </form>
 
           </div>
@@ -1728,15 +1855,15 @@ PARECER E ESTRATÉGIA:
 
       {/* SYSTEM DOCUMENTS SELECTOR MODAL */}
       {showSystemDocSelector && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in select-text">
-          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-lg h-auto max-h-[80vh] flex flex-col shadow-2xl overflow-hidden select-text">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-zinc-950/85 backdrop-blur-md animate-fade-in select-text">
+          <div className="bg-[#0e0e12] border border-white/10 rounded-2xl w-full max-w-lg h-auto max-h-[80vh] flex flex-col shadow-2xl overflow-hidden select-text">
             
             {/* Header */}
-            <div className="bg-slate-950/60 p-4 border-b border-white/10 flex items-center justify-between select-none">
+            <div className="bg-[#08080a] p-4 border-b border-white/5 flex items-center justify-between select-none">
               <div className="flex items-center gap-2">
-                <FolderOpen className="w-5 h-5 text-indigo-400" />
+                <FolderOpen className="w-5 h-5 text-emerald-400" />
                 <div className="text-left">
-                  <h4 className="text-sm font-bold text-white">Documentos do Sistema</h4>
+                  <h4 className="text-sm font-semibold text-white">Documentos do Sistema</h4>
                   <p className="text-[10px] text-slate-400">Selecione um arquivo já presente na plataforma para anexar ao chat</p>
                 </div>
               </div>
@@ -1754,7 +1881,7 @@ PARECER E ESTRATÉGIA:
               
               {/* 1. Editais section */}
               <div className="space-y-2 select-text">
-                <h5 className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider text-left select-none">📄 Editais e Análises</h5>
+                <h5 className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider text-left select-none">📄 Editais e Análises</h5>
                 <div className="space-y-1.5">
                   {editalHistory.length > 0 ? (
                     <div className="space-y-1">
@@ -1767,13 +1894,13 @@ PARECER E ESTRATÉGIA:
                             key={idx}
                             type="button"
                             onClick={() => handleSelectSystemEdital(item)}
-                            className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/10 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
+                            className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/5 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
                           >
                             <div className="min-w-0">
-                              <p className="text-xs font-bold text-slate-300 truncate">{title}</p>
+                              <p className="text-xs font-medium text-slate-300 truncate">{title}</p>
                               <p className="text-[9px] text-slate-500 truncate">{organ}</p>
                             </div>
-                            <span className="bg-slate-800 text-slate-400 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/5">Anexar</span>
+                            <span className="bg-white/10 text-slate-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/10">Anexar</span>
                           </button>
                         );
                       })}
@@ -1786,7 +1913,7 @@ PARECER E ESTRATÉGIA:
 
               {/* 2. Certificados/Documentos section */}
               <div className="space-y-2 select-text">
-                <h5 className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider text-left select-none">💼 Certidões e Documentos da Empresa</h5>
+                <h5 className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider text-left select-none">💼 Certidões e Documentos da Empresa</h5>
                 <div className="space-y-1.5">
                   {systemCerts.length > 0 ? (
                     systemCerts.map((cert) => (
@@ -1794,10 +1921,10 @@ PARECER E ESTRATÉGIA:
                         key={cert.id}
                         type="button"
                         onClick={() => handleSelectSystemCert(cert)}
-                        className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/10 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
+                        className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/5 p-2.5 rounded-xl transition-all flex items-center justify-between gap-2 cursor-pointer"
                       >
                         <div className="min-w-0">
-                          <p className="text-xs font-bold text-slate-300 truncate">{cert.name}</p>
+                          <p className="text-xs font-medium text-slate-300 truncate">{cert.name}</p>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span className={`w-1.5 h-1.5 rounded-full ${cert.status === "valid" ? "bg-emerald-400" : cert.status === "expiring_soon" ? "bg-yellow-400 animate-pulse" : "bg-rose-400"}`} />
                             <p className="text-[9px] text-slate-500">
@@ -1806,7 +1933,7 @@ PARECER E ESTRATÉGIA:
                             </p>
                           </div>
                         </div>
-                        <span className="bg-slate-800 text-slate-400 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/5">Anexar</span>
+                        <span className="bg-white/10 text-slate-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/10">Anexar</span>
                       </button>
                     ))
                   ) : (
@@ -1818,11 +1945,11 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Footer */}
-            <div className="bg-slate-950/40 p-3 border-t border-white/10 flex justify-end select-none">
+            <div className="bg-[#08080a] p-3 border-t border-white/5 flex justify-end select-none">
               <button
                 type="button"
                 onClick={() => setShowSystemDocSelector(false)}
-                className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer"
               >
                 Cancelar
               </button>
@@ -1833,15 +1960,15 @@ PARECER E ESTRATÉGIA:
 
       {/* FULLSCREEN DOCUMENT PREVIEW MODAL */}
       {previewDocContent && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto select-text">
-          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up select-text">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-md overflow-y-auto select-text">
+          <div className="bg-[#0e0e12] border border-white/10 rounded-2xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up select-text">
             
             {/* Modal Header */}
-            <div className="bg-slate-950/60 p-4 border-b border-white/10 flex items-center justify-between select-none">
+            <div className="bg-[#08080a] p-4 border-b border-white/5 flex items-center justify-between select-none">
               <div className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-indigo-400" />
+                <FileText className="w-5 h-5 text-emerald-400" />
                 <div className="text-left">
-                  <h4 className="text-sm font-bold text-white">Visualizador de Documento Oficial</h4>
+                  <h4 className="text-sm font-semibold text-white">Visualizador de Documento Oficial</h4>
                   <p className="text-[10px] text-slate-400">{previewDocTitle}</p>
                 </div>
               </div>
@@ -1877,7 +2004,20 @@ PARECER E ESTRATÉGIA:
                             <title>${previewDocTitle || "Documento"}</title>
                             <style>
                               @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-                              body { font-family: 'Inter', sans-serif; padding: 50px; color: #1e293b; line-height: 1.65; background-color: #ffffff; }
+                              @page {
+                                size: A4;
+                                margin: 0;
+                              }
+                              @media print {
+                                html, body {
+                                  margin: 0;
+                                  padding: 0;
+                                  background-color: #ffffff;
+                                  -webkit-print-color-adjust: exact;
+                                  print-color-adjust: exact;
+                                }
+                              }
+                              body { font-family: 'Inter', sans-serif; padding: 1.5cm 2cm; color: #1e293b; line-height: 1.65; background-color: #ffffff; box-sizing: border-box; }
                               .sheet { max-width: 800px; margin: 0 auto; background: #ffffff; }
                               pre, code { font-family: monospace; background: #f1f5f9; padding: 2px 4px; border-radius: 4px; font-size: 0.9em; }
                               table { border-collapse: collapse; width: 100%; margin: 24px 0; font-size: 0.9em; }
@@ -1910,7 +2050,7 @@ PARECER E ESTRATÉGIA:
                       alert("Por favor, permita popups para poder imprimir o documento.");
                     }
                   }}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                  className="bg-emerald-600 hover:bg-emerald-500 border border-emerald-500/30 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
                 >
                   <Printer className="w-4 h-4" />
                   <span>Imprimir</span>
@@ -1930,7 +2070,7 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Document Sheet Canvas */}
-            <div className="flex-1 overflow-y-auto p-8 bg-slate-950/25 flex justify-center select-text">
+            <div className="flex-1 overflow-y-auto p-8 bg-zinc-950 flex justify-center select-text">
               <div className="w-full max-w-2xl bg-white text-slate-900 shadow-xl rounded-xl p-8 sm:p-12 border border-slate-200 select-text overflow-y-auto font-sans text-xs md:text-sm text-left">
                 <ReactMarkdown
                   components={{
@@ -1961,14 +2101,14 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-slate-950/40 p-4 border-t border-white/10 flex justify-end gap-2 select-none">
+            <div className="bg-zinc-950 p-4 border-t border-zinc-800 flex justify-end gap-2 select-none">
               <button
                 type="button"
                 onClick={() => {
                   setPreviewDocTitle(null);
                   setPreviewDocContent(null);
                 }}
-                className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Fechar Visualizador
               </button>
@@ -1979,9 +2119,9 @@ PARECER E ESTRATÉGIA:
 
       {/* Modal Popup de Alerta de Cota/Limite Atingido */}
       {chatLimitModal && chatLimitModal.show && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-fade-in">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5 overflow-hidden text-left">
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-500" />
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-zinc-950/85 backdrop-blur-md animate-fade-in">
+          <div className="bg-zinc-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5 overflow-hidden text-left">
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 via-rose-500 to-emerald-500" />
             
             <div className="flex items-start gap-3.5">
               <div className="p-3 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-400 shrink-0">
@@ -2001,13 +2141,13 @@ PARECER E ESTRATÉGIA:
               </div>
             </div>
 
-            <div className="bg-slate-950/70 border border-white/10 rounded-xl p-4 text-xs space-y-3 text-slate-300">
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-xs space-y-3 text-slate-300">
               {chatLimitModal.reason === "chat_count" ? (
                 <>
                   <p className="leading-relaxed">
                     Sua conta atingiu o limite máximo de <strong className="text-white">20 canais de chat salvos</strong> no banco de dados Supabase.
                   </p>
-                  <div className="space-y-1.5 text-slate-400 border-t border-white/10 pt-2.5">
+                  <div className="space-y-1.5 text-slate-400 border-t border-zinc-800 pt-2.5">
                     <p className="font-semibold text-slate-200">💡 Como liberar espaço:</p>
                     <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
                       <li>Abra o painel lateral de canais;</li>
@@ -2021,10 +2161,10 @@ PARECER E ESTRATÉGIA:
                   <p className="leading-relaxed">
                     Este canal de conversa atingiu o limite máximo de <strong className="text-white">200 mensagens</strong> para preservar a alta velocidade no Supabase.
                   </p>
-                  <div className="space-y-1.5 text-slate-400 border-t border-white/10 pt-2.5">
+                  <div className="space-y-1.5 text-slate-400 border-t border-zinc-800 pt-2.5">
                     <p className="font-semibold text-slate-200">💡 Como proceder:</p>
                     <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
-                      <li>Clique em <strong className="text-indigo-400">"Novo"</strong> no painel de canais para iniciar um novo chat;</li>
+                      <li>Clique em <strong className="text-emerald-400">"Novo"</strong> no painel de canais para iniciar um novo chat;</li>
                       <li>Ou apague este chat se desejar liberar espaço.</li>
                     </ul>
                   </div>
