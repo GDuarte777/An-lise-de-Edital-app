@@ -7,44 +7,52 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnSync = document.getElementById("btn-sync");
 
   // Tenta preencher a URL do painel automaticamente a partir da aba ativa ou storage
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs && tabs[0] && tabs[0].url) {
-      const currentUrl = new URL(tabs[0].url);
-      // Se a aba atual parecer o painel do LanceBot (porta 3000 ou domínio run.app)
-      if (currentUrl.port === "3000" || currentUrl.hostname.includes("run.app")) {
-        const cleanUrl = `${currentUrl.protocol}//${currentUrl.host}`;
-        panelUrlInput.value = cleanUrl;
-        chrome.storage.local.set({ lancebotPanelUrl: cleanUrl });
+  if (chrome.tabs && chrome.tabs.query) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs && tabs[0] && tabs[0].url) {
+        try {
+          const currentUrl = new URL(tabs[0].url);
+          if (currentUrl.port === "3000" || currentUrl.hostname.includes("run.app") || currentUrl.hostname.includes("localhost")) {
+            const cleanUrl = `${currentUrl.protocol}//${currentUrl.host}`;
+            panelUrlInput.value = cleanUrl;
+            chrome.storage.local.set({ lancebotPanelUrl: cleanUrl });
+          }
+        } catch (e) {
+          console.error(e);
+        }
       }
-    }
-  });
+    });
+  }
 
   // Carrega URL salva no storage se houver
   chrome.storage.local.get(["lancebotPanelUrl", "comprasnetToken", "lastCapturedToken"], (data) => {
     if (data.lancebotPanelUrl) {
       panelUrlInput.value = data.lancebotPanelUrl;
-    } else {
-      // Valor padrão de fallback da nossa aplicação ativa atual
-      panelUrlInput.value = window.location.origin.includes("chrome-extension") 
-        ? "https://ais-dev-r33bwzu3wvd7johtonftjn-395692175339.us-west1.run.app" 
-        : window.location.origin;
     }
 
     if (data.comprasnetToken) {
       tokenView.value = data.comprasnetToken;
-      tokenStatus.innerText = `CAPTURADO! (${data.lastCapturedToken})`;
+      tokenStatus.innerText = `CAPTURADO! (${data.lastCapturedToken || "Agora"})`;
       tokenStatus.className = "badge badge-success";
       instructionText.innerHTML = "✓ <strong style='color:#34d399'>Token de sessão pronto!</strong> Clique no botão abaixo para injetar as credenciais diretamente no seu painel.";
     }
   });
 
   // Requisita cookies ao background script de forma assíncrona
-  chrome.runtime.sendMessage({ action: "getCookies" }, (response) => {
-    if (response && response.cookies) {
-      cookieView.value = response.cookies;
-      chrome.storage.local.set({ comprasnetCookies: response.cookies });
-    }
-  });
+  try {
+    chrome.runtime.sendMessage({ action: "getCookies" }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.warn("Aviso de Cookies:", chrome.runtime.lastError.message);
+        return;
+      }
+      if (response && response.cookies) {
+        cookieView.value = response.cookies;
+        chrome.storage.local.set({ comprasnetCookies: response.cookies });
+      }
+    });
+  } catch(e) {
+    console.warn("Aviso ao solicitar cookies:", e);
+  }
 
   // Evento de Sincronização direta por API
   btnSync.addEventListener("click", async () => {
@@ -57,7 +65,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     if (!tokenVal) {
-      alert("Nenhum token capturado ainda. Abra o Comprasnet na aba ao lado para capturar.");
+      alert("Nenhum token capturado ainda. Abra o Compras.gov.br na aba ao lado (Sala de Disputa) para capturar em tempo real.");
       return;
     }
 
@@ -89,7 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
           btnSync.disabled = false;
           btnSync.style.opacity = "1";
           btnSync.style.background = "linear-gradient(135deg, #2563eb, #4f46e5)";
-          btnSync.innerHTML = "<span>⚡ Sincronizar com LanceBot</span>";
+          btnSync.innerHTML = "<span>⚡ Sincronizar com HORASIS</span>";
         }, 3000);
       } else {
         throw new Error(`Servidor respondeu com código ${response.status}`);

@@ -46,7 +46,7 @@ export default function ThemeToggle() {
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center justify-center p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-all duration-200 cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-indigo-500/50"
+          className="flex items-center justify-center p-2 rounded-xl bg-[#F3F4F6] hover:bg-[#E5E7EB] dark:bg-[#18181B] dark:hover:bg-[#27272A] border border-[#E5E7EB] dark:border-[#27272A] text-[#374151] dark:text-[#FAFAFA] transition-all duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/50"
           id="theme-menu-button"
           aria-expanded={isOpen}
           aria-haspopup="true"
@@ -64,7 +64,7 @@ export default function ThemeToggle() {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: -4 }}
             transition={{ duration: 0.15, ease: "easeOut" }}
-            className="absolute right-0 z-50 mt-2 w-40 rounded-xl border border-white/10 bg-[#161c2e] p-1.5 shadow-2xl focus:outline-hidden"
+            className="absolute right-0 z-50 mt-2 w-40 rounded-xl border border-[#E5E7EB] dark:border-[#27272A] bg-white dark:bg-[#121212] p-1.5 shadow-xl focus:outline-none"
             role="menu"
             aria-orientation="vertical"
             aria-labelledby="theme-menu-button"
@@ -83,8 +83,8 @@ export default function ThemeToggle() {
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer text-left
                       ${
                         isSelected
-                          ? "bg-indigo-600 text-white"
-                          : "text-slate-300 hover:bg-white/5 hover:text-white"
+                          ? "bg-[#FF5A00] text-white"
+                          : "text-[#374151] dark:text-[#A1A1AA] hover:bg-[#F3F4F6] dark:hover:bg-[#18181B] hover:text-[#111827] dark:hover:text-[#FAFAFA]"
                       }`}
                     role="menuitem"
                     aria-selected={isSelected}

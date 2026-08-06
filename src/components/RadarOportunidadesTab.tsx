@@ -299,34 +299,33 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
     <div id="radar-oportunidades-tab" className="space-y-6 animate-fade-in font-sans text-xs">
       
       {/* Top Banner Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-900/60 p-5 md:p-6 border border-white/10 rounded-2xl relative overflow-hidden backdrop-blur-md">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/5 rounded-full blur-3xl -z-10 pointer-events-none" />
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-5 md:p-6 border border-[#E5E7EB] rounded-xl shadow-xs relative overflow-hidden">
         
         <div className="flex items-start gap-4">
-          <div className="p-3.5 bg-gradient-to-br from-blue-600/20 to-indigo-600/20 text-blue-400 rounded-xl border border-blue-500/30 shrink-0 shadow-inner">
+          <div className="p-3.5 bg-[#FFF0E5] text-[#FF5A00] rounded-xl border border-[#FFD6C2] shrink-0 shadow-2xs">
             <Search className="w-6 h-6 animate-pulse" />
           </div>
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-bold text-white text-base">Radar de Oportunidades PNCP</h3>
-              <span className="bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px] font-mono px-2 py-0.5 rounded-full font-semibold">
+              <h3 className="font-bold text-[#111827] text-base">Radar de Oportunidades PNCP</h3>
+              <span className="bg-[#FFF0E5] text-[#FF5A00] border border-[#FFD6C2] text-[10px] font-mono px-2 py-0.5 rounded-full font-semibold">
                 Portal Nacional de Contratações Públicas
               </span>
             </div>
-            <p className="text-slate-400 text-xs leading-relaxed max-w-3xl">
+            <p className="text-[#6B7280] text-xs leading-relaxed max-w-3xl">
               Monitore licitações, pregões eletrônicos e dispensas federais, estaduais e municipais em tempo real. Filtre por múltiplos estados, cidades e modalidades.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0 self-start lg:self-center bg-slate-950/80 px-3.5 py-2 rounded-xl border border-white/10">
+        <div className="flex items-center gap-3 shrink-0 self-start lg:self-center bg-[#F9FAFB] px-3.5 py-2 rounded-xl border border-[#E5E7EB]">
           <span className="flex h-2.5 w-2.5 relative">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-600"></span>
           </span>
           <div className="text-left">
-            <p className="text-slate-200 font-bold text-[10px]">{dataSource}</p>
-            {lastUpdated && <p className="text-slate-500 font-mono text-[9px]">Atualizado às {lastUpdated}</p>}
+            <p className="text-[#111827] font-bold text-[10px]">{dataSource}</p>
+            {lastUpdated && <p className="text-[#6B7280] font-mono text-[9px]">Atualizado às {lastUpdated}</p>}
           </div>
         </div>
       </div>
@@ -335,17 +334,17 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* Left Filter Controls Sidebar (4 Columns) */}
-        <div className="lg:col-span-4 bg-slate-900/40 border border-white/10 rounded-2xl p-5 space-y-5 flex flex-col justify-between">
+        <div className="lg:col-span-4 bg-white border border-[#E5E7EB] rounded-xl shadow-xs p-5 space-y-5 flex flex-col justify-between">
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-white/5 pb-3">
+            <div className="flex items-center justify-between border-b border-[#E5E7EB] pb-3">
               <div className="flex items-center gap-2">
-                <SlidersHorizontal className="w-4 h-4 text-indigo-400" />
-                <h4 className="font-bold text-white text-sm">Filtros Avançados PNCP</h4>
+                <SlidersHorizontal className="w-4 h-4 text-[#FF5A00]" />
+                <h4 className="font-bold text-[#111827] text-sm">Filtros Avançados PNCP</h4>
               </div>
               <button
                 type="button"
                 onClick={handleResetFilters}
-                className="text-[10px] text-slate-400 hover:text-indigo-400 flex items-center gap-1 transition-colors cursor-pointer"
+                className="text-[10px] text-[#6B7280] hover:text-[#FF5A00] flex items-center gap-1 transition-colors cursor-pointer font-medium"
                 title="Limpar todos os filtros"
               >
                 <RotateCcw className="w-3 h-3" />
@@ -355,32 +354,32 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
 
             {/* Keyword Search */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Palavra-Chave / Produto / Objeto</label>
+              <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Palavra-Chave / Produto / Objeto</label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9CA3AF]" />
                 <input
                   type="text"
                   placeholder="Notebook, Medicamento, Reforma, Software..."
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleFetchPNCP(1)}
-                  className="w-full bg-slate-950 border border-white/10 rounded-xl p-2.5 pl-9 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium transition-all"
+                  className="w-full bg-white border border-[#D1D5DB] rounded-lg p-2.5 pl-9 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] focus:border-[#FF5A00] font-medium transition-all"
                 />
               </div>
             </div>
 
             {/* City / Municipality Search */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Cidade / Município / Órgão</label>
+              <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Cidade / Município / Órgão</label>
               <div className="relative">
-                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9CA3AF]" />
                 <input
                   type="text"
                   placeholder="Mauá, Salvador, São Paulo, Campinas..."
                   value={cityQuery}
                   onChange={(e) => setCityQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleFetchPNCP(1)}
-                  className="w-full bg-slate-950 border border-white/10 rounded-xl p-2.5 pl-9 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium transition-all"
+                  className="w-full bg-white border border-[#D1D5DB] rounded-lg p-2.5 pl-9 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] focus:border-[#FF5A00] font-medium transition-all"
                 />
               </div>
             </div>
@@ -388,27 +387,27 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
             {/* Multi-State Selector */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">
                   Estados (UFs) {selectedUfs.length > 0 ? `(${selectedUfs.length})` : "(Brasil Inteiro)"}
                 </label>
                 <button
                   type="button"
                   onClick={() => setShowStatePicker(!showStatePicker)}
-                  className="text-[10px] text-indigo-400 hover:underline font-bold cursor-pointer"
+                  className="text-[10px] text-[#FF5A00] hover:underline font-bold cursor-pointer"
                 >
                   {showStatePicker ? "Ocultar Grade" : "Ver Todos os Estados"}
                 </button>
               </div>
 
               {/* State Badges Quick Row */}
-              <div className="flex flex-wrap gap-1.5 items-center bg-slate-950/70 p-2.5 rounded-xl border border-white/10 max-h-36 overflow-y-auto scrollbar-thin">
+              <div className="flex flex-wrap gap-1.5 items-center bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB] max-h-36 overflow-y-auto scrollbar-thin">
                 <button
                   type="button"
                   onClick={handleSelectAllUfs}
                   className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
                     selectedUfs.length === 0 
-                      ? "bg-indigo-600 border-indigo-500 text-white shadow-sm" 
-                      : "bg-slate-900 border-white/10 text-slate-400 hover:text-white"
+                      ? "bg-[#FF5A00] border-[#FF5A00] text-white shadow-2xs" 
+                      : "bg-white border-[#E5E7EB] text-[#4B5563] hover:text-[#111827]"
                   }`}
                 >
                   Brasil Inteiro
@@ -422,8 +421,8 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                       onClick={() => handleToggleUf(uf.sigla)}
                       className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
                         isSelected 
-                          ? "bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm" 
-                          : "bg-slate-900/60 border-white/5 text-slate-400 hover:border-white/20 hover:text-slate-200"
+                          ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00] shadow-2xs" 
+                          : "bg-white border-[#E5E7EB] text-[#4B5563] hover:border-[#D1D5DB] hover:text-[#111827]"
                       }`}
                     >
                       {uf.sigla}
@@ -435,10 +434,10 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
 
             {/* Modalidades Multi-select */}
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+              <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">
                 Modalidade PNCP {selectedModalidades.length > 0 ? `(${selectedModalidades.length})` : "(Todas)"}
               </label>
-              <div className="grid grid-cols-1 gap-1.5 bg-slate-950/70 p-2.5 rounded-xl border border-white/10">
+              <div className="grid grid-cols-1 gap-1.5 bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB]">
                 {ALL_MODALIDADES.map(m => {
                   const isSelected = selectedModalidades.includes(m.id);
                   return (
@@ -448,12 +447,12 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                       onClick={() => handleToggleModalidade(m.id)}
                       className={`w-full text-left px-2.5 py-1.5 text-[10px] font-medium rounded-lg border flex items-center justify-between transition-all cursor-pointer ${
                         isSelected
-                          ? "bg-indigo-500/20 border-indigo-500 text-indigo-200 font-bold"
-                          : "bg-slate-900/40 border-white/5 text-slate-400 hover:bg-slate-900 hover:text-slate-200"
+                          ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00] font-bold"
+                          : "bg-white border-[#E5E7EB] text-[#4B5563] hover:bg-[#F3F4F6] hover:text-[#111827]"
                       }`}
                     >
                       <span>{m.nome}</span>
-                      {isSelected ? <Check className="w-3 h-3 text-indigo-400" /> : <span className="text-[9px] text-slate-600">+</span>}
+                      {isSelected ? <Check className="w-3 h-3 text-[#FF5A00]" /> : <span className="text-[9px] text-[#9CA3AF]">+</span>}
                     </button>
                   );
                 })}
@@ -462,21 +461,21 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
 
             {/* Value Range Filters */}
             <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Faixa de Valor Estimado (R$)</label>
+              <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Faixa de Valor Estimado (R$)</label>
               <div className="grid grid-cols-2 gap-2">
                 <input
                   type="number"
                   placeholder="Mínimo R$"
                   value={valorMin}
                   onChange={(e) => setValorMin(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/10 rounded-xl p-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full bg-white border border-[#D1D5DB] rounded-lg p-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] focus:border-[#FF5A00]"
                 />
                 <input
                   type="number"
                   placeholder="Máximo R$"
                   value={valorMax}
                   onChange={(e) => setValorMax(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/10 rounded-xl p-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full bg-white border border-[#D1D5DB] rounded-lg p-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] focus:border-[#FF5A00]"
                 />
               </div>
             </div>
@@ -487,7 +486,7 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
             type="button"
             onClick={() => handleFetchPNCP(1)}
             disabled={loading}
-            className="w-full py-3.5 mt-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-700 hover:from-blue-500 hover:to-indigo-600 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 border border-indigo-400/30 cursor-pointer"
+            className="w-full py-3 mt-2 bg-[#FF5A00] hover:bg-[#E65000] disabled:opacity-50 text-white font-bold rounded-lg text-xs transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer"
           >
             {loading ? (
               <>
@@ -507,16 +506,16 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
         <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-6">
           
           {/* List Column */}
-          <div className="bg-slate-900/40 border border-white/10 rounded-2xl p-5 flex flex-col justify-between space-y-4">
+          <div className="bg-white border border-[#E5E7EB] rounded-xl shadow-xs p-5 flex flex-col justify-between space-y-4">
             <div className="space-y-3.5">
               
               {/* Header Info */}
-              <div className="flex items-center justify-between border-b border-white/5 pb-3">
+              <div className="flex items-center justify-between border-b border-[#E5E7EB] pb-3">
                 <div>
-                  <span className="font-bold text-white text-xs uppercase tracking-wider block">
+                  <span className="font-bold text-[#111827] text-xs uppercase tracking-wider block">
                     Licitações ({totalRecords})
                   </span>
-                  <span className="text-[9px] text-slate-400 font-mono">
+                  <span className="text-[9px] text-[#6B7280] font-mono">
                     {selectedUfs.length > 0 ? `UFs: ${selectedUfs.join(", ")}` : "Todos os Estados"}
                   </span>
                 </div>
@@ -525,7 +524,7 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                 <select
                   value={pageSize}
                   onChange={(e) => setPageSize(Number(e.target.value))}
-                  className="bg-slate-950 border border-white/10 rounded-lg px-2 py-1 text-[10px] text-slate-300 font-mono focus:outline-none"
+                  className="bg-white border border-[#D1D5DB] rounded-lg px-2 py-1 text-[10px] text-[#374151] font-mono focus:outline-none"
                 >
                   <option value={10}>10 por pág.</option>
                   <option value={15}>15 por pág.</option>
@@ -536,16 +535,16 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
 
               {/* Items List Container */}
               {loading ? (
-                <div className="flex flex-col items-center justify-center py-24 text-slate-400 gap-3">
-                  <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin" />
+                <div className="flex flex-col items-center justify-center py-24 text-[#6B7280] gap-3">
+                  <RefreshCw className="w-8 h-8 text-[#FF5A00] animate-spin" />
                   <p className="font-semibold text-xs">Consultando base oficial do PNCP...</p>
                 </div>
               ) : results.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 text-slate-500 gap-2 text-center">
-                  <AlertCircle className="w-9 h-9 text-amber-500/60" />
+                <div className="flex flex-col items-center justify-center py-20 text-[#6B7280] gap-2 text-center">
+                  <AlertCircle className="w-9 h-9 text-amber-500" />
                   <div>
-                    <p className="font-bold text-slate-200 text-xs">Nenhum certame localizado com estes filtros</p>
-                    <p className="text-[10px] text-slate-500 max-w-[200px] mt-1">Experimente limpar as palavras-chave ou selecionar mais estados.</p>
+                    <p className="font-bold text-[#111827] text-xs">Nenhum certame localizado com estes filtros</p>
+                    <p className="text-[10px] text-[#6B7280] max-w-[200px] mt-1">Experimente limpar as palavras-chave ou selecionar mais estados.</p>
                   </div>
                 </div>
               ) : (
@@ -558,29 +557,29 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                         onClick={() => setActiveItem(item)}
                         className={`p-3 rounded-xl border transition-all cursor-pointer text-left space-y-2 ${
                           isActive 
-                            ? "bg-indigo-600/15 border-indigo-500 text-slate-100 shadow-md shadow-indigo-600/10" 
-                            : "bg-slate-950/60 border-white/5 text-slate-400 hover:border-white/15 hover:text-slate-300"
+                            ? "bg-[#FFF0E5] border-[#FF5A00] text-[#111827] shadow-xs" 
+                            : "bg-white border-[#E5E7EB] text-[#374151] hover:border-[#D1D5DB] hover:bg-[#F9FAFB]"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-1">
-                          <span className="font-bold text-[9px] px-1.5 py-0.5 bg-indigo-500/15 text-indigo-300 border border-indigo-500/25 rounded font-mono truncate max-w-[160px]">
+                          <span className="font-bold text-[9px] px-1.5 py-0.5 bg-[#FFF0E5] text-[#FF5A00] border border-[#FFD6C2] rounded font-mono truncate max-w-[160px]">
                             {item.numero}
                           </span>
-                          <span className="text-[9px] font-mono text-slate-400 flex items-center gap-1 font-bold shrink-0 bg-slate-900 px-1.5 py-0.5 rounded border border-white/5">
-                            <MapPin className="w-3 h-3 text-indigo-400" />
+                          <span className="text-[9px] font-mono text-[#6B7280] flex items-center gap-1 font-bold shrink-0 bg-[#F3F4F6] px-1.5 py-0.5 rounded border border-[#E5E7EB]">
+                            <MapPin className="w-3 h-3 text-[#FF5A00]" />
                             {item.municipio} - {item.uf}
                           </span>
                         </div>
 
-                        <p className="font-bold text-white text-[11px] truncate">{item.orgao}</p>
+                        <p className="font-bold text-[#111827] text-[11px] truncate">{item.orgao}</p>
                         
-                        <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-2">
+                        <p className="text-[10px] text-[#6B7280] leading-relaxed line-clamp-2">
                           {item.objeto}
                         </p>
 
-                        <div className="flex items-center justify-between text-[9px] font-mono pt-1 border-t border-white/5">
-                          <span className="font-bold text-emerald-400">{item.valorEstimado}</span>
-                          <span className="text-slate-500">{item.modalidade}</span>
+                        <div className="flex items-center justify-between text-[9px] font-mono pt-1 border-t border-[#E5E7EB]">
+                          <span className="font-bold text-[#059669]">{item.valorEstimado}</span>
+                          <span className="text-[#6B7280]">{item.modalidade}</span>
                         </div>
                       </div>
                     );
@@ -591,7 +590,7 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
 
             {/* Pagination Bar */}
             {totalPages > 1 && (
-              <div className="flex items-center justify-between pt-3 border-t border-white/5">
+              <div className="flex items-center justify-between pt-3 border-t border-[#E5E7EB]">
                 <button
                   type="button"
                   disabled={page <= 1 || loading}
@@ -600,13 +599,13 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                     setPage(next);
                     handleFetchPNCP(next);
                   }}
-                  className="px-2.5 py-1.5 bg-slate-950 hover:bg-slate-900 border border-white/10 rounded-lg text-[10px] text-slate-300 disabled:opacity-30 flex items-center gap-1 cursor-pointer"
+                  className="px-2.5 py-1.5 bg-white hover:bg-[#F9FAFB] border border-[#D1D5DB] rounded-lg text-[10px] text-[#374151] disabled:opacity-30 flex items-center gap-1 cursor-pointer"
                 >
                   <ChevronLeft className="w-3 h-3" />
                   Anterior
                 </button>
 
-                <span className="text-[10px] text-slate-400 font-mono">
+                <span className="text-[10px] text-[#6B7280] font-mono">
                   Página <strong>{page}</strong> de <strong>{totalPages}</strong>
                 </span>
 
@@ -618,7 +617,7 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                     setPage(next);
                     handleFetchPNCP(next);
                   }}
-                  className="px-2.5 py-1.5 bg-slate-950 hover:bg-slate-900 border border-white/10 rounded-lg text-[10px] text-slate-300 disabled:opacity-30 flex items-center gap-1 cursor-pointer"
+                  className="px-2.5 py-1.5 bg-white hover:bg-[#F9FAFB] border border-[#D1D5DB] rounded-lg text-[10px] text-[#374151] disabled:opacity-30 flex items-center gap-1 cursor-pointer"
                 >
                   Próxima
                   <ChevronRight className="w-3 h-3" />
@@ -628,58 +627,58 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
           </div>
 
           {/* Detailed Inspector Panel */}
-          <div className="bg-slate-900/40 border border-white/10 rounded-2xl p-5 flex flex-col justify-between">
+          <div className="bg-white border border-[#E5E7EB] rounded-xl shadow-xs p-5 flex flex-col justify-between">
             {activeItem ? (
               <div className="h-full flex flex-col justify-between space-y-4">
                 <div className="space-y-4">
                   {/* Item Header */}
-                  <div className="border-b border-white/5 pb-3">
+                  <div className="border-b border-[#E5E7EB] pb-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-[9px] text-indigo-400 uppercase font-mono font-bold tracking-wider">Ficha Oficial do Edital</span>
-                      <span className="text-[9px] bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-2 py-0.5 rounded font-mono">
+                      <span className="text-[9px] text-[#FF5A00] uppercase font-mono font-bold tracking-wider">Ficha Oficial do Edital</span>
+                      <span className="text-[9px] bg-[#FFF0E5] text-[#FF5A00] border border-[#FFD6C2] px-2 py-0.5 rounded font-mono">
                         {activeItem.situacao}
                       </span>
                     </div>
-                    <h4 className="font-bold text-white text-sm mt-1">{activeItem.numero}</h4>
-                    <p className="text-slate-400 text-[10px] font-mono mt-0.5">{activeItem.modalidade}</p>
+                    <h4 className="font-bold text-[#111827] text-sm mt-1">{activeItem.numero}</h4>
+                    <p className="text-[#6B7280] text-[10px] font-mono mt-0.5">{activeItem.modalidade}</p>
                   </div>
 
                   {/* Fields */}
-                  <div className="space-y-3.5 text-slate-300 text-[11px] leading-relaxed">
+                  <div className="space-y-3.5 text-[#374151] text-[11px] leading-relaxed">
                     <div className="space-y-1">
-                      <span className="font-bold text-slate-500 uppercase text-[9px] block tracking-wider">Órgão Comprador</span>
-                      <p className="text-white font-semibold flex items-center gap-1.5">
-                        <Landmark className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                      <span className="font-bold text-[#6B7280] uppercase text-[9px] block tracking-wider">Órgão Comprador</span>
+                      <p className="text-[#111827] font-semibold flex items-center gap-1.5">
+                        <Landmark className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
                         {activeItem.orgao}
                       </p>
                       {activeItem.cnpjOrgao && (
-                        <p className="text-[9px] text-slate-500 font-mono">CNPJ: {activeItem.cnpjOrgao}</p>
+                        <p className="text-[9px] text-[#6B7280] font-mono">CNPJ: {activeItem.cnpjOrgao}</p>
                       )}
                     </div>
 
                     <div className="space-y-1">
-                      <span className="font-bold text-slate-500 uppercase text-[9px] block tracking-wider">Localização & Unidade</span>
-                      <p className="text-slate-300 font-medium flex items-center gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                      <span className="font-bold text-[#6B7280] uppercase text-[9px] block tracking-wider">Localização & Unidade</span>
+                      <p className="text-[#374151] font-medium flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
                         {activeItem.municipio} - {activeItem.uf} ({activeItem.unidade})
                       </p>
                     </div>
 
                     <div className="space-y-1">
-                      <span className="font-bold text-slate-500 uppercase text-[9px] block tracking-wider">Objeto / Termo de Referência</span>
-                      <div className="bg-slate-950 p-3 rounded-xl text-slate-300 border border-white/10 text-[11px] leading-relaxed max-h-40 overflow-y-auto font-sans scrollbar-thin">
+                      <span className="font-bold text-[#6B7280] uppercase text-[9px] block tracking-wider">Objeto / Termo de Referência</span>
+                      <div className="bg-[#F9FAFB] p-3 rounded-xl text-[#374151] border border-[#E5E7EB] text-[11px] leading-relaxed max-h-40 overflow-y-auto font-sans scrollbar-thin">
                         {activeItem.objeto}
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-slate-950/80 p-2.5 rounded-xl border border-white/5 space-y-0.5">
-                        <span className="text-[8px] text-slate-500 uppercase font-bold block">Valor Estimado</span>
-                        <p className="text-emerald-400 font-bold font-mono text-xs">{activeItem.valorEstimado}</p>
+                      <div className="bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB] space-y-0.5">
+                        <span className="text-[8px] text-[#6B7280] uppercase font-bold block">Valor Estimado</span>
+                        <p className="text-[#059669] font-bold font-mono text-xs">{activeItem.valorEstimado}</p>
                       </div>
-                      <div className="bg-slate-950/80 p-2.5 rounded-xl border border-white/5 space-y-0.5">
-                        <span className="text-[8px] text-slate-500 uppercase font-bold block">Abertura de Propostas</span>
-                        <p className="text-amber-400 font-bold font-mono text-xs">{activeItem.dataAbertura}</p>
+                      <div className="bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB] space-y-0.5">
+                        <span className="text-[8px] text-[#6B7280] uppercase font-bold block">Abertura de Propostas</span>
+                        <p className="text-[#D97706] font-bold font-mono text-xs">{activeItem.dataAbertura}</p>
                       </div>
                     </div>
 
@@ -690,7 +689,7 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                           href={activeItem.linkPNCP}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 text-[10px] text-indigo-400 hover:text-indigo-300 font-bold hover:underline"
+                          className="inline-flex items-center gap-1.5 text-[10px] text-[#FF5A00] hover:text-[#E65000] font-bold hover:underline"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                           Ver Edital Completo no Portal PNCP Oficial
@@ -702,8 +701,8 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
 
                 {/* Action Button */}
                 <div className="space-y-2 pt-2">
-                  <div className="p-3 bg-indigo-600/10 rounded-xl border border-indigo-500/20 text-indigo-300 text-[10px] leading-normal flex items-start gap-2">
-                    <Sparkles className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5 animate-pulse" />
+                  <div className="p-3 bg-[#FFF0E5] rounded-xl border border-[#FFD6C2] text-[#374151] text-[10px] leading-normal flex items-start gap-2">
+                    <Sparkles className="w-4 h-4 text-[#FF5A00] shrink-0 mt-0.5 animate-pulse" />
                     <span>
                       Clique abaixo para transferir esta licitação para o Foco do Chat e fazer uma análise de inteligência competitiva com IA.
                     </span>
@@ -712,7 +711,7 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                   <button
                     type="button"
                     onClick={() => handleTriggerAnalysis(activeItem)}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 border border-indigo-500/20 cursor-pointer"
+                    className="w-full py-2.5 bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold rounded-lg text-xs transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer"
                   >
                     <Sparkles className="w-4 h-4" />
                     Analisar Edital com Inteligência Artificial
@@ -720,8 +719,8 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                 </div>
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center py-20 gap-2">
-                <FileText className="w-10 h-10 text-white/10" />
+              <div className="h-full flex flex-col items-center justify-center text-[#9CA3AF] text-center py-20 gap-2">
+                <FileText className="w-10 h-10 text-[#D1D5DB]" />
                 <p className="text-xs">Selecione uma oportunidade ao lado para ver todos os detalhes.</p>
               </div>
             )}

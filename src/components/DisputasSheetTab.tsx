@@ -578,21 +578,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const getStatusBadge = (status: DisputaStatus) => {
     switch (status) {
       case "Agendada":
-        return "bg-blue-500/10 text-blue-300 border-blue-500/30";
+        return "bg-blue-50 text-blue-700 border-blue-200";
       case "Em Disputa":
-        return "bg-amber-500/10 text-amber-300 border-amber-500/30 animate-pulse";
+        return "bg-amber-50 text-amber-700 border-amber-200 animate-pulse";
       case "Vencida":
-        return "bg-emerald-500/10 text-emerald-300 border-emerald-500/30 font-bold";
+        return "bg-emerald-50 text-emerald-700 border-emerald-200 font-bold";
       case "Homologada":
-        return "bg-teal-500/10 text-teal-300 border-teal-500/30 font-bold";
+        return "bg-teal-50 text-teal-700 border-teal-200 font-bold";
       case "Em Recurso":
-        return "bg-purple-500/10 text-purple-300 border-purple-500/30";
+        return "bg-purple-50 text-purple-700 border-purple-200";
       case "Perdida":
-        return "bg-rose-500/10 text-rose-300 border-rose-500/30";
+        return "bg-rose-50 text-rose-700 border-rose-200";
       case "Cancelada":
-        return "bg-slate-500/10 text-slate-400 border-slate-500/30";
+        return "bg-gray-100 text-gray-600 border-gray-200";
       default:
-        return "bg-slate-800 text-slate-300 border-slate-700";
+        return "bg-gray-100 text-gray-700 border-gray-200";
     }
   };
 
@@ -601,23 +601,23 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const activeCellValue = activeRowObj && activeCell ? activeRowObj[activeCell.colKey] : "";
 
   return (
-    <div id="disputas-sheet-view" className="flex-1 flex flex-col h-full bg-[#0b0f19] overflow-y-auto">
+    <div id="disputas-sheet-view" className="flex-1 flex flex-col h-full bg-[#F8F9FA] overflow-y-auto select-text font-sans">
       
       {/* Top Banner & Mode Switcher Bar */}
-      <div className="p-5 border-b border-white/10 bg-white/5 backdrop-blur-md flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="p-5 border-b border-[#E5E7EB] bg-white flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-xs">
         <div>
           <div className="flex items-center gap-2.5">
-            <span className="bg-emerald-500/10 text-emerald-400 p-2 rounded-xl border border-emerald-500/20 shadow-sm">
+            <span className="bg-[#FFF0E5] text-[#FF5A00] p-2 rounded-xl border border-[#FFD6C2]">
               <FileSpreadsheet className="w-5 h-5" />
             </span>
             <div>
-              <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+              <h2 className="text-xl font-bold text-[#111827] tracking-tight flex items-center gap-2">
                 <span>Planilha de Disputas & Pregões</span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 uppercase">
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#FFF0E5] text-[#FF5A00] border border-[#FFD6C2] font-semibold uppercase">
                   {viewMode === "spreadsheet" ? "Modo Planilha Interativa" : "Modo Painel / Dashboard"}
                 </span>
               </h2>
-              <p className="text-slate-400 text-xs mt-0.5">
+              <p className="text-[#6B7280] text-xs mt-0.5">
                 Alterne livremente entre a visão de **Planilha Excel em Grade** ou a **Visão Painel Visual**.
               </p>
             </div>
@@ -628,13 +628,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
         <div className="flex flex-wrap items-center gap-3">
           
           {/* Mode Switcher Buttons */}
-          <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-white/10 shadow-inner">
+          <div className="flex items-center bg-[#F3F4F6] p-1 rounded-xl border border-[#E5E7EB]">
             <button
               onClick={() => setViewMode("spreadsheet")}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition duration-150 cursor-pointer ${
                 viewMode === "spreadsheet"
-                  ? "bg-emerald-600 text-white shadow-md shadow-emerald-950/40"
-                  : "text-slate-400 hover:text-white"
+                  ? "bg-[#FF5A00] text-white shadow-xs"
+                  : "text-[#6B7280] hover:text-[#111827]"
               }`}
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -644,8 +644,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
               onClick={() => setViewMode("dashboard")}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition duration-150 cursor-pointer ${
                 viewMode === "dashboard"
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-950/40"
-                  : "text-slate-400 hover:text-white"
+                  ? "bg-[#FF5A00] text-white shadow-xs"
+                  : "text-[#6B7280] hover:text-[#111827]"
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" />
@@ -653,21 +653,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </button>
           </div>
 
-          <div className="h-6 w-px bg-white/10 hidden sm:block" />
+          <div className="h-6 w-px bg-[#E5E7EB] hidden sm:block" />
 
           {/* Action buttons */}
           <button
             onClick={handleCopyClipboard}
-            className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+            className="bg-white hover:bg-gray-50 border border-[#D1D5DB] text-[#374151] font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
             title="Copiar dados para colar direto no Excel ou Google Sheets"
           >
-            <Copy className="w-3.5 h-3.5 text-slate-400" />
+            <Copy className="w-3.5 h-3.5 text-[#6B7280]" />
             <span>Copiar Tabela</span>
           </button>
 
           <button
             onClick={handleExportCSV}
-            className="bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-bold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+            className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
             title="Baixar arquivo .CSV para Excel"
           >
             <Download className="w-3.5 h-3.5" />
@@ -676,7 +676,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
           <button
             onClick={handleOpenAddModal}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-indigo-600/20"
+            className="bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
           >
             <Plus className="w-4 h-4" />
             <span>Nova Disputa</span>
@@ -689,89 +689,30 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       {notification && (
         <div className={`mx-6 mt-4 p-3.5 rounded-xl border flex items-center gap-2.5 animate-fade-in ${
           notification.type === "success" 
-            ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300" 
-            : "bg-indigo-500/10 border-indigo-500/30 text-indigo-300"
+            ? "bg-emerald-50 border-emerald-200 text-emerald-800" 
+            : "bg-[#FFF0E5] border-[#FFD6C2] text-[#FF5A00]"
         }`}>
-          <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+          <CheckCircle className="w-4 h-4 shrink-0 text-emerald-600" />
           <span className="text-xs font-semibold">{notification.text}</span>
         </div>
       )}
 
-      {/* KPI Summary Cards */}
-      <div className="p-6 pb-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        
-        {/* KPI 1: Disputas Mapeadas */}
-        <div className="p-4 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider block">Total de Linhas</span>
-            <span className="text-2xl font-black text-white mt-1 block">{totalMapeado}</span>
-            <span className="text-[10px] text-slate-400 mt-1 block">Itens cadastrados na planilha</span>
-          </div>
-          <div className="p-3 bg-blue-500/10 text-blue-400 rounded-xl border border-blue-500/20">
-            <Landmark className="w-5 h-5" />
-          </div>
-        </div>
 
-        {/* KPI 2: Valor Estimado Total */}
-        <div className="p-4 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider block">Valor Estimado Total</span>
-            <span className="text-xl font-black text-slate-200 mt-1 block font-mono">
-              {valorTotalEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-1 block">Soma de referência dos editais</span>
-          </div>
-          <div className="p-3 bg-indigo-500/10 text-indigo-400 rounded-xl border border-indigo-500/20">
-            <DollarSign className="w-5 h-5" />
-          </div>
-        </div>
-
-        {/* KPI 3: Nosso Alvo Global */}
-        <div className="p-4 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider block">Nosso Meta Global</span>
-            <span className="text-xl font-black text-indigo-300 mt-1 block font-mono">
-              {valorNossoAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-            </span>
-            <span className="text-[10px] text-slate-400 mt-1 block">Soma das nossas propostas</span>
-          </div>
-          <div className="p-3 bg-purple-500/10 text-purple-400 rounded-xl border border-purple-500/20">
-            <Sparkles className="w-5 h-5" />
-          </div>
-        </div>
-
-        {/* KPI 4: Arrematadas / Vencidas */}
-        <div className="p-4 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-bold uppercase text-slate-400 tracking-wider block">Arrematadas / Vencidas</span>
-            <span className="text-xl font-black text-emerald-400 mt-1 block font-mono">
-              {valorTotalVencido.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-            </span>
-            <span className="text-[10px] text-emerald-400/80 mt-1 block font-semibold">
-              Taxa de Sucesso: {winRate}% ({disputasVencidas.length} itens)
-            </span>
-          </div>
-          <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20">
-            <CheckCircle className="w-5 h-5" />
-          </div>
-        </div>
-
-      </div>
 
       {/* Filter Toolbar & Search */}
       <div className="p-6 space-y-4">
         
-        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white/5 p-3.5 border border-white/10 rounded-2xl">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white p-3.5 border border-[#E5E7EB] rounded-xl shadow-xs">
           
           {/* Search box */}
           <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+            <Search className="absolute left-3 top-2.5 w-4 h-4 text-[#9CA3AF]" />
             <input
               type="text"
               placeholder="Buscar por órgão, UASG, nº da licitação, produto..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-white/10 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-1.5 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00]"
             />
           </div>
 
@@ -779,44 +720,44 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           <div className="flex flex-wrap items-center gap-2">
             
             {/* Status Filter */}
-            <div className="flex items-center gap-1.5 bg-slate-950 border border-white/10 rounded-xl px-2.5 py-1 text-xs text-slate-300">
-              <Filter className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-              <span className="text-[10px] uppercase font-bold text-slate-500">Status:</span>
+            <div className="flex items-center gap-1.5 bg-[#F9FAFB] border border-[#D1D5DB] rounded-lg px-2.5 py-1 text-xs text-[#374151]">
+              <Filter className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
+              <span className="text-[10px] uppercase font-bold text-[#6B7280]">Status:</span>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-transparent text-xs text-white font-semibold focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs text-[#111827] font-semibold focus:outline-none cursor-pointer"
               >
-                <option value="Todas" className="bg-slate-900">Todas</option>
-                <option value="Agendada" className="bg-slate-900">Agendadas</option>
-                <option value="Em Disputa" className="bg-slate-900">Em Disputa</option>
-                <option value="Vencida" className="bg-slate-900">Vencidas</option>
-                <option value="Em Recurso" className="bg-slate-900">Em Recurso</option>
-                <option value="Homologada" className="bg-slate-900">Homologadas</option>
-                <option value="Perdida" className="bg-slate-900">Perdidas</option>
+                <option value="Todas">Todas</option>
+                <option value="Agendada">Agendadas</option>
+                <option value="Em Disputa">Em Disputa</option>
+                <option value="Vencida">Vencidas</option>
+                <option value="Em Recurso">Em Recurso</option>
+                <option value="Homologada">Homologadas</option>
+                <option value="Perdida">Perdidas</option>
               </select>
             </div>
 
             {/* Portal Filter */}
-            <div className="flex items-center gap-1.5 bg-slate-950 border border-white/10 rounded-xl px-2.5 py-1 text-xs text-slate-300">
-              <span className="text-[10px] uppercase font-bold text-slate-500">Portal:</span>
+            <div className="flex items-center gap-1.5 bg-[#F9FAFB] border border-[#D1D5DB] rounded-lg px-2.5 py-1 text-xs text-[#374151]">
+              <span className="text-[10px] uppercase font-bold text-[#6B7280]">Portal:</span>
               <select
                 value={portalFilter}
                 onChange={(e) => setPortalFilter(e.target.value)}
-                className="bg-transparent text-xs text-white font-semibold focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs text-[#111827] font-semibold focus:outline-none cursor-pointer"
               >
-                <option value="Todos" className="bg-slate-900">Todos</option>
-                <option value="Compras.gov.br" className="bg-slate-900">Compras.gov.br</option>
-                <option value="BLL Compras" className="bg-slate-900">BLL Compras</option>
-                <option value="Licitações-e" className="bg-slate-900">Licitações-e</option>
-                <option value="Bec SP" className="bg-slate-900">Bec SP</option>
-                <option value="PNCP" className="bg-slate-900">PNCP</option>
+                <option value="Todos">Todos</option>
+                <option value="Compras.gov.br">Compras.gov.br</option>
+                <option value="BLL Compras">BLL Compras</option>
+                <option value="Licitações-e">Licitações-e</option>
+                <option value="Bec SP">Bec SP</option>
+                <option value="PNCP">PNCP</option>
               </select>
             </div>
 
             <button
               onClick={handleAddBlankRow}
-              className="flex items-center gap-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-bold px-3 py-1 rounded-xl text-xs transition cursor-pointer"
+              className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold px-3 py-1 rounded-lg text-xs transition cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>+ Inserir Linha</span>
@@ -828,20 +769,20 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
         {/* MODE 1: MODELO PLANILHA INTERATIVA EXCEL */}
         {viewMode === "spreadsheet" ? (
-          <div className="bg-slate-950 border border-emerald-500/30 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+          <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden shadow-xs flex flex-col">
             
             {/* Spreadsheet Top Excel-Style Formula & Active Cell Bar */}
-            <div className="bg-[#0c101e] px-4 py-2 border-b border-white/10 flex items-center gap-3 font-mono text-xs">
+            <div className="bg-[#F9FAFB] px-4 py-2 border-b border-[#E5E7EB] flex items-center gap-3 font-mono text-xs">
               
               {/* Selected Cell Tag */}
-              <div className="flex items-center gap-1.5 bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-bold px-2.5 py-1 rounded-md text-[11px] min-w-[110px]">
-                <span className="text-emerald-500 font-mono">fx</span>
+              <div className="flex items-center gap-1.5 bg-[#FFF0E5] border border-[#FFD6C2] text-[#FF5A00] font-bold px-2.5 py-1 rounded-md text-[11px] min-w-[110px]">
+                <span className="font-mono">fx</span>
                 <span>{activeCell ? `Célula ${activeCell.colLetter}${disputas.findIndex(r => r.id === activeCell.rowId) + 1}` : 'A1'}</span>
               </div>
 
               {/* Formula input box for active cell */}
-              <div className="flex-1 flex items-center gap-2 bg-slate-900 border border-white/10 rounded-md px-3 py-1">
-                <span className="text-slate-500 text-[11px] font-bold">
+              <div className="flex-1 flex items-center gap-2 bg-white border border-[#D1D5DB] rounded-md px-3 py-1">
+                <span className="text-[#6B7280] text-[11px] font-bold">
                   {activeCell?.colName || 'Valor'}:
                 </span>
                 <input
@@ -858,7 +799,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     }
                   }}
                   placeholder="Edite o valor da célula diretamente aqui ou clique na tabela..."
-                  className="w-full bg-transparent text-white font-mono text-xs focus:outline-none"
+                  className="w-full bg-transparent text-[#111827] font-mono text-xs focus:outline-none"
                 />
               </div>
 
@@ -870,133 +811,133 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                 
                 {/* Spreadsheet Column Headers (A, B, C, D...) */}
                 <thead>
-                  <tr className="bg-[#12182c] border-b border-white/10 text-slate-400 text-[10.5px] font-bold">
-                    <th className="w-12 py-2 px-2 text-center border-r border-white/10 bg-[#0a0d18] text-slate-500">#</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-left min-w-[200px]">A - Órgão Comprador</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-left w-36">B - UASG/Cod</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-left w-32">C - Nº Licitação</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-left w-32">D - Portal</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-left min-w-[240px]">E - Produto / Item</th>
-                    <th className="py-2 px-2 border-r border-white/10 text-center w-20">F - Qtd</th>
-                    <th className="py-2 px-2 border-r border-white/10 text-center w-20">G - Und</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-right w-36">H - Val. Estimado</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-right w-36">I - Nosso Alvo</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-right w-36">J - Preço Piso</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-left w-36">K - Data/Hora</th>
-                    <th className="py-2 px-3 border-r border-white/10 text-center w-32">L - Status</th>
+                  <tr className="bg-[#F3F4F6] border-b border-[#E5E7EB] text-[#374151] text-[10.5px] font-bold">
+                    <th className="w-12 py-2 px-2 text-center border-r border-[#E5E7EB] bg-[#E5E7EB] text-[#4B5563]">#</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left min-w-[200px]">A - Órgão Comprador</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-36">B - UASG/Cod</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-32">C - Nº Licitação</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-32">D - Portal</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left min-w-[240px]">E - Produto / Item</th>
+                    <th className="py-2 px-2 border-r border-[#E5E7EB] text-center w-20">F - Qtd</th>
+                    <th className="py-2 px-2 border-r border-[#E5E7EB] text-center w-20">G - Und</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-right w-36">H - Val. Estimado</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-right w-36">I - Nosso Alvo</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-right w-36">J - Preço Piso</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-36">K - Data/Hora</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-center w-32">L - Status</th>
                     <th className="py-2 px-2 text-center w-16">Ações</th>
                   </tr>
                 </thead>
 
                 {/* Grid Rows */}
-                <tbody className="divide-y divide-white/10 bg-slate-950 text-slate-200">
+                <tbody className="divide-y divide-[#E5E7EB] bg-white text-[#111827]">
                   {filteredDisputas.map((row, index) => (
-                    <tr key={row.id} className="hover:bg-indigo-500/10 transition-colors group">
+                    <tr key={row.id} className="hover:bg-[#FFF0E5]/40 transition-colors group">
                       
                       {/* Row Index # */}
-                      <td className="py-2 px-2 text-center font-bold text-slate-500 border-r border-white/10 bg-[#0a0d18] text-[11px]">
+                      <td className="py-2 px-2 text-center font-bold text-[#6B7280] border-r border-[#E5E7EB] bg-[#F9FAFB] text-[11px]">
                         {index + 1}
                       </td>
 
                       {/* Col A: Órgão */}
                       <td 
-                        className={`p-1 border-r border-white/10 ${activeCell?.rowId === row.id && activeCell?.colKey === "orgao" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "orgao" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "orgao", colName: "Órgão Comprador", colLetter: "A" })}
                       >
                         <input
                           type="text"
                           value={row.orgao}
                           onChange={(e) => handleCellChange(row.id, "orgao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-white focus:outline-none focus:bg-slate-900 rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#111827] focus:outline-none focus:bg-white rounded"
                         />
                       </td>
 
                       {/* Col B: UASG */}
                       <td 
-                        className={`p-1 border-r border-white/10 ${activeCell?.rowId === row.id && activeCell?.colKey === "uasgUndCompradora" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "uasgUndCompradora" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "uasgUndCompradora", colName: "UASG/Cod Unidade", colLetter: "B" })}
                       >
                         <input
                           type="text"
                           value={row.uasgUndCompradora}
                           onChange={(e) => handleCellChange(row.id, "uasgUndCompradora", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-slate-300 focus:outline-none focus:bg-slate-900 rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#4B5563] focus:outline-none focus:bg-white rounded"
                         />
                       </td>
 
                       {/* Col C: Nº Licitação */}
                       <td 
-                        className={`p-1 border-r border-white/10 ${activeCell?.rowId === row.id && activeCell?.colKey === "numeroLicitacao" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "numeroLicitacao" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "numeroLicitacao", colName: "Nº Licitação", colLetter: "C" })}
                       >
                         <input
                           type="text"
                           value={row.numeroLicitacao}
                           onChange={(e) => handleCellChange(row.id, "numeroLicitacao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-indigo-300 font-bold focus:outline-none focus:bg-slate-900 rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#FF5A00] font-bold focus:outline-none focus:bg-white rounded"
                         />
                       </td>
 
                       {/* Col D: Portal */}
                       <td 
-                        className={`p-1 border-r border-white/10 ${activeCell?.rowId === row.id && activeCell?.colKey === "portal" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "portal" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "portal", colName: "Portal", colLetter: "D" })}
                       >
                         <select
                           value={row.portal}
                           onChange={(e) => handleCellChange(row.id, "portal", e.target.value)}
-                          className="w-full bg-transparent text-xs text-slate-200 px-1 py-1 focus:outline-none focus:bg-slate-900 rounded cursor-pointer"
+                          className="w-full bg-transparent text-xs text-[#374151] px-1 py-1 focus:outline-none focus:bg-white rounded cursor-pointer"
                         >
-                          <option value="Compras.gov.br" className="bg-slate-900">Compras.gov.br</option>
-                          <option value="BLL Compras" className="bg-slate-900">BLL Compras</option>
-                          <option value="Licitações-e" className="bg-slate-900">Licitações-e</option>
-                          <option value="Bec SP" className="bg-slate-900">Bec SP</option>
-                          <option value="PNCP" className="bg-slate-900">PNCP</option>
+                          <option value="Compras.gov.br">Compras.gov.br</option>
+                          <option value="BLL Compras">BLL Compras</option>
+                          <option value="Licitações-e">Licitações-e</option>
+                          <option value="Bec SP">Bec SP</option>
+                          <option value="PNCP">PNCP</option>
                         </select>
                       </td>
 
                       {/* Col E: Produto / Item */}
                       <td 
-                        className={`p-1 border-r border-white/10 ${activeCell?.rowId === row.id && activeCell?.colKey === "produtoItem" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "produtoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "produtoItem", colName: "Produto / Item", colLetter: "E" })}
                       >
                         <input
                           type="text"
                           value={row.produtoItem}
                           onChange={(e) => handleCellChange(row.id, "produtoItem", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-white focus:outline-none focus:bg-slate-900 rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#111827] focus:outline-none focus:bg-white rounded"
                         />
                       </td>
 
                       {/* Col F: Qtd */}
                       <td 
-                        className={`p-1 border-r border-white/10 text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "quantidade" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "quantidade" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "quantidade", colName: "Quantidade", colLetter: "F" })}
                       >
                         <input
                           type="number"
                           value={row.quantidade}
                           onChange={(e) => handleCellChange(row.id, "quantidade", Number(e.target.value))}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-slate-200 focus:outline-none focus:bg-slate-900 rounded"
+                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-[#111827] focus:outline-none focus:bg-white rounded"
                         />
                       </td>
 
                       {/* Col G: Und */}
                       <td 
-                        className={`p-1 border-r border-white/10 text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "unidadeMedida" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "unidadeMedida" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "unidadeMedida", colName: "Unidade", colLetter: "G" })}
                       >
                         <input
                           type="text"
                           value={row.unidadeMedida}
                           onChange={(e) => handleCellChange(row.id, "unidadeMedida", e.target.value)}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-slate-300 focus:outline-none focus:bg-slate-900 rounded"
+                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-[#4B5563] focus:outline-none focus:bg-white rounded"
                         />
                       </td>
 
                       {/* Col H: Val. Estimado */}
                       <td 
-                        className={`p-1 border-r border-white/10 text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorEstimadoItem" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorEstimadoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "valorEstimadoItem", colName: "Valor Estimado (R$)", colLetter: "H" })}
                       >
                         <input
@@ -1004,13 +945,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           step="0.01"
                           value={row.valorEstimadoItem}
                           onChange={(e) => handleCellChange(row.id, "valorEstimadoItem", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-slate-300 focus:outline-none focus:bg-slate-900 rounded font-mono"
+                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#4B5563] focus:outline-none focus:bg-white rounded font-mono"
                         />
                       </td>
 
                       {/* Col I: Nosso Alvo */}
                       <td 
-                        className={`p-1 border-r border-white/10 text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "nossoValorAlvo" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "nossoValorAlvo" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "nossoValorAlvo", colName: "Nosso Valor Alvo (R$)", colLetter: "I" })}
                       >
                         <input
@@ -1018,13 +959,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           step="0.01"
                           value={row.nossoValorAlvo}
                           onChange={(e) => handleCellChange(row.id, "nossoValorAlvo", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-indigo-300 font-bold focus:outline-none focus:bg-slate-900 rounded font-mono"
+                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#FF5A00] font-bold focus:outline-none focus:bg-white rounded font-mono"
                         />
                       </td>
 
                       {/* Col J: Preço Piso */}
                       <td 
-                        className={`p-1 border-r border-white/10 text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorMinimoPiso" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorMinimoPiso" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "valorMinimoPiso", colName: "Preço Piso (R$)", colLetter: "J" })}
                       >
                         <input
@@ -1032,36 +973,36 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           step="0.01"
                           value={row.valorMinimoPiso}
                           onChange={(e) => handleCellChange(row.id, "valorMinimoPiso", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-slate-400 focus:outline-none focus:bg-slate-900 rounded font-mono"
+                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#6B7280] focus:outline-none focus:bg-white rounded font-mono"
                         />
                       </td>
 
                       {/* Col K: Data/Hora */}
                       <td 
-                        className={`p-1 border-r border-white/10 ${activeCell?.rowId === row.id && activeCell?.colKey === "dataHoraDisputa" ? 'ring-2 ring-emerald-400 bg-emerald-950/30' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "dataHoraDisputa" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "dataHoraDisputa", colName: "Data e Hora Disputa", colLetter: "K" })}
                       >
                         <input
                           type="text"
                           value={row.dataHoraDisputa}
                           onChange={(e) => handleCellChange(row.id, "dataHoraDisputa", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-slate-300 focus:outline-none focus:bg-slate-900 rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#374151] focus:outline-none focus:bg-white rounded"
                         />
                       </td>
 
                       {/* Col L: Status */}
-                      <td className="p-1 border-r border-white/10 text-center">
+                      <td className="p-1 border-r border-[#E5E7EB] text-center">
                         <select
                           value={row.status}
                           onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
                           className={`text-[10.5px] font-bold px-2 py-0.5 rounded-lg border focus:outline-none cursor-pointer ${getStatusBadge(row.status)}`}
                         >
-                          <option value="Agendada" className="bg-slate-900 text-blue-300">Agendada</option>
-                          <option value="Em Disputa" className="bg-slate-900 text-amber-300">Em Disputa</option>
-                          <option value="Vencida" className="bg-slate-900 text-emerald-300">Vencida</option>
-                          <option value="Em Recurso" className="bg-slate-900 text-purple-300">Em Recurso</option>
-                          <option value="Homologada" className="bg-slate-900 text-teal-300">Homologada</option>
-                          <option value="Perdida" className="bg-slate-900 text-rose-300">Perdida</option>
+                          <option value="Agendada">Agendada</option>
+                          <option value="Em Disputa">Em Disputa</option>
+                          <option value="Vencida">Vencida</option>
+                          <option value="Em Recurso">Em Recurso</option>
+                          <option value="Homologada">Homologada</option>
+                          <option value="Perdida">Perdida</option>
                         </select>
                       </td>
 
@@ -1069,7 +1010,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       <td className="p-1 text-center">
                         <button
                           onClick={() => handleDeleteRow(row.id)}
-                          className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded transition cursor-pointer"
+                          className="p-1 text-[#9CA3AF] hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
                           title="Excluir Linha"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1084,17 +1025,17 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </div>
 
             {/* Bottom Excel Totals Summary Bar */}
-            <div className="bg-[#0c101e] px-4 py-2 border-t border-white/10 flex flex-wrap items-center justify-between text-xs font-mono text-slate-400 gap-4">
+            <div className="bg-[#F9FAFB] px-4 py-2 border-t border-[#E5E7EB] flex flex-wrap items-center justify-between text-xs font-mono text-[#4B5563] gap-4">
               <div className="flex items-center gap-4">
-                <span className="text-emerald-400 font-bold">∑ Fórmulas de Totais:</span>
-                <span>Soma (H): <strong className="text-slate-200">{valorTotalEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
-                <span>Soma (I): <strong className="text-indigo-300">{valorNossoAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
+                <span className="text-[#FF5A00] font-bold">∑ Fórmulas de Totais:</span>
+                <span>Soma (H): <strong className="text-[#111827]">{valorTotalEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
+                <span>Soma (I): <strong className="text-[#FF5A00]">{valorNossoAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-slate-500">Linhas Totais: {filteredDisputas.length}</span>
+                <span className="text-[#6B7280]">Linhas Totais: {filteredDisputas.length}</span>
                 <button
                   onClick={handleAddBlankRow}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1 rounded text-[11px] transition cursor-pointer flex items-center gap-1"
+                  className="bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold px-3 py-1 rounded text-[11px] transition cursor-pointer flex items-center gap-1 shadow-xs"
                 >
                   <Plus className="w-3 h-3" />
                   <span>Nova Linha</span>
@@ -1105,23 +1046,23 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           </div>
         ) : (
           /* MODE 2: MODELO PAINEL / DASHBOARD VISUAL */
-          <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+          <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 
                 {/* Header */}
                 <thead>
-                  <tr className="border-b border-white/10 bg-[#0c101e] text-[10.5px] uppercase tracking-wider font-bold text-slate-400 select-none">
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-white transition" onClick={() => handleSort("status")}>
+                  <tr className="border-b border-[#E5E7EB] bg-[#F9FAFB] text-[10.5px] uppercase tracking-wider font-bold text-[#4B5563] select-none">
+                    <th className="py-3.5 px-4 cursor-pointer hover:text-[#111827] transition" onClick={() => handleSort("status")}>
                       <div className="flex items-center gap-1">
                         <span>Status</span>
-                        <ArrowUpDown className="w-3 h-3 text-slate-500" />
+                        <ArrowUpDown className="w-3 h-3 text-[#9CA3AF]" />
                       </div>
                     </th>
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-white transition" onClick={() => handleSort("orgao")}>
+                    <th className="py-3.5 px-4 cursor-pointer hover:text-[#111827] transition" onClick={() => handleSort("orgao")}>
                       <div className="flex items-center gap-1">
                         <span>Órgão Comprador</span>
-                        <ArrowUpDown className="w-3 h-3 text-slate-500" />
+                        <ArrowUpDown className="w-3 h-3 text-[#9CA3AF]" />
                       </div>
                     </th>
                     <th className="py-3.5 px-4">UASG / Und</th>
@@ -1138,17 +1079,17 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                 </thead>
 
                 {/* Body */}
-                <tbody className="divide-y divide-white/5 text-xs text-slate-200">
+                <tbody className="divide-y divide-[#E5E7EB] text-xs text-[#111827]">
                   {filteredDisputas.length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="py-12 text-center text-slate-500">
-                        <FileSpreadsheet className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                        <p className="font-bold text-sm text-slate-400">Nenhum registro encontrado</p>
+                      <td colSpan={12} className="py-12 text-center text-[#6B7280]">
+                        <FileSpreadsheet className="w-8 h-8 mx-auto mb-2 text-[#9CA3AF]" />
+                        <p className="font-bold text-sm text-[#4B5563]">Nenhum registro encontrado</p>
                       </td>
                     </tr>
                   ) : (
                     filteredDisputas.map((row) => (
-                      <tr key={row.id} className="hover:bg-indigo-500/5 transition-colors group">
+                      <tr key={row.id} className="hover:bg-[#F9FAFB] transition-colors group">
                         
                         <td className="py-3 px-4">
                           <select
@@ -1156,62 +1097,62 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                             onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
                             className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border focus:outline-none cursor-pointer transition ${getStatusBadge(row.status)}`}
                           >
-                            <option value="Agendada" className="bg-slate-900 text-blue-300">Agendada</option>
-                            <option value="Em Disputa" className="bg-slate-900 text-amber-300">Em Disputa</option>
-                            <option value="Vencida" className="bg-slate-900 text-emerald-300">Vencida</option>
-                            <option value="Em Recurso" className="bg-slate-900 text-purple-300">Em Recurso</option>
-                            <option value="Homologada" className="bg-slate-900 text-teal-300">Homologada</option>
-                            <option value="Perdida" className="bg-slate-900 text-rose-300">Perdida</option>
+                            <option value="Agendada">Agendada</option>
+                            <option value="Em Disputa">Em Disputa</option>
+                            <option value="Vencida">Vencida</option>
+                            <option value="Em Recurso">Em Recurso</option>
+                            <option value="Homologada">Homologada</option>
+                            <option value="Perdida">Perdida</option>
                           </select>
                         </td>
 
-                        <td className="py-3 px-4 font-semibold text-white max-w-[180px] truncate" title={row.orgao}>
+                        <td className="py-3 px-4 font-semibold text-[#111827] max-w-[180px] truncate" title={row.orgao}>
                           {row.orgao}
                         </td>
 
-                        <td className="py-3 px-4 font-mono text-slate-400 text-[11px]">
+                        <td className="py-3 px-4 font-mono text-[#6B7280] text-[11px]">
                           {row.uasgUndCompradora}
                         </td>
 
-                        <td className="py-3 px-4 font-mono font-bold text-indigo-300 text-[11px]">
+                        <td className="py-3 px-4 font-mono font-bold text-[#FF5A00] text-[11px]">
                           {row.numeroLicitacao}
                         </td>
 
-                        <td className="py-3 px-4 text-slate-300 text-[11px]">
-                          <span className="bg-slate-900 px-2 py-0.5 rounded border border-white/5 text-[10.5px]">
+                        <td className="py-3 px-4 text-[#374151] text-[11px]">
+                          <span className="bg-[#F3F4F6] px-2 py-0.5 rounded border border-[#E5E7EB] text-[10.5px]">
                             {row.portal}
                           </span>
                         </td>
 
                         <td className="py-3 px-4 max-w-[240px]">
-                          <p className="line-clamp-2 text-slate-200 leading-snug">{row.produtoItem}</p>
+                          <p className="line-clamp-2 text-[#374151] leading-snug">{row.produtoItem}</p>
                         </td>
 
-                        <td className="py-3 px-4 text-center font-mono text-[11px] text-slate-300">
-                          {row.quantidade} <span className="text-[10px] text-slate-500">{row.unidadeMedida}</span>
+                        <td className="py-3 px-4 text-center font-mono text-[11px] text-[#374151]">
+                          {row.quantidade} <span className="text-[10px] text-[#9CA3AF]">{row.unidadeMedida}</span>
                         </td>
 
-                        <td className="py-3 px-4 text-right font-mono text-slate-300">
+                        <td className="py-3 px-4 text-right font-mono text-[#374151]">
                           {row.valorEstimadoItem > 0 
                             ? row.valorEstimadoItem.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                             : "—"}
                         </td>
 
-                        <td className="py-3 px-4 text-right font-mono font-bold text-indigo-300">
+                        <td className="py-3 px-4 text-right font-mono font-bold text-[#FF5A00]">
                           {row.nossoValorAlvo > 0 
                             ? row.nossoValorAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                             : "—"}
                         </td>
 
-                        <td className="py-3 px-4 text-right font-mono text-slate-400 text-[11px]">
+                        <td className="py-3 px-4 text-right font-mono text-[#6B7280] text-[11px]">
                           {row.valorMinimoPiso > 0 
                             ? row.valorMinimoPiso.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                             : "—"}
                         </td>
 
-                        <td className="py-3 px-4 font-mono text-slate-300 text-[11px] whitespace-nowrap">
+                        <td className="py-3 px-4 font-mono text-[#374151] text-[11px] whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
-                            <Calendar className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                            <Calendar className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
                             <span>{row.dataHoraDisputa}</span>
                           </div>
                         </td>
@@ -1220,14 +1161,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           <div className="flex items-center justify-center gap-1.5 opacity-80 group-hover:opacity-100 transition">
                             <button
                               onClick={() => handleOpenEditModal(row)}
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-indigo-300 transition cursor-pointer"
+                              className="p-1.5 rounded-lg bg-[#F3F4F6] hover:bg-[#E5E7EB] text-[#4B5563] hover:text-[#111827] transition cursor-pointer"
                               title="Editar linha"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
                               onClick={() => handleDeleteRow(row.id)}
-                              className="p-1.5 rounded-lg bg-white/5 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition cursor-pointer"
+                              className="p-1.5 rounded-lg bg-[#F3F4F6] hover:bg-rose-50 text-[#4B5563] hover:text-rose-600 transition cursor-pointer"
                               title="Excluir da planilha"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -1249,18 +1190,18 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
       {/* Add / Edit Form Modal with History Pull & Attachment AI Extractions */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-fade-in overflow-y-auto">
-          <div className="bg-[#0c101e] border border-indigo-500/30 rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden my-auto">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 animate-fade-in overflow-y-auto">
+          <div className="bg-white border border-[#E5E7EB] rounded-xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-xl overflow-hidden my-auto">
             
             {/* Modal Header */}
-            <div className="p-4 sm:p-5 border-b border-white/10 flex items-center justify-between bg-slate-900/80 shrink-0">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-indigo-400" />
+            <div className="p-4 sm:p-5 border-b border-[#E5E7EB] flex items-center justify-between bg-[#F9FAFB] shrink-0">
+              <h3 className="text-base font-bold text-[#111827] flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-[#FF5A00]" />
                 <span>{editingRow ? "Editar Registro da Disputa" : "Cadastrar Nova Disputa na Planilha"}</span>
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition cursor-pointer"
+                className="text-[#6B7280] hover:text-[#111827] p-1 rounded-lg hover:bg-[#E5E7EB] transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1271,10 +1212,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
               
               {/* Top Auto-Fill Panel (History Pull OR Attachment Upload) */}
               {!editingRow && (
-                <div className="bg-gradient-to-r from-indigo-950/60 to-slate-900 p-3.5 sm:p-4 rounded-xl border border-indigo-500/30 space-y-3">
+                <div className="bg-[#FFF0E5] p-3.5 sm:p-4 rounded-xl border border-[#FFD6C2] space-y-3">
                   <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse shrink-0" />
-                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    <Sparkles className="w-4 h-4 text-[#FF5A00] animate-pulse shrink-0" />
+                    <span className="text-xs font-bold text-[#111827] uppercase tracking-wider">
                       Preenchimento Automatizado via IA
                     </span>
                   </div>
@@ -1283,18 +1224,18 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     
                     {/* Option A: Puxar do Histórico de Editais Analisados */}
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-indigo-300 uppercase flex items-center gap-1">
+                      <label className="text-[10px] font-bold text-[#FF5A00] uppercase flex items-center gap-1">
                         <History className="w-3 h-3 shrink-0" />
                         <span>Puxar do Histórico Analisado</span>
                       </label>
                       <select
                         value={selectedHistoryId}
                         onChange={(e) => handleApplyHistoryEdital(e.target.value)}
-                        className="w-full bg-slate-950 border border-indigo-500/30 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer truncate"
+                        className="w-full bg-white border border-[#D1D5DB] rounded-xl px-2.5 py-2 text-xs text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00] cursor-pointer truncate"
                       >
                         <option value="">-- Selecione do histórico --</option>
                         {historyOptions.map(opt => (
-                          <option key={opt.id} value={opt.id} className="bg-slate-900">
+                          <option key={opt.id} value={opt.id}>
                             {opt.title} ({opt.dateStr})
                           </option>
                         ))}
@@ -1303,11 +1244,11 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                     {/* Option B: Upload de Anexo para Preencher Automático */}
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-emerald-300 uppercase flex items-center gap-1">
+                      <label className="text-[10px] font-bold text-emerald-700 uppercase flex items-center gap-1">
                         <Upload className="w-3 h-3 shrink-0" />
                         <span>Anexo / Edital (Preencher IA)</span>
                       </label>
-                      <label className="flex items-center justify-center gap-2 w-full bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold py-2 px-3 rounded-xl cursor-pointer transition">
+                      <label className="flex items-center justify-center gap-2 w-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold py-2 px-3 rounded-xl cursor-pointer transition">
                         <Upload className="w-3.5 h-3.5 shrink-0" />
                         <span className="truncate">{isExtractingFile ? "Analisando..." : "Carregar Anexo (PDF/TXT)"}</span>
                         <input
@@ -1323,8 +1264,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   </div>
 
                   {isExtractingFile && (
-                    <div className="flex items-center gap-2 text-xs text-indigo-300 font-mono animate-pulse pt-1">
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+                    <div className="flex items-center gap-2 text-xs text-[#FF5A00] font-mono animate-pulse pt-1">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#FF5A00] shrink-0" />
                       <span>{extractStatusText}</span>
                     </div>
                   )}
@@ -1337,48 +1278,48 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   
                   {/* Órgão */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Órgão Comprador *</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Órgão Comprador *</label>
                     <input
                       type="text"
                       required
                       placeholder="Ex: Tribunal Regional Federal da 3ª Região"
                       value={formData.orgao}
                       onChange={(e) => setFormData({ ...formData, orgao: e.target.value })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* UASG / Código Und */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">UASG / Código Unidade</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">UASG / Código Unidade</label>
                     <input
                       type="text"
                       placeholder="Ex: 090012 - TRF3"
                       value={formData.uasgUndCompradora}
                       onChange={(e) => setFormData({ ...formData, uasgUndCompradora: e.target.value })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Nº Licitação */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Nº Licitação / Processo</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Nº Licitação / Processo</label>
                     <input
                       type="text"
                       placeholder="Ex: Pregão Eletrônico 14/2026"
                       value={formData.numeroLicitacao}
                       onChange={(e) => setFormData({ ...formData, numeroLicitacao: e.target.value })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Portal */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Portal Eletrônico</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Portal Eletrônico</label>
                     <select
                       value={formData.portal}
                       onChange={(e) => setFormData({ ...formData, portal: e.target.value })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     >
                       <option value="Compras.gov.br">Compras.gov.br</option>
                       <option value="BLL Compras">BLL Compras</option>
@@ -1393,14 +1334,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                 {/* Produto / Objeto */}
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-slate-400">Produto / Objeto *</label>
+                  <label className="text-[10px] uppercase font-bold text-[#4B5563]">Produto / Objeto *</label>
                   <textarea
                     required
                     rows={2}
                     placeholder="Descrição detalhada do item/produto cotado na disputa..."
                     value={formData.produtoItem}
                     onChange={(e) => setFormData({ ...formData, produtoItem: e.target.value })}
-                    className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                   />
                 </div>
 
@@ -1408,35 +1349,35 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   
                   {/* Quantidade */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Quantidade</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Quantidade</label>
                     <input
                       type="number"
                       min={1}
                       value={formData.quantidade}
                       onChange={(e) => setFormData({ ...formData, quantidade: Number(e.target.value) })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Unidade Medida */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Unidade</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Unidade</label>
                     <input
                       type="text"
                       placeholder="Unidade, Caixa, Lote"
                       value={formData.unidadeMedida}
                       onChange={(e) => setFormData({ ...formData, unidadeMedida: e.target.value })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Status */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Status</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Status</label>
                     <select
                       value={formData.status}
                       onChange={(e) => setFormData({ ...formData, status: e.target.value as DisputaStatus })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
                     >
                       <option value="Agendada">Agendada</option>
                       <option value="Em Disputa">Em Disputa</option>
@@ -1454,40 +1395,40 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   
                   {/* Valor Estimado */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Valor Estimado (R$)</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Valor Estimado (R$)</label>
                     <input
                       type="number"
                       step="0.01"
                       placeholder="0.00"
                       value={formData.valorEstimadoItem || ""}
                       onChange={(e) => setFormData({ ...formData, valorEstimadoItem: Number(e.target.value) })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Nosso Valor Alvo */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-indigo-300">Nosso Lance Alvo (R$)</label>
+                    <label className="text-[10px] uppercase font-bold text-[#FF5A00]">Nosso Lance Alvo (R$)</label>
                     <input
                       type="number"
                       step="0.01"
                       placeholder="0.00"
                       value={formData.nossoValorAlvo || ""}
                       onChange={(e) => setFormData({ ...formData, nossoValorAlvo: Number(e.target.value) })}
-                      className="w-full bg-slate-950 border border-indigo-500/30 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Preço Mínimo Piso */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-slate-400">Preço Mínimo Piso (R$)</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Preço Mínimo Piso (R$)</label>
                     <input
                       type="number"
                       step="0.01"
                       placeholder="0.00"
                       value={formData.valorMinimoPiso || ""}
                       onChange={(e) => setFormData({ ...formData, valorMinimoPiso: Number(e.target.value) })}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
@@ -1495,25 +1436,25 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                 {/* Data e Hora */}
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-slate-400">Data e Hora da Disputa</label>
+                  <label className="text-[10px] uppercase font-bold text-[#4B5563]">Data e Hora da Disputa</label>
                   <input
                     type="text"
                     placeholder="Ex: 2026-08-15 09:30 ou 15/08/2026 09:30"
                     value={formData.dataHoraDisputa}
                     onChange={(e) => setFormData({ ...formData, dataHoraDisputa: e.target.value })}
-                    className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                    className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
                   />
                 </div>
 
                 {/* Observações */}
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-slate-400">Observações & Estratégia de Lance</label>
+                  <label className="text-[10px] uppercase font-bold text-[#4B5563]">Observações & Estratégia de Lance</label>
                   <input
                     type="text"
                     placeholder="Anotações internas, concorrentes mapeados, margem esperada..."
                     value={formData.observacoes}
                     onChange={(e) => setFormData({ ...formData, observacoes: e.target.value })}
-                    className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+                    className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
                   />
                 </div>
 
@@ -1522,18 +1463,18 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </div>
 
             {/* Modal Footer (Always visible & fixed at bottom) */}
-            <div className="p-4 border-t border-white/10 bg-[#0a0d18] shrink-0 flex items-center justify-end gap-3">
+            <div className="p-4 border-t border-[#E5E7EB] bg-[#F9FAFB] shrink-0 flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-white/10 text-slate-300 text-xs hover:bg-white/5 transition cursor-pointer"
+                className="px-4 py-2 rounded-xl border border-[#D1D5DB] text-[#374151] text-xs hover:bg-[#E5E7EB] transition cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 form="disputa-form"
-                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-5 py-2 rounded-xl text-xs transition cursor-pointer shadow-lg shadow-indigo-600/20"
+                className="bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold px-5 py-2 rounded-xl text-xs transition cursor-pointer shadow-xs"
               >
                 Salvar na Planilha
               </button>

@@ -408,39 +408,39 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-50 flex items-center justify-center p-4 font-sans animate-fade-in select-none">
-      <div id="preview-modal" className="bg-slate-900/40 border border-white/10 backdrop-blur-xl rounded-2xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden select-text">
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-sans animate-fade-in select-none">
+      <div id="preview-modal" className="bg-white border border-[#E5E7EB] rounded-2xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden select-text">
         
         {/* Header */}
-        <div className="bg-white/5 text-white p-4 flex items-center justify-between border-b border-white/10 shrink-0">
+        <div className="bg-white text-[#111827] p-4 flex items-center justify-between border-b border-[#F3F4F6] shrink-0">
           <div className="flex items-center gap-2.5">
-            <div className="bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 p-2 rounded-lg">
+            <div className="bg-[#FF5A00]/10 text-[#FF5A00] border border-[#FF5A00]/20 p-2 rounded-lg">
               <FileText className="w-5 h-5 animate-pulse" />
             </div>
             <div>
-              <h3 className="font-semibold text-sm md:text-base leading-snug">{title}</h3>
-              <p className="text-[10px] text-slate-400 font-medium">Minuta sugerida do documento legal</p>
+              <h3 className="font-semibold text-sm md:text-base leading-snug text-[#111827]">{title}</h3>
+              <p className="text-[10px] text-[#6B7280] font-medium">Minuta sugerida do documento legal</p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1.5 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+            className="text-[#6B7280] hover:text-[#111827] p-1.5 hover:bg-[#F3F4F6] rounded-lg transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Toolbar menu */}
-        <div className="bg-white/5 border-b border-white/10 p-3 flex flex-wrap items-center justify-between gap-3 shrink-0 text-white select-none">
+        <div className="bg-[#F9FAFB] border-b border-[#E5E7EB] p-3 flex flex-wrap items-center justify-between gap-3 shrink-0 text-[#374151] select-none">
           <div className="flex items-center gap-2">
             
             <button
               onClick={() => setIsEditing(!isEditing)}
               className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                 isEditing 
-                  ? "bg-indigo-600 border-indigo-500/30 text-white shadow-lg shadow-indigo-600/20" 
-                  : "bg-white/5 border-white/10 hover:bg-white/10 text-slate-200"
+                  ? "bg-[#FF5A00] border-[#FF5A00] text-white shadow-xs" 
+                  : "bg-white border-[#D1D5DB] hover:bg-[#F3F4F6] text-[#374151]"
               }`}
             >
               {isEditing ? (
@@ -458,7 +458,7 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
 
             <button
               onClick={handlePrint}
-              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-slate-205 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-3 py-1.5 bg-white hover:bg-[#F3F4F6] border border-[#D1D5DB] rounded-lg text-xs font-semibold text-[#374151] flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
               Imprimir / PDF
@@ -473,8 +473,8 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
               disabled={isSyncing}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
                 syncDone 
-                  ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-300" 
-                  : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20"
+                  ? "bg-emerald-50 border border-emerald-200 text-emerald-800" 
+                  : "bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white shadow-xs"
               }`}
             >
               {isSyncing ? (
@@ -497,7 +497,7 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
 
             <button
               onClick={handleDownloadHtml}
-              className="px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 rounded-lg text-xs font-semibold text-indigo-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-3 py-1.5 bg-[#FF5A00]/10 hover:bg-[#FF5A00]/20 border border-[#FF5A00]/20 rounded-lg text-xs font-semibold text-[#FF5A00] flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Baixar proposta formatada como arquivo HTML para abrir e imprimir no navegador"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -506,7 +506,7 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
 
             <button
               onClick={handleDownload}
-              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-medium text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-3 py-1.5 bg-white hover:bg-[#F3F4F6] border border-[#D1D5DB] rounded-lg text-xs font-medium text-[#374151] flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Baixar código fonte em Markdown"
             >
               <HardDriveDownload className="w-3.5 h-3.5" />
@@ -516,16 +516,16 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
         </div>
 
         {/* Content Viewer pane */}
-        <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-900/40">
+        <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-[#F3F4F6]">
           <div 
-            className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-8 md:p-14 shadow-2xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
+            className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-8 md:p-14 shadow-xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
             style={{ backgroundColor: "#ffffff", color: "#0f172a" }}
           >
             {isEditing ? (
               <textarea
                 value={markdownText}
                 onChange={(e) => setMarkdownText(e.target.value)}
-                className="w-full h-full min-h-[500px] bg-white text-slate-900 font-sans text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500 border border-slate-300 p-4 rounded-lg selection:bg-indigo-100"
+                className="w-full h-full min-h-[500px] bg-white text-slate-900 font-sans text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#FF5A00] border border-slate-300 p-4 rounded-lg selection:bg-orange-100"
                 style={{ backgroundColor: "#ffffff", color: "#0f172a", lineHeight: "1.7" }}
                 placeholder="Escreva aqui seu modelo estruturado..."
               />
@@ -538,9 +538,9 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
         </div>
 
         {/* Sync Indicator footer */}
-        <div className="bg-white/5 border-t border-white/10 px-4 py-3 shrink-0 flex items-center justify-between text-[11px] text-slate-400">
+        <div className="bg-white border-t border-[#E5E7EB] px-4 py-3 shrink-0 flex items-center justify-between text-[11px] text-[#6B7280]">
           <span className="flex items-center gap-1">
-            <Database className="w-3.5 h-3.5 text-indigo-400" />
+            <Database className="w-3.5 h-3.5 text-[#FF5A00]" />
             Integrado ao Google Sheets e Drive automaticamente.
           </span>
           <span className="font-mono text-[10px]">UTF-8 Codification</span>

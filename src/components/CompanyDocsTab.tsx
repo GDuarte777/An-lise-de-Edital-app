@@ -1106,85 +1106,84 @@ Retorne exclusivamente o JSON estruturado.
       <div className="w-full min-w-0 space-y-6">
         
         {/* Company Identity Profile */}
-        <div id="company-profile" className="bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-5 shadow-lg relative overflow-hidden group">
-          <div className="absolute top-0 right-0 h-[100px] w-[100px] bg-indigo-500/5 blur-[50px] pointer-events-none rounded-full" />
+        <div id="company-profile" className="bg-white border border-[#E5E7EB] rounded-xl p-5 shadow-xs relative overflow-hidden group">
           
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pb-4 border-b border-white/10">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pb-4 border-b border-[#E5E7EB]">
             <div className="flex items-center gap-3">
-              <div className="bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 p-2.5 rounded-lg">
+              <div className="bg-[#FFF0E5] text-[#FF5A00] border border-[#FFD6C2] p-2.5 rounded-lg">
                 <Building2 className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-semibold text-white text-base">Dados Cadastrais da Empresa</h3>
-                <p className="text-slate-400 text-xs">Informações jurídicas para auto-preenchimento de contratos e declarações</p>
+                <h3 className="font-semibold text-[#111827] text-base">Dados Cadastrais da Empresa</h3>
+                <p className="text-[#6B7280] text-xs">Informações jurídicas para auto-preenchimento de contratos e declarações</p>
               </div>
             </div>
             
-            <div className="bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 rounded-full px-3 py-1 text-[11px] font-semibold flex items-center gap-1.5 self-start sm:self-auto shrink-0 shadow-inner">
+            <div className="bg-[#FFF0E5] border border-[#FFD6C2] text-[#FF5A00] rounded-full px-3 py-1 text-[11px] font-semibold flex items-center gap-1.5 self-start sm:self-auto shrink-0 shadow-xs">
               <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#FF5A00] opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#FF5A00]"></span>
               </span>
               Auto-preenchimento por IA Ativo
             </div>
           </div>
           
-          <div className="bg-gradient-to-r from-indigo-950/30 to-slate-900/40 border border-indigo-500/10 rounded-xl p-3.5 mb-5 text-xs text-slate-300 leading-relaxed flex items-start gap-3">
-            <span className="text-indigo-400 text-lg select-none">✨</span>
+          <div className="bg-[#FFF0E5] border border-[#FFD6C2] rounded-xl p-3.5 mb-5 text-xs text-[#374151] leading-relaxed flex items-start gap-3">
+            <span className="text-[#FF5A00] text-lg select-none">✨</span>
             <div>
-              <p className="font-semibold text-indigo-300 mb-0.5">Dica de Produtividade:</p>
-              Ao fazer o upload de documentos como <strong className="text-white font-medium">Contrato Social</strong>, <strong className="text-white font-medium">CNPJ</strong> ou <strong className="text-white font-medium">Inscrição Estadual</strong> na tabela abaixo, a IA irá ler o arquivo, extrair as informações oficiais da sua empresa e <strong className="text-indigo-200">preencher estes campos automaticamente</strong> em tempo real!
+              <p className="font-semibold text-[#FF5A00] mb-0.5">Dica de Produtividade:</p>
+              Ao fazer o upload de documentos como <strong className="text-[#111827] font-medium">Contrato Social</strong>, <strong className="text-[#111827] font-medium">CNPJ</strong> ou <strong className="text-[#111827] font-medium">Inscrição Estadual</strong> na tabela abaixo, a IA irá ler o arquivo, extrair as informações oficiais da sua empresa e <strong className="text-[#FF5A00]">preencher estes campos automaticamente</strong> em tempo real!
             </div>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Razão Social / Nome da Empresa</label>
+              <label className="block text-xs font-medium text-[#4B5563] mb-1">Razão Social / Nome da Empresa</label>
               <textarea 
                 rows={1}
                 value={companyData.razonSocial} 
                 onChange={(e) => handleCompanyChange("razonSocial", e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500 font-medium resize-none min-h-[40px] leading-relaxed"
+                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 font-medium resize-none min-h-[40px] leading-relaxed"
                 placeholder="Exemplo Ltda"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">CNPJ</label>
+              <label className="block text-xs font-medium text-[#4B5563] mb-1">CNPJ</label>
               <input 
                 type="text" 
                 value={companyData.cnpj} 
                 onChange={(e) => handleCompanyChange("cnpj", e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500 font-mono"
+                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 font-mono"
                 placeholder="12.345.678/0001-90"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Representante Legal (Sócio / Diretor)</label>
+              <label className="block text-xs font-medium text-[#4B5563] mb-1">Representante Legal (Sócio / Diretor)</label>
               <input 
                 type="text" 
                 value={companyData.representativeName} 
                 onChange={(e) => handleCompanyChange("representativeName", e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500"
+                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
                 placeholder="Nome do outorgado ou responsável"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">CPF do Representante</label>
+              <label className="block text-xs font-medium text-[#4B5563] mb-1">CPF do Representante</label>
               <input 
                 type="text" 
                 value={companyData.representativeCpf} 
                 onChange={(e) => handleCompanyChange("representativeCpf", e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500 font-mono"
+                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 font-mono"
                 placeholder="123.456.789-00"
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-xs font-medium text-slate-400 mb-1">Endereço da Empresa</label>
+              <label className="block text-xs font-medium text-[#4B5563] mb-1">Endereço da Empresa</label>
               <textarea 
                 rows={2}
                 value={companyData.address} 
                 onChange={(e) => handleCompanyChange("address", e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500 resize-none min-h-[60px] leading-relaxed"
+                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 resize-none min-h-[60px] leading-relaxed"
                 placeholder="Av. Paulista, 1000 - Bela Vista, São Paulo - SP"
               />
             </div>
@@ -1192,15 +1191,15 @@ Retorne exclusivamente o JSON estruturado.
         </div>
 
         {/* Certificate management */}
-        <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-xl p-5 pr-8 md:pr-10 lg:pr-12 shadow-lg min-w-0 w-full overflow-hidden">
+        <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 pr-8 md:pr-10 lg:pr-12 shadow-xs min-w-0 w-full overflow-hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
-              <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 p-2.5 rounded-lg font-bold">
+              <div className="bg-emerald-50 text-emerald-700 border border-emerald-200 p-2.5 rounded-lg font-bold">
                 <Landmark className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-semibold text-white text-base">Certidões e Regularidade Fiscal</h3>
-                <p className="text-slate-400 text-xs">Gestão temporal e controle automático de vencimento de certidões públicas</p>
+                <h3 className="font-semibold text-[#111827] text-base">Certidões e Regularidade Fiscal</h3>
+                <p className="text-[#6B7280] text-xs">Gestão temporal e controle automático de vencimento de certidões públicas</p>
               </div>
             </div>
 
@@ -1210,7 +1209,7 @@ Retorne exclusivamente o JSON estruturado.
                 setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
                 setShowAddForm(!showAddForm);
               }}
-              className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg px-4 py-2 text-sm font-medium transition-all shadow-md shadow-emerald-950/50 cursor-pointer"
+              className="flex items-center justify-center gap-2 bg-[#FF5A00] hover:bg-[#E65000] text-white rounded-lg px-4 py-2 text-sm font-medium transition-all shadow-xs cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               Nova Certidão
@@ -1219,56 +1218,56 @@ Retorne exclusivamente o JSON estruturado.
 
           {/* Add Form Accordion */}
           {showAddForm && (
-            <form onSubmit={handleAddOrEdit} className="bg-white/5 rounded-xl border border-white/10 p-4 mb-6 space-y-4 animate-fade-in text-xs">
-              <h4 className="font-semibold text-white text-sm flex items-center gap-2 border-b border-white/10 pb-2">
-                <FileText className="w-4.5 h-4.5 text-emerald-400" />
+            <form onSubmit={handleAddOrEdit} className="bg-[#F9FAFB] rounded-xl border border-[#E5E7EB] p-4 mb-6 space-y-4 animate-fade-in text-xs">
+              <h4 className="font-semibold text-[#111827] text-sm flex items-center gap-2 border-b border-[#E5E7EB] pb-2">
+                <FileText className="w-4.5 h-4.5 text-[#FF5A00]" />
                 {editingCert ? "Editar Certidão Cadastrada" : "Adicionar Nova Certidão ao Cadastro"}
               </h4>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-slate-400 mb-1 font-sans">Nome Oficial da Certidão / Certificado</label>
+                  <label className="block text-xs font-medium text-[#4B5563] mb-1 font-sans">Nome Oficial da Certidão / Certificado</label>
                   <input 
                     type="text" 
                     required
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     onBlur={handleNameBlur}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-emerald-500"
+                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
                     placeholder="Ex: Certidão Negativa de Tributos Estaduais - SEFAZ"
                   />
-                  <p className="text-[10px] text-slate-500 mt-1">Ao sair deste campo ou salvar, a IA definirá a descrição automaticamente se deixada em branco.</p>
+                  <p className="text-[10px] text-[#6B7280] mt-1">Ao sair deste campo ou salvar, a IA definirá a descrição automaticamente se deixada em branco.</p>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1 font-sans">Data de Emissão (Opcional)</label>
+                  <label className="block text-xs font-medium text-[#4B5563] mb-1 font-sans">Data de Emissão (Opcional)</label>
                   <input 
                     type="date" 
                     value={formData.emissionDate}
                     onChange={(e) => setFormData({ ...formData, emissionDate: e.target.value })}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-emerald-500"
+                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-slate-400 mb-1 font-sans">Data de Vencimento (Opcional)</label>
+                  <label className="block text-xs font-medium text-[#4B5563] mb-1 font-sans">Data de Vencimento (Opcional)</label>
                   <input 
                     type="date" 
                     value={formData.expirationDate}
                     onChange={(e) => setFormData({ ...formData, expirationDate: e.target.value })}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-rose-300 font-medium focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-emerald-500"
+                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-rose-700 font-medium focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
                   />
                 </div>
 
                 <div className="md:col-span-2">
                   <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-medium text-slate-400 font-sans">Observações / Para que serve</label>
+                    <label className="block text-xs font-medium text-[#4B5563] font-sans">Observações / Para que serve</label>
                     {formData.name && formData.name.trim() && (
                       <button
                         type="button"
                         onClick={() => generateNotesWithAi()}
                         disabled={isGeneratingNotes}
-                        className="text-[10px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                        className="text-[10px] text-[#FF5A00] hover:text-[#E65000] flex items-center gap-1 bg-[#FFF0E5] hover:bg-[#FFE3D1] px-2 py-0.5 rounded-md transition-colors cursor-pointer font-semibold"
                       >
                         <Sparkles className={`w-3 h-3 ${isGeneratingNotes ? "animate-spin" : "animate-pulse"}`} />
                         {isGeneratingNotes ? "Descrevendo..." : "Sugerir com IA"}
@@ -1278,24 +1277,24 @@ Retorne exclusivamente o JSON estruturado.
                   <textarea 
                     value={formData.notes}
                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-emerald-500"
+                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
                     rows={2}
                     placeholder="Ex: Utilizada para provar no pregão que não há débitos tributários tributos estaduais no estado sede."
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E5E7EB]">
                 <button
                   type="button"
                   onClick={() => setShowAddForm(false)}
-                  className="bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-4 py-2 text-xs text-slate-300 transition-colors"
+                  className="bg-white border border-[#D1D5DB] rounded-lg px-4 py-2 text-xs text-[#374151] hover:bg-[#F3F4F6] transition-colors"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-md shadow-emerald-950/25"
+                  className="bg-[#FF5A00] hover:bg-[#E65000] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-xs"
                 >
                   {editingCert ? "Salvar Alterações" : "Adicionar ao Cadastro"}
                 </button>
@@ -1313,14 +1312,14 @@ Retorne exclusivamente o JSON estruturado.
 
           {/* Error message for alerts/failures */}
           {errorMessage && (
-            <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-4 py-3 rounded-xl mb-4 text-xs flex items-center justify-between gap-2.5">
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl mb-4 text-xs flex items-center justify-between gap-2.5">
               <div className="flex items-center gap-2.5">
-                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
                 <span>{errorMessage}</span>
               </div>
               <button 
                 onClick={() => setErrorMessage(null)} 
-                className="text-rose-400 hover:text-rose-300 text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
+                className="text-rose-700 hover:text-rose-900 text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
               >
                 Fechar
               </button>
@@ -1329,20 +1328,20 @@ Retorne exclusivamente o JSON estruturado.
 
           {/* Quick Status Filters */}
           <div className="mb-4">
-            <p className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider font-mono">Organizar e Filtrar Certidões:</p>
-            <div className="flex flex-wrap gap-1.5 p-1 bg-white/[0.03] border border-white/10 rounded-xl">
+            <p className="text-xs font-semibold text-[#6B7280] mb-2 uppercase tracking-wider font-mono">Organizar e Filtrar Certidões:</p>
+            <div className="flex flex-wrap gap-1.5 p-1 bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl">
               <button
                 type="button"
                 onClick={() => setStatusFilter("all")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "all"
-                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-950/40"
-                    : "text-slate-400 hover:text-white hover:bg-white/5"
+                    ? "bg-[#111827] text-white shadow-xs"
+                    : "text-[#6B7280] hover:text-[#111827] hover:bg-white"
                 }`}
               >
                 <span>Todas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "all" ? "bg-white/20 text-white" : "bg-white/5 text-slate-400"
+                  statusFilter === "all" ? "bg-white/20 text-white" : "bg-gray-200 text-[#4B5563]"
                 }`}>
                   {certs.length}
                 </span>
@@ -1353,14 +1352,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("expired")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "expired"
-                    ? "bg-rose-600 text-white shadow-md shadow-rose-950/40"
-                    : "text-rose-400/80 hover:text-rose-300 hover:bg-rose-500/10"
+                    ? "bg-rose-600 text-white shadow-xs"
+                    : "text-rose-700 hover:bg-rose-50"
                 }`}
               >
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 <span>Vencidas / Alertas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "expired" ? "bg-white/20 text-white" : "bg-rose-500/10 text-rose-350"
+                  statusFilter === "expired" ? "bg-white/20 text-white" : "bg-rose-100 text-rose-700"
                 }`}>
                   {certs.filter(c => c.fileUploaded && (evaluateStatus(c.expirationDate) === "expired" || c.documentMatchesRow === false)).length}
                 </span>
@@ -1371,14 +1370,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("valid")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "valid"
-                    ? "bg-emerald-600 text-white shadow-md shadow-emerald-950/40"
-                    : "text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
+                    ? "bg-emerald-600 text-white shadow-xs"
+                    : "text-emerald-700 hover:bg-emerald-50"
                 }`}
               >
                 <CheckCircle className="w-3.5 h-3.5 shrink-0" />
                 <span>Válidas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "valid" ? "bg-white/20 text-white" : "bg-emerald-500/10 text-emerald-350"
+                  statusFilter === "valid" ? "bg-white/20 text-white" : "bg-emerald-100 text-emerald-700"
                 }`}>
                   {certs.filter(c => c.fileUploaded && evaluateStatus(c.expirationDate) === "valid" && c.documentMatchesRow !== false).length}
                 </span>
@@ -1389,14 +1388,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("expiring_soon")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "expiring_soon"
-                    ? "bg-yellow-600 text-white shadow-md shadow-yellow-950/40"
-                    : "text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10"
+                    ? "bg-amber-600 text-white shadow-xs"
+                    : "text-amber-700 hover:bg-amber-50"
                 }`}
               >
                 <Clock className="w-3.5 h-3.5 shrink-0" />
                 <span>Vencendo</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "expiring_soon" ? "bg-white/20 text-white" : "bg-yellow-500/10 text-yellow-400"
+                  statusFilter === "expiring_soon" ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700"
                 }`}>
                   {certs.filter(c => c.fileUploaded && evaluateStatus(c.expirationDate) === "expiring_soon").length}
                 </span>
@@ -1407,14 +1406,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("mismatched")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "mismatched"
-                    ? "bg-orange-600 text-white shadow-md shadow-orange-950/40"
-                    : "text-orange-400 hover:text-orange-300 hover:bg-orange-500/10"
+                    ? "bg-orange-600 text-white shadow-xs"
+                    : "text-orange-700 hover:bg-orange-50"
                 }`}
               >
                 <HelpCircle className="w-3.5 h-3.5 shrink-0" />
                 <span>Incompatíveis</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "mismatched" ? "bg-white/20 text-white" : "bg-orange-500/10 text-orange-350"
+                  statusFilter === "mismatched" ? "bg-white/20 text-white" : "bg-orange-100 text-orange-700"
                 }`}>
                   {certs.filter(c => c.fileUploaded && c.documentMatchesRow === false).length}
                 </span>
@@ -1425,14 +1424,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("pending")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "pending"
-                    ? "bg-slate-700 text-white shadow-md shadow-slate-950/40"
-                    : "text-slate-400 hover:text-slate-350 hover:bg-slate-500/10"
+                    ? "bg-[#374151] text-white shadow-xs"
+                    : "text-[#6B7280] hover:bg-gray-100"
                 }`}
               >
                 <FileWarning className="w-3.5 h-3.5 shrink-0" />
                 <span>Não Enviadas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "pending" ? "bg-white/20 text-white" : "bg-slate-500/10 text-slate-400"
+                  statusFilter === "pending" ? "bg-white/20 text-white" : "bg-gray-200 text-[#4B5563]"
                 }`}>
                   {certs.filter(c => !c.fileUploaded).length}
                 </span>
@@ -1442,20 +1441,20 @@ Retorne exclusivamente o JSON estruturado.
 
           {/* Search Bar */}
           <div className="relative mb-4">
-            <Search className="absolute left-3 top-2.5 h-4.5 w-4.5 text-slate-400" />
+            <Search className="absolute left-3 top-2.5 h-4.5 w-4.5 text-[#9CA3AF]" />
             <input 
               type="text" 
               placeholder="Buscar em minhas certidões pelo nome ou observação..." 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-sm bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:bg-slate-900/60 focus:ring-1 focus:ring-indigo-500"
+              className="w-full pl-9 pr-4 py-2 text-sm bg-white border border-[#D1D5DB] rounded-lg text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
             />
           </div>
 
           {hasManuallyOrdered && (
-            <div className="flex items-center justify-between bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-3 py-2 rounded-xl mb-4 text-[11px] animate-in fade-in duration-200">
+            <div className="flex items-center justify-between bg-[#FFF0E5] border border-[#FFD6C2] text-[#FF5A00] px-3 py-2 rounded-xl mb-4 text-[11px] animate-in fade-in duration-200 font-medium">
               <div className="flex items-center gap-2">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <SlidersHorizontal className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
                 <span>Posição personalizada ativa (ordem manual via arrastar).</span>
               </div>
               <button 
@@ -1466,7 +1465,7 @@ Retorne exclusivamente o JSON estruturado.
                   const empty = certs.filter(c => !c.fileUploaded);
                   setCerts([...uploaded, ...empty]);
                 }} 
-                className="text-indigo-400 hover:text-indigo-300 hover:underline text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
+                className="text-[#FF5A00] hover:underline text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
               >
                 Organizar por anexos
               </button>
@@ -1479,7 +1478,7 @@ Retorne exclusivamente o JSON estruturado.
             {/* Mobile Card View (Hidden on medium/large screens) */}
             <div className="block md:hidden space-y-4">
               {filteredCerts.length === 0 ? (
-                <div className="p-8 text-center text-slate-400 text-xs bg-white/5 border border-white/10 rounded-xl">
+                <div className="p-8 text-center text-[#6B7280] text-xs bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl">
                   Nenhuma certidão encontrada correspondendo aos critérios de busca.
                 </div>
               ) : (
@@ -1499,12 +1498,12 @@ Retorne exclusivamente o JSON estruturado.
                       onDrop={(e) => handleRowDrop(e, index)}
                       className={`transition-all duration-250 border rounded-xl p-4.5 space-y-3.5 relative overflow-hidden text-left ${
                         isRowBeingDragged
-                          ? "opacity-40 bg-indigo-950/20 border-dashed border-indigo-500"
+                          ? "opacity-40 bg-[#FFF0E5] border-dashed border-[#FF5A00]"
                           : isDraggingOver
-                          ? "bg-indigo-600/15 border-dashed border-indigo-400/80 scale-[1.01] shadow-lg shadow-indigo-950/30"
+                          ? "bg-[#FFF0E5] border-dashed border-[#FF5A00] scale-[1.01] shadow-md"
                           : isUploaded
-                          ? "bg-white/[0.03] border-white/10 hover:bg-white/5"
-                          : "bg-transparent border-white/5 hover:bg-white/[0.01]"
+                          ? "bg-white border-[#E5E7EB] hover:border-[#D1D5DB]"
+                          : "bg-[#F9FAFB] border-[#E5E7EB]"
                       }`}
                     >
                       {/* Top bar with drag position and main tag info */}
@@ -1512,22 +1511,22 @@ Retorne exclusivamente o JSON estruturado.
                         <div className="flex items-start gap-2.5 min-w-0">
                           {/* Drag Handle button */}
                           <div 
-                            className="flex items-center gap-1.5 bg-white/5 border border-white/10 px-2 py-1 rounded-md text-[10px] font-mono text-slate-400 cursor-grab active:cursor-grabbing hover:bg-white/10 shrink-0"
+                            className="flex items-center gap-1.5 bg-[#F3F4F6] border border-[#E5E7EB] px-2 py-1 rounded-md text-[10px] font-mono text-[#4B5563] cursor-grab active:cursor-grabbing hover:bg-[#E5E7EB] shrink-0"
                             title="Arraste para reordenar"
                           >
-                            <GripVertical className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            <GripVertical className="w-3.5 h-3.5 text-[#9CA3AF] shrink-0" />
                             <span>#{index + 1}</span>
                           </div>
                           
                           <div className="min-w-0">
                             <h4 className={`font-semibold leading-snug text-xs sm:text-sm ${
-                              isDraggingOver ? "text-indigo-300 animate-pulse" :
-                              isUploaded ? "text-slate-100" : "text-slate-400"
+                              isDraggingOver ? "text-[#FF5A00] animate-pulse" :
+                              isUploaded ? "text-[#111827]" : "text-[#4B5563]"
                             }`}>
                               {isDraggingOver ? "✨ Solte o documento aqui!" : cert.name}
                             </h4>
                             {cert.notes && !isDraggingOver && (
-                              <p className="text-slate-500 text-[11px] mt-1 leading-normal">{cert.notes}</p>
+                              <p className="text-[#6B7280] text-[11px] mt-1 leading-normal">{cert.notes}</p>
                             )}
                           </div>
                         </div>
@@ -1536,19 +1535,19 @@ Retorne exclusivamente o JSON estruturado.
                       {/* Attached Document Detail */}
                       {isUploaded && cert.fileName && !isDraggingOver && (
                         <div className="space-y-1.5 pt-0.5">
-                          <div className="flex items-center gap-2 bg-emerald-500/5 border border-emerald-500/10 rounded-lg p-2.5 text-[10.5px] text-emerald-400 font-mono truncate">
-                            <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-[10.5px] text-emerald-800 font-mono truncate">
+                            <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                             <span className="truncate">{cert.fileName}</span>
                           </div>
                           {cert.documentMatchesRow === false && cert.validationFeedback && (
-                            <div className="text-[11px] text-orange-355 bg-orange-500/5 border border-orange-500/15 rounded-lg p-2.5 flex flex-col gap-2 leading-normal">
+                            <div className="text-[11px] text-orange-800 bg-orange-50 border border-orange-200 rounded-lg p-2.5 flex flex-col gap-2 leading-normal">
                               <div className="flex items-start gap-2">
-                                <AlertTriangle className="w-3.5 h-3.5 text-orange-400 shrink-0 mt-0.5" />
+                                <AlertTriangle className="w-3.5 h-3.5 text-orange-600 shrink-0 mt-0.5" />
                                 <span>{cert.validationFeedback}</span>
                               </div>
                               <button
                                 onClick={() => handleManualApprove(cert.id)}
-                                className="text-[10px] w-full text-center font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1 rounded-lg border border-emerald-500/20 transition-colors cursor-pointer mt-1"
+                                className="text-[10px] w-full text-center font-semibold text-emerald-700 hover:bg-emerald-100 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 transition-colors cursor-pointer mt-1"
                               >
                                 ✓ Forçar aprovação deste documento
                               </button>
@@ -1558,39 +1557,39 @@ Retorne exclusivamente o JSON estruturado.
                       )}
 
                       {/* Status badges, expiration date, actions bar */}
-                      <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-white/10">
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#E5E7EB]">
                         {/* Status indicators */}
                         <div className="flex items-center gap-2">
                           {isAnalyzing ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-500/10 text-indigo-300 px-2.5 py-0.5 text-[11px] font-semibold border border-indigo-500/20 animate-pulse">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-[#FFF0E5] text-[#FF5A00] px-2.5 py-0.5 text-[11px] font-semibold border border-[#FFD6C2] animate-pulse">
                               <Loader2 className="w-3 h-3 animate-spin" />
                               Lendo...
                             </span>
                           ) : !isUploaded ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-slate-500/10 text-slate-400 px-2.5 py-0.5 text-[11px] font-semibold border border-slate-500/20">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 text-[#6B7280] px-2.5 py-0.5 text-[11px] font-semibold border border-gray-200">
                               Pendente
                             </span>
                           ) : (
                             <>
                               {cert.documentMatchesRow === false ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 text-orange-355 px-2.5 py-0.5 text-[11px] font-semibold border border-orange-500/20">
-                                  <AlertTriangle className="w-3 h-3 text-orange-450" />
+                                <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 text-orange-700 px-2.5 py-0.5 text-[11px] font-semibold border border-orange-200">
+                                  <AlertTriangle className="w-3 h-3 text-orange-600" />
                                   Tipo Errado
                                 </span>
                               ) : (
                                 <>
                                   {status === "expired" && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 text-rose-305 px-2.5 py-0.5 text-[11px] font-semibold border border-rose-500/20">
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 text-rose-700 px-2.5 py-0.5 text-[11px] font-semibold border border-rose-200">
                                       Vencida
                                     </span>
                                   )}
                                   {status === "expiring_soon" && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-yellow-500/10 text-yellow-400 px-2.5 py-0.5 text-[11px] font-semibold border border-yellow-500/20">
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-700 px-2.5 py-0.5 text-[11px] font-semibold border border-amber-200">
                                       Vencendo
                                     </span>
                                   )}
                                   {status === "valid" && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 text-emerald-305 px-2.5 py-0.5 text-[11px] font-semibold border border-emerald-500/20">
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 px-2.5 py-0.5 text-[11px] font-semibold border border-emerald-200">
                                       Válida
                                     </span>
                                   )}
@@ -1601,19 +1600,19 @@ Retorne exclusivamente o JSON estruturado.
                         </div>
 
                         {/* Expiration date metadata */}
-                        <div className="flex items-center gap-1 text-[11px] font-mono text-slate-400">
-                          <span className="text-slate-500">Vencimento:</span>
-                          <span className={isUploaded && status === "expired" ? "text-rose-400 font-bold" : isUploaded && status === "expiring_soon" ? "text-yellow-400 font-semibold" : "text-slate-300"}>
+                        <div className="flex items-center gap-1 text-[11px] font-mono text-[#6B7280]">
+                          <span className="text-[#9CA3AF]">Vencimento:</span>
+                          <span className={isUploaded && status === "expired" ? "text-rose-600 font-bold" : isUploaded && status === "expiring_soon" ? "text-amber-600 font-semibold" : "text-[#374151]"}>
                             {isAnalyzing ? "-" : !isUploaded ? "Pendente" : cert.expirationDate ? new Date(cert.expirationDate).getUTCDate() ? new Date(cert.expirationDate).getUTCDate().toString().padStart(2, '0') + '/' + (new Date(cert.expirationDate).getUTCMonth() + 1).toString().padStart(2, '0') + '/' + new Date(cert.expirationDate).getUTCFullYear() : new Date(cert.expirationDate).toLocaleDateString("pt-BR") : "Sem Vencimento"}
                           </span>
                         </div>
 
                         {/* Unified Action Button list */}
-                        <div className="w-full sm:w-auto flex items-center justify-end gap-2 pt-2.5 sm:pt-0 border-t sm:border-t-0 border-white/5">
+                        <div className="w-full sm:w-auto flex items-center justify-end gap-2 pt-2.5 sm:pt-0 border-t sm:border-t-0 border-[#E5E7EB]">
                           {isAnalyzing ? (
-                            <span className="text-[11px] text-indigo-400 animate-pulse font-medium">Processando arquivo...</span>
+                            <span className="text-[11px] text-[#FF5A00] animate-pulse font-medium">Processando arquivo...</span>
                           ) : !isUploaded ? (
-                            <label className="w-full sm:w-auto flex items-center justify-center gap-1.5 bg-indigo-600/15 hover:bg-indigo-600/25 border border-indigo-500/30 text-indigo-300 font-semibold rounded-lg px-3.5 py-2 text-[11px] transition duration-150 cursor-pointer shadow-sm">
+                            <label className="w-full sm:w-auto flex items-center justify-center gap-1.5 bg-[#FFF0E5] hover:bg-[#FFE3D1] border border-[#FFD6C2] text-[#FF5A00] font-semibold rounded-lg px-3.5 py-2 text-[11px] transition duration-150 cursor-pointer shadow-xs">
                               <FileUp className="w-3.5 h-3.5" />
                               <span>Fazer Upload IA</span>
                               <input
@@ -1627,14 +1626,14 @@ Retorne exclusivamente o JSON estruturado.
                             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
                               <button
                                 onClick={() => startEdit(cert)}
-                                className="flex items-center justify-center gap-1 border border-white/10 hover:border-indigo-500/30 hover:bg-indigo-500/10 text-slate-300 hover:text-indigo-300 px-3 py-1.5 rounded-lg transition duration-150 cursor-pointer text-[11px]"
+                                className="flex items-center justify-center gap-1 border border-[#D1D5DB] hover:bg-[#F3F4F6] text-[#374151] px-3 py-1.5 rounded-lg transition duration-150 cursor-pointer text-[11px]"
                               >
                                 <Edit2 className="w-3 h-3" />
                                 <span>Editar</span>
                               </button>
                               <button
                                 onClick={() => handleDeleteAttachment(cert.id)}
-                                className="flex items-center justify-center gap-1 bg-rose-500/10 border border-rose-500/20 text-rose-300 hover:bg-rose-500/20 px-3 py-1.5 rounded-lg transition duration-150 cursor-pointer text-[11px]"
+                                className="flex items-center justify-center gap-1 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition duration-150 cursor-pointer text-[11px]"
                               >
                                 <Trash2 className="w-3 h-3" />
                                 <span>Excluir</span>
@@ -1650,9 +1649,9 @@ Retorne exclusivamente o JSON estruturado.
             </div>
 
             {/* Desktop Table View (Hidden on mobile/tablet) */}
-            <div className="hidden md:block overflow-x-auto rounded-lg border border-white/10 w-full">
+            <div className="hidden md:block overflow-x-auto rounded-xl border border-[#E5E7EB] w-full bg-white shadow-xs">
               <table className="w-full min-w-[700px] text-left text-sm whitespace-normal table-fixed">
-                <thead className="bg-white/5 text-slate-300 border-b border-white/10 text-xs uppercase tracking-wider font-semibold">
+                <thead className="bg-[#F9FAFB] text-[#4B5563] border-b border-[#E5E7EB] text-xs uppercase tracking-wider font-semibold">
                   <tr>
                     <th className="p-2.5 w-[50px] text-center whitespace-nowrap shrink-0">Pos.</th>
                     <th className="p-2.5">Nome do Documento / Propósito</th>
@@ -1661,10 +1660,10 @@ Retorne exclusivamente o JSON estruturado.
                     <th className="p-2.5 pl-2.5 pr-4 w-[130px] text-center whitespace-nowrap shrink-0">Ações</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/10">
+                <tbody className="divide-y divide-[#E5E7EB]">
                   {filteredCerts.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-slate-400 text-xs">
+                      <td colSpan={5} className="p-8 text-center text-[#6B7280] text-xs">
                         Nenhuma certidão encontrada correspondendo aos critérios de busca.
                       </td>
                     </tr>
@@ -1685,17 +1684,17 @@ Retorne exclusivamente o JSON estruturado.
                           onDrop={(e) => handleRowDrop(e, index)}
                           className={`transition-all duration-200 relative ${
                             isRowBeingDragged
-                              ? "opacity-40 bg-indigo-950/20 border-2 border-dashed border-indigo-500"
+                              ? "opacity-40 bg-[#FFF0E5] border-2 border-dashed border-[#FF5A00]"
                               : isDraggingOver 
-                              ? "bg-indigo-600/15 border-y-2 border-dashed border-indigo-400/80 scale-[1.005] shadow-lg shadow-indigo-950/30" 
+                              ? "bg-[#FFF0E5] border-y-2 border-dashed border-[#FF5A00] scale-[1.005] shadow-sm" 
                               : isUploaded 
-                              ? "bg-white/[0.02] hover:bg-white/5 border border-transparent" 
-                              : "bg-transparent hover:bg-white/[0.01] border border-transparent"
+                              ? "bg-white hover:bg-[#F9FAFB]" 
+                              : "bg-[#FAFAFA] hover:bg-[#F3F4F6]"
                           }`}
                         >
                           {/* Drag Handle Column */}
-                          <td className="p-2.5 w-[50px] text-center cursor-grab active:cursor-grabbing hover:bg-white/5 transition-colors group/drag" title="Clique e arraste para reordenar esta certidão">
-                            <div className="flex items-center justify-center text-slate-550 group-hover/drag:text-indigo-400">
+                          <td className="p-2.5 w-[50px] text-center cursor-grab active:cursor-grabbing hover:bg-[#F3F4F6] transition-colors group/drag" title="Clique e arraste para reordenar esta certidão">
+                            <div className="flex items-center justify-center text-[#9CA3AF] group-hover/drag:text-[#FF5A00]">
                               <GripVertical className="w-4.5 h-4.5 shrink-0" />
                             </div>
                           </td>
@@ -1703,40 +1702,40 @@ Retorne exclusivamente o JSON estruturado.
                           <td className="p-2.5 min-w-0">
                             <div className="flex items-start gap-2">
                               <FileText className={`w-4 items-start shrink-0 mt-0.5 ${
-                                isDraggingOver ? "text-indigo-400 animate-bounce" :
-                                !isUploaded ? "text-slate-550" :
-                                cert.documentMatchesRow === false ? "text-orange-400" :
-                                status === "expired" ? "text-rose-450" :
-                                status === "expiring_soon" ? "text-yellow-400" : "text-emerald-400"
+                                isDraggingOver ? "text-[#FF5A00] animate-bounce" :
+                                !isUploaded ? "text-[#9CA3AF]" :
+                                cert.documentMatchesRow === false ? "text-orange-600" :
+                                status === "expired" ? "text-rose-600" :
+                                status === "expiring_soon" ? "text-amber-600" : "text-emerald-600"
                               }`} />
                               <div className="min-w-0">
                                 <p className={`font-medium leading-tight text-xs md:text-sm truncate ${
-                                  isDraggingOver ? "text-indigo-300 font-semibold" :
-                                  isUploaded ? "text-slate-100" : "text-slate-400 font-normal"
+                                  isDraggingOver ? "text-[#FF5A00] font-semibold" :
+                                  isUploaded ? "text-[#111827]" : "text-[#6B7280] font-normal"
                                 }`}>
                                   {isDraggingOver ? "✨ Solte o documento aqui!" : cert.name}
                                 </p>
                                 {isDraggingOver ? (
-                                  <p className="text-indigo-400 font-normal text-[10px] mt-0.5 animate-pulse font-sans">
+                                  <p className="text-[#FF5A00] font-normal text-[10px] mt-0.5 animate-pulse font-sans">
                                     Aceita PDF, imagens ou txt.
                                   </p>
                                 ) : (
-                                  cert.notes && <p className="text-slate-500 font-normal text-[11px] mt-0.5 md:leading-normal truncate">{cert.notes}</p>
+                                  cert.notes && <p className="text-[#6B7280] font-normal text-[11px] mt-0.5 md:leading-normal truncate">{cert.notes}</p>
                                 )}
                                 {isUploaded && cert.fileName && !isDraggingOver && (
                                   <div className="mt-1 space-y-1">
-                                    <p className="text-[10px] text-emerald-400 font-mono flex items-center gap-1 bg-emerald-500/10 border border-emerald-500/20 rounded px-1.5 py-0.5 w-max truncate max-w-full">
+                                    <p className="text-[10px] text-emerald-800 font-mono flex items-center gap-1 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 w-max truncate max-w-full">
                                       <span>📄 {cert.fileName}</span>
                                     </p>
                                     {cert.documentMatchesRow === false && cert.validationFeedback && (
-                                      <div className="text-[10px] text-orange-355 bg-orange-500/10 border border-orange-500/20 rounded-lg p-1.5 flex flex-col gap-1.5 leading-normal max-w-full">
+                                      <div className="text-[10px] text-orange-800 bg-orange-50 border border-orange-200 rounded-lg p-1.5 flex flex-col gap-1.5 leading-normal max-w-full">
                                         <div className="flex items-start gap-1">
-                                          <AlertTriangle className="w-3 h-3 text-orange-400 shrink-0 mt-0.5 animate-pulse" />
+                                          <AlertTriangle className="w-3 h-3 text-orange-600 shrink-0 mt-0.5 animate-pulse" />
                                           <span>{cert.validationFeedback}</span>
                                         </div>
                                         <button
                                           onClick={() => handleManualApprove(cert.id)}
-                                          className="text-[9px] w-max font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/20 transition-colors cursor-pointer mt-0.5"
+                                          className="text-[9px] w-max font-semibold text-emerald-700 hover:bg-emerald-100 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 transition-colors cursor-pointer mt-0.5"
                                           title="Ignorar incompatibilidade identificada pela IA e aprovar o documento"
                                         >
                                           ✓ Forçar aprovação deste documento
@@ -1751,37 +1750,37 @@ Retorne exclusivamente o JSON estruturado.
                           
                           <td className="p-2.5 w-[110px] text-center">
                             {isAnalyzing ? (
-                              <span className="inline-flex items-center gap-0.5 rounded-full bg-indigo-500/10 text-indigo-300 px-1.5 py-0.5 text-[10px] font-semibold border border-indigo-500/20 animate-pulse">
+                              <span className="inline-flex items-center gap-0.5 rounded-full bg-[#FFF0E5] text-[#FF5A00] px-1.5 py-0.5 text-[10px] font-semibold border border-[#FFD6C2] animate-pulse">
                                 <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
                                 Lendo...
                               </span>
                             ) : !isUploaded ? (
-                              <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-500/10 text-slate-400 px-1.5 py-0.5 text-[10px] font-semibold border border-slate-500/20">
+                              <span className="inline-flex items-center gap-0.5 rounded-full bg-gray-100 text-[#6B7280] px-1.5 py-0.5 text-[10px] font-semibold border border-gray-200">
                                 Pendente
                               </span>
                             ) : (
                               <>
                                 {cert.documentMatchesRow === false ? (
-                                  <span className="inline-flex items-center gap-0.5 rounded-full bg-orange-500/10 text-orange-355 px-1.5 py-0.5 text-[10px] font-semibold border border-orange-505/20" title={cert.validationFeedback}>
-                                    <AlertTriangle className="w-3 h-3 shrink-0 text-orange-450" />
+                                  <span className="inline-flex items-center gap-0.5 rounded-full bg-orange-50 text-orange-700 px-1.5 py-0.5 text-[10px] font-semibold border border-orange-200" title={cert.validationFeedback}>
+                                    <AlertTriangle className="w-3 h-3 shrink-0 text-orange-600" />
                                     Incompatível
                                   </span>
                                 ) : (
                                   <>
                                     {status === "expired" && (
-                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-500/10 text-rose-305 px-1.5 py-0.5 text-[10px] font-semibold border border-rose-500/20">
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-50 text-rose-700 px-1.5 py-0.5 text-[10px] font-semibold border border-rose-200">
                                         <AlertTriangle className="w-3 h-3 shrink-0" />
                                         Vencida
                                       </span>
                                     )}
                                     {status === "expiring_soon" && (
-                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-yellow-500/10 text-yellow-400 px-1.5 py-0.5 text-[10px] font-semibold border border-yellow-500/20">
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 text-amber-700 px-1.5 py-0.5 text-[10px] font-semibold border border-amber-200">
                                         <Clock className="w-3 h-3 shrink-0 animate-pulse" />
                                         Vencendo
                                       </span>
                                     )}
                                     {status === "valid" && (
-                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/10 text-emerald-305 px-1.5 py-0.5 text-[10px] font-semibold border border-emerald-500/20">
+                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 px-1.5 py-0.5 text-[10px] font-semibold border border-emerald-200">
                                         <CheckCircle className="w-3 h-3 shrink-0" />
                                         Válida
                                       </span>
@@ -1794,13 +1793,13 @@ Retorne exclusivamente o JSON estruturado.
 
                           <td className="p-2.5 w-[100px] text-center whitespace-nowrap">
                             {isAnalyzing ? (
-                              <span className="text-slate-550 text-xs font-mono">-</span>
+                              <span className="text-[#9CA3AF] text-xs font-mono">-</span>
                             ) : !isUploaded ? (
-                              <span className="text-slate-550 text-[11px] font-mono font-normal">Pendente</span>
+                              <span className="text-[#9CA3AF] text-[11px] font-mono font-normal">Pendente</span>
                             ) : (
                               <span className={`text-[11px] font-medium font-mono ${
-                                status === "expired" ? "text-rose-300 font-bold" :
-                                status === "expiring_soon" ? "text-yellow-400 font-semibold" : "text-slate-300"
+                                status === "expired" ? "text-rose-600 font-bold" :
+                                status === "expiring_soon" ? "text-amber-600 font-semibold" : "text-[#374151]"
                               }`}>
                                 {cert.expirationDate ? new Date(cert.expirationDate).getUTCDate() ? new Date(cert.expirationDate).getUTCDate().toString().padStart(2, '0') + '/' + (new Date(cert.expirationDate).getUTCMonth() + 1).toString().padStart(2, '0') + '/' + new Date(cert.expirationDate).getUTCFullYear() : new Date(cert.expirationDate).toLocaleDateString("pt-BR") : "Sem Venc."}
                               </span>
@@ -1810,9 +1809,9 @@ Retorne exclusivamente o JSON estruturado.
                           <td className="p-2.5 pl-2.5 pr-4 w-[130px] text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1">
                               {isAnalyzing ? (
-                                <span className="text-[10px] text-indigo-400 font-medium animate-pulse">Lendo...</span>
+                                <span className="text-[10px] text-[#FF5A00] font-medium animate-pulse">Lendo...</span>
                               ) : !isUploaded ? (
-                                <label className="flex items-center justify-center gap-1 bg-indigo-600/15 hover:bg-indigo-600/25 border border-indigo-500/30 text-indigo-300 font-semibold rounded px-1.5 py-1 text-[10px] transition duration-150 cursor-pointer shadow-sm">
+                                <label className="flex items-center justify-center gap-1 bg-[#FFF0E5] hover:bg-[#FFE3D1] border border-[#FFD6C2] text-[#FF5A00] font-semibold rounded px-1.5 py-1 text-[10px] transition duration-150 cursor-pointer shadow-xs">
                                   <FileUp className="w-3 h-3" />
                                   <span>Upload</span>
                                   <input 
@@ -1826,17 +1825,17 @@ Retorne exclusivamente o JSON estruturado.
                                 <div className="flex items-center gap-1">
                                   <button
                                     onClick={() => startEdit(cert)}
-                                    className="text-slate-400 hover:text-indigo-400 p-1 hover:bg-white/5 rounded transition-colors cursor-pointer"
+                                    className="text-[#6B7280] hover:text-[#FF5A00] p-1 hover:bg-[#F3F4F6] rounded transition-colors cursor-pointer"
                                     title="Editar data ou informações de vencimento"
                                   >
                                     <Edit2 className="w-3.5 h-3.5" />
                                   </button>
                                   <button
                                     onClick={() => handleDeleteAttachment(cert.id)}
-                                    className="text-slate-400 hover:text-rose-450 p-1 hover:bg-rose-500/10 rounded transition-colors cursor-pointer"
+                                    className="text-[#6B7280] hover:text-rose-600 p-1 hover:bg-rose-50 rounded transition-colors cursor-pointer"
                                     title="Remover arquivo carregado"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5 text-slate-550 hover:text-rose-400" />
+                                    <Trash2 className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                               )}
@@ -1853,8 +1852,8 @@ Retorne exclusivamente o JSON estruturado.
           </div>
           
           {/* Note */}
-          <div className="flex items-center gap-2 text-xs text-slate-400 mt-4 leading-normal">
-            <span className="shrink-0 bg-white/5 border border-white/10 text-slate-300 w-4 h-4 rounded-full flex items-center justify-center font-bold">!</span>
+          <div className="flex items-center gap-2 text-xs text-[#6B7280] mt-4 leading-normal">
+            <span className="shrink-0 bg-[#F3F4F6] border border-[#E5E7EB] text-[#374151] w-4 h-4 rounded-full flex items-center justify-center font-bold">!</span>
             <span>A análise temporal de vigência é calculada dinamicamente com base na data do sistema consolidada em <strong>18 de Junho de 2026</strong>.</span>
           </div>
 
@@ -1862,19 +1861,19 @@ Retorne exclusivamente o JSON estruturado.
       </div>
 
       {confirmDialog && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 shadow-2xl shadow-black/80 animate-in fade-in zoom-in-95 duration-200">
-            <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-[9999] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#E5E7EB] rounded-2xl max-w-sm w-full p-6 shadow-xl animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-sm font-semibold text-[#111827] mb-2 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
               {confirmDialog.title}
             </h3>
-            <p className="text-xs text-slate-300 mb-6 leading-relaxed">
+            <p className="text-xs text-[#4B5563] mb-6 leading-relaxed">
               {confirmDialog.message}
             </p>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setConfirmDialog(null)}
-                className="px-3.5 py-2 text-xs font-semibold text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer border border-slate-700"
+                className="px-3.5 py-2 text-xs font-semibold text-[#374151] hover:bg-[#F3F4F6] bg-white rounded-xl transition-all cursor-pointer border border-[#D1D5DB]"
               >
                 Cancelar
               </button>
@@ -1883,7 +1882,7 @@ Retorne exclusivamente o JSON estruturado.
                   confirmDialog.onConfirm();
                   setConfirmDialog(null);
                 }}
-                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 rounded-xl transition-all cursor-pointer shadow-md shadow-rose-950/25"
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl transition-all cursor-pointer shadow-xs"
               >
                 Confirmar
               </button>

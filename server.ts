@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import JSZip from "jszip";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -3423,6 +3424,69 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
 
   app.get("/api/session/current", (req, res) => {
     return res.json(globalCapturedCredentials);
+  });
+
+  // Helper function to dynamically generate valid Chrome extension ZIP
+  async function generateExtensionZipBuffer(): Promise<Buffer> {
+    const zip = new JSZip();
+    const folder = zip.folder("lancebot-extensao");
+    const extensionDir = path.join(process.cwd(), "public", "extensao-lancebot");
+
+    if (fs.existsSync(extensionDir)) {
+      const files = fs.readdirSync(extensionDir);
+      for (const file of files) {
+        const filePath = path.join(extensionDir, file);
+        if (fs.statSync(filePath).isFile()) {
+          folder.file(file, fs.readFileSync(filePath));
+        }
+      }
+    }
+
+    const readmeContent = `=====================================================
+  HORASIS LanceBot Pro - Extensão Chrome Oficial
+=====================================================
+
+COMO INSTALAR NO GOOGLE CHROME:
+
+1. Extraia o arquivo ZIP em uma pasta no seu computador (clique com o botão direito -> Extrair Tudo).
+2. Abra o Google Chrome e acesse: chrome://extensions
+3. No canto superior direito, ative a opção "Modo do desenvolvedor".
+4. Clique no botão "Carregar sem compactação" (Load unpacked).
+5. Selecione a pasta "lancebot-extensao" que você acabou de extrair.
+
+Pronto! A extensão estará instalada e pronta para capturar os tokens e cookies da sala de disputa do Compras.gov.br.
+`;
+    folder.file("LEIA-ME_COMO_INSTALAR.txt", readmeContent);
+
+    return await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+      compressionOptions: { level: 9 },
+      platform: "UNIX"
+    });
+  }
+
+  // Endpoint para download da Extensão Chrome compactada (.zip)
+  app.get("/api/download-extension", async (req, res) => {
+    try {
+      const zipBuffer = await generateExtensionZipBuffer();
+
+      // Salva em /public para garantir sincronia no filesystem
+      try {
+        const publicZipPath = path.join(process.cwd(), "public", "lancebot-extensao-horasis.zip");
+        fs.writeFileSync(publicZipPath, zipBuffer);
+      } catch (e) {
+        console.warn("Aviso ao salvar arquivo estático zip em public:", e);
+      }
+
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", 'attachment; filename="lancebot-extensao-horasis.zip"');
+      res.setHeader("Content-Length", zipBuffer.length.toString());
+      return res.status(200).send(zipBuffer);
+    } catch (err: any) {
+      console.error("Erro ao gerar zip da extensão:", err);
+      return res.status(500).json({ error: "Erro ao gerar arquivo zip da extensão: " + err.message });
+    }
   });
 
   // Vite Integration and listen

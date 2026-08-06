@@ -215,22 +215,22 @@ export default function AiConfigTab() {
   };
 
   return (
-    <div id="ai-config-tab" className="space-y-6 animate-fade-in select-text">
+    <div id="ai-config-tab" className="space-y-6 animate-fade-in select-text font-sans">
       
       {/* Header Info Banner */}
-      <div className="bg-gradient-to-r from-blue-600/10 to-indigo-600/10 border border-indigo-500/20 backdrop-blur-md rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white border border-[#E5E7EB] rounded-xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="bg-indigo-500/15 text-indigo-400 p-3 rounded-xl border border-indigo-500/25 shrink-0">
+          <div className="bg-[#FFF0E5] text-[#FF5A00] p-3 rounded-xl border border-[#FFD6C2] shrink-0">
             <Cpu className="w-6 h-6 animate-pulse" />
           </div>
           <div>
-            <h3 className="font-bold text-white text-base flex items-center gap-2">
+            <h3 className="font-bold text-[#111827] text-base flex items-center gap-2">
               Configurações Avançadas de IA & Modelos
-              <span className="text-[10px] bg-indigo-500/20 text-indigo-300 font-semibold px-2 py-0.5 rounded-full border border-indigo-500/30">
+              <span className="text-[10px] bg-[#FFF0E5] text-[#FF5A00] font-semibold px-2 py-0.5 rounded-full border border-[#FFD6C2]">
                 Multi-Provedor
               </span>
             </h3>
-            <p className="text-slate-400 text-xs mt-1 leading-normal max-w-2xl">
+            <p className="text-[#6B7280] text-xs mt-1 leading-normal max-w-2xl">
               Escolha e configure o provedor de Inteligência Artificial ativo para toda a plataforma. Insira sua própria chave de API para habilitar os recursos de IA (Gemini, OpenAI, Anthropic ou DeepSeek).
             </p>
           </div>
@@ -240,11 +240,11 @@ export default function AiConfigTab() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Main Config Form (Left/Center) */}
-        <form onSubmit={handleSave} className="lg:col-span-2 bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-6 space-y-6 shadow-xl">
+        <form onSubmit={handleSave} className="lg:col-span-2 bg-white border border-[#E5E7EB] rounded-xl p-6 space-y-6 shadow-xs">
           
           {/* Provider Selector */}
           <div className="space-y-3">
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+            <label className="text-[11px] font-bold text-[#374151] uppercase tracking-wider block">
               Provedor de Inteligência Artificial Ativo
             </label>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -262,19 +262,19 @@ export default function AiConfigTab() {
                     onClick={() => handleProviderChange(p.id)}
                     className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-1 justify-between select-none ${
                       isActive 
-                        ? "bg-indigo-500/15 border-indigo-500 text-white shadow-lg shadow-indigo-600/10" 
-                        : "bg-slate-950/60 border-white/5 text-slate-400 hover:text-slate-200 hover:bg-slate-900/60"
+                        ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00] shadow-xs" 
+                        : "bg-[#F9FAFB] border-[#E5E7EB] text-[#4B5563] hover:text-[#111827] hover:bg-white"
                     }`}
                   >
                     <span className="font-bold text-xs block">{p.name}</span>
-                    <span className="text-[9px] text-slate-500 block font-normal">{p.desc}</span>
+                    <span className="text-[9px] text-[#6B7280] block font-normal">{p.desc}</span>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <hr className="border-white/5" />
+          <hr className="border-[#E5E7EB]" />
 
           {/* Provider Configuration Forms */}
           <div className="space-y-4">
@@ -282,16 +282,16 @@ export default function AiConfigTab() {
             {/* Gemini Config */}
             {activeProvider === "gemini" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-indigo-400">
+                <div className="flex items-center gap-2 text-[#FF5A00]">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações do Google Gemini</span>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Chave de API do Gemini</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API do Gemini</label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-600">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
                         <Key className="w-4 h-4" />
                       </div>
                       <input
@@ -299,17 +299,17 @@ export default function AiConfigTab() {
                         placeholder="AIzaSy..."
                         value={geminiKey}
                         onChange={(e) => setGeminiKey(e.target.value)}
-                        className="w-full bg-slate-950 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Modelo Ativo</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
                     <select
                       value={geminiModel}
                       onChange={(e) => setGeminiModel(e.target.value)}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
                     >
                       <option value="gemini-3.6-flash">gemini-3.6-flash (Geração Flash - Padrão)</option>
                       <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Leve, Rápido e Estável)</option>
@@ -318,10 +318,10 @@ export default function AiConfigTab() {
                   </div>
                 </div>
 
-                <div className="bg-indigo-950/20 border border-indigo-500/20 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-3 text-xs text-slate-300">
+                <div className="bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-3 text-xs text-[#374151]">
                   <div className="space-y-1 text-left">
-                    <p className="font-bold text-white">Sincronizar com a Nuvem (Supabase Edge)</p>
-                    <p className="text-[10px] text-slate-400 max-w-md leading-normal">
+                    <p className="font-bold text-[#111827]">Sincronizar com a Nuvem (Supabase Edge)</p>
+                    <p className="text-[10px] text-[#6B7280] max-w-md leading-normal">
                       Se você utiliza o roteamento de IA em nuvem por Edge Functions, sincronize essa chave para que a nuvem do Supabase passe a utilizá-la em chamadas automáticas.
                     </p>
                   </div>
@@ -329,7 +329,7 @@ export default function AiConfigTab() {
                     type="button"
                     disabled={syncingSecrets}
                     onClick={handleSyncSupabaseSecrets}
-                    className="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/35 hover:border-indigo-500/50 text-indigo-300 font-bold rounded-lg text-[10px] transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                    className="px-4 py-2 bg-[#FFF0E5] hover:bg-[#FFE4D1] border border-[#FFD6C2] text-[#FF5A00] font-bold rounded-lg text-[10px] transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
                   >
                     {syncingSecrets ? (
                       <>
@@ -348,8 +348,8 @@ export default function AiConfigTab() {
                 {syncSuccess !== null && (
                   <div className={`p-3 rounded-lg text-[10px] leading-relaxed border ${
                     syncSuccess 
-                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
-                      : "bg-rose-500/10 border-rose-500/20 text-rose-300"
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                      : "bg-rose-50 border-rose-200 text-rose-800"
                   }`}>
                     {syncMessage}
                   </div>
@@ -360,16 +360,16 @@ export default function AiConfigTab() {
             {/* OpenAI Config */}
             {activeProvider === "openai" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-indigo-400">
+                <div className="flex items-center gap-2 text-[#FF5A00]">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações da OpenAI (ChatGPT)</span>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Chave de API (OpenAI Key)</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API (OpenAI Key)</label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-600">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
                         <Key className="w-4 h-4" />
                       </div>
                       <input
@@ -377,17 +377,17 @@ export default function AiConfigTab() {
                         placeholder="sk-proj-..."
                         value={openaiKey}
                         onChange={(e) => setOpenaiKey(e.target.value)}
-                        className="w-full bg-slate-950 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Modelo Ativo</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
                     <select
                       value={openaiModel}
                       onChange={(e) => setOpenaiModel(e.target.value)}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
                     >
                       <option value="gpt-4o">gpt-4o (Alta performance)</option>
                       <option value="gpt-4o-mini">gpt-4o-mini (Rápido e econômico)</option>
@@ -403,16 +403,16 @@ export default function AiConfigTab() {
             {/* Anthropic Config */}
             {activeProvider === "anthropic" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-indigo-400">
+                <div className="flex items-center gap-2 text-[#FF5A00]">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações da Anthropic (Claude)</span>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Chave de API (Claude Key)</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API (Claude Key)</label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-600">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
                         <Key className="w-4 h-4" />
                       </div>
                       <input
@@ -420,17 +420,17 @@ export default function AiConfigTab() {
                         placeholder="sk-ant-..."
                         value={anthropicKey}
                         onChange={(e) => setAnthropicKey(e.target.value)}
-                        className="w-full bg-slate-950 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Modelo Ativo</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
                     <select
                       value={anthropicModel}
                       onChange={(e) => setAnthropicModel(e.target.value)}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
                     >
                       <option value="claude-3-7-sonnet-20250219">claude-3-7-sonnet-20250219 (Claude 3.7 Sonnet - Híbrido emblemático)</option>
                       <option value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022 (Claude 3.5 Sonnet v2)</option>
@@ -445,16 +445,16 @@ export default function AiConfigTab() {
             {/* DeepSeek Config */}
             {activeProvider === "deepseek" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-indigo-400">
+                <div className="flex items-center gap-2 text-[#FF5A00]">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações do DeepSeek</span>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Chave de API (DeepSeek Key)</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API (DeepSeek Key)</label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-600">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
                         <Key className="w-4 h-4" />
                       </div>
                       <input
@@ -462,17 +462,17 @@ export default function AiConfigTab() {
                         placeholder="sk-..."
                         value={deepseekKey}
                         onChange={(e) => setDeepseekKey(e.target.value)}
-                        className="w-full bg-slate-950 border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Modelo Ativo</label>
+                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
                     <select
                       value={deepseekModel}
                       onChange={(e) => setDeepseekModel(e.target.value)}
-                      className="w-full bg-slate-950 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
                     >
                       <option value="deepseek-chat">deepseek-chat (DeepSeek V3)</option>
                       <option value="deepseek-reasoner">deepseek-reasoner (DeepSeek R1 com raciocínio profundo)</option>
@@ -484,71 +484,73 @@ export default function AiConfigTab() {
 
           </div>
 
-          <hr className="border-white/5" />
+          <hr className="border-[#E5E7EB]" />
 
           {/* Form Actions */}
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               {saveSuccess ? (
-                <div className="text-emerald-400 font-semibold text-xs flex items-center gap-1.5 animate-bounce">
+                <div className="text-emerald-600 font-semibold text-xs flex items-center gap-1.5 animate-bounce">
                   <CheckCircle className="w-4 h-4" />
                   Configurações salvas e ativas!
                 </div>
               ) : (
-                <p className="text-[10px] text-slate-500 max-w-sm leading-normal">
+                <p className="text-[10px] text-[#6B7280] max-w-sm leading-normal">
                   *As chaves são armazenadas localmente no seu navegador e usadas apenas nas requisições diretas de IA.
                 </p>
               )}
             </div>
 
-            <button
-              type="submit"
-              disabled={saving}
-              className="px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-indigo-600/20 border border-white/10 flex items-center gap-2 transition-all cursor-pointer select-none"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Salvando...
-                </>
-              ) : (
-                <>
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  Salvar Configurações
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex-1 sm:flex-none px-5 py-2.5 bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer select-none"
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Salvar Configurações
+                  </>
+                )}
+              </button>
 
-            <button
-              type="button"
-              onClick={handleTestAi}
-              disabled={testing}
-              className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-emerald-600/20 border border-white/10 flex items-center gap-2 transition-all cursor-pointer select-none disabled:opacity-60"
-            >
-              {testing ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Testando...
-                </>
-              ) : (
-                <>
-                  <Zap className="w-3.5 h-3.5" />
-                  Testar IA Agora
-                </>
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={handleTestAi}
+                disabled={testing}
+                className="flex-1 sm:flex-none px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer select-none disabled:opacity-60"
+              >
+                {testing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Testando...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    Testar IA Agora
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Test Result Banner */}
           {testResult && (
             <div className={`mt-3 p-3 rounded-xl text-xs font-medium flex items-start gap-2 border ${
               testResult.ok 
-                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300" 
-                : "bg-red-500/10 border-red-500/30 text-red-300"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800" 
+                : "bg-red-50 border-red-200 text-red-800"
             }`}>
               {testResult.ok 
-                ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                : <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+                : <XCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
               }
               <span>{testResult.message}</span>
             </div>
@@ -560,8 +562,8 @@ export default function AiConfigTab() {
         <div className="space-y-6">
           
           {/* Status Panel */}
-          <div className="bg-slate-900/60 border border-white/5 backdrop-blur-md rounded-2xl p-5 space-y-4">
-            <h4 className="font-bold text-white text-xs uppercase tracking-wide">Status da Conexão</h4>
+          <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 space-y-4 shadow-xs">
+            <h4 className="font-bold text-[#111827] text-xs uppercase tracking-wide">Status da Conexão</h4>
             
             <div className="space-y-3">
               {[
@@ -572,23 +574,23 @@ export default function AiConfigTab() {
               ].map((prov) => {
                 const hasKey = prov.key && prov.key.length > 5;
                 return (
-                  <div key={prov.name} className="flex items-center justify-between text-xs border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                  <div key={prov.name} className="flex items-center justify-between text-xs border-b border-[#E5E7EB] pb-2 last:border-0 last:pb-0">
                     <div className="flex items-center gap-1.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${prov.active ? "bg-indigo-400" : "bg-slate-700"}`} />
-                      <span className="font-semibold text-slate-300">{prov.name}</span>
+                      <span className={`w-1.5 h-1.5 rounded-full ${prov.active ? "bg-[#FF5A00]" : "bg-gray-300"}`} />
+                      <span className="font-semibold text-[#374151]">{prov.name}</span>
                       {prov.active && (
-                        <span className="text-[8px] bg-indigo-500/10 text-indigo-300 font-bold px-1.5 py-0.2 rounded border border-indigo-500/20">
+                        <span className="text-[8px] bg-[#FFF0E5] text-[#FF5A00] font-bold px-1.5 py-0.2 rounded border border-[#FFD6C2]">
                           ATIVO
                         </span>
                       )}
                     </div>
                     {hasKey ? (
-                      <span className="text-emerald-400 font-bold text-[10px] flex items-center gap-1">
+                      <span className="text-emerald-600 font-bold text-[10px] flex items-center gap-1">
                         <CheckCircle className="w-3.5 h-3.5" />
                         Configurada
                       </span>
                     ) : (
-                      <span className="text-slate-500 text-[10px]">Não informada</span>
+                      <span className="text-[#9CA3AF] text-[10px]">Não informada</span>
                     )}
                   </div>
                 );
@@ -597,23 +599,23 @@ export default function AiConfigTab() {
           </div>
 
           {/* Quick instructions / Help */}
-          <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-5 space-y-3.5">
-            <h4 className="font-bold text-white text-xs uppercase tracking-wide flex items-center gap-1.5">
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 space-y-3.5 shadow-xs">
+            <h4 className="font-bold text-[#111827] text-xs uppercase tracking-wide flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
               Como obter as chaves?
             </h4>
-            <div className="space-y-2.5 text-xs text-slate-400 leading-relaxed">
+            <div className="space-y-2.5 text-xs text-[#6B7280] leading-relaxed">
               <p>
-                <strong>Google Gemini Key:</strong> Obtenha gratuitamente no portal do <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline inline-flex items-center gap-0.5">Google AI Studio <ExternalLink className="w-2.5 h-2.5" /></a>.
+                <strong>Google Gemini Key:</strong> Obtenha gratuitamente no portal do <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">Google AI Studio <ExternalLink className="w-2.5 h-2.5" /></a>.
               </p>
               <p>
-                <strong>OpenAI API Key:</strong> Acesse seu painel de desenvolvedor no site da <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline inline-flex items-center gap-0.5">OpenAI <ExternalLink className="w-2.5 h-2.5" /></a>.
+                <strong>OpenAI API Key:</strong> Acesse seu painel de desenvolvedor no site da <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">OpenAI <ExternalLink className="w-2.5 h-2.5" /></a>.
               </p>
               <p>
-                <strong>Claude Key:</strong> Gerencie suas chaves no Console do desenvolvedor da <a href="https://console.anthropic.com/" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline inline-flex items-center gap-0.5">Anthropic <ExternalLink className="w-2.5 h-2.5" /></a>.
+                <strong>Claude Key:</strong> Gerencie suas chaves no Console do desenvolvedor da <a href="https://console.anthropic.com/" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">Anthropic <ExternalLink className="w-2.5 h-2.5" /></a>.
               </p>
               <p>
-                <strong>DeepSeek Key:</strong> Acesse o portal da <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline inline-flex items-center gap-0.5">DeepSeek API <ExternalLink className="w-2.5 h-2.5" /></a>.
+                <strong>DeepSeek Key:</strong> Acesse o portal da <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">DeepSeek API <ExternalLink className="w-2.5 h-2.5" /></a>.
               </p>
             </div>
           </div>

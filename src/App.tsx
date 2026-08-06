@@ -498,374 +498,271 @@ export default function App() {
   }
 
   return (
-    <div id="application-container" className="min-h-screen lg:h-screen lg:h-[100dvh] lg:overflow-hidden bg-[#0b0f19] text-slate-100 flex flex-col lg:flex-row font-sans select-text relative">
+    <div id="application-container" className="min-h-screen lg:h-screen lg:h-[100dvh] lg:overflow-hidden bg-[#F8F9FA] dark:bg-[#000000] text-[#111827] dark:text-[#FAFAFA] flex flex-col lg:flex-row font-sans select-text relative">
       
-      {/* Glowing Frosted blur background elements */}
-      <div className="absolute top-[-10%] right-[-15%] w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[110px] -z-10 pointer-events-none"></div>
-      <div className="absolute bottom-[-10%] left-[10%] w-[400px] h-[400px] bg-indigo-600/10 rounded-full blur-[90px] -z-10 pointer-events-none"></div>
-
-      {/* Mobile Sticky Navbar Header */}
-      <header className="lg:hidden bg-white/5 border-b border-white/10 backdrop-blur-xl text-white sticky top-0 z-40 px-4 py-3 flex items-center justify-between shadow-lg">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
-          >
-            {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
-          <div className="flex items-center gap-2">
-            <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-1.5 rounded-lg">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <h1 className="text-sm font-bold tracking-tight text-white uppercase font-mono">
-              HORASIS
-            </h1>
-          </div>
-        </div>
-        <ThemeToggle />
-      </header>
-
-      {/* Desktop Sidebar (Persistent) & Mobile Sidebar Drawer */}
+      {/* Desktop Sidebar (Persistent 260px) & Mobile Sidebar Drawer */}
       <aside 
         className={`
-          fixed inset-y-0 left-0 z-50 lg:sticky lg:top-0 h-screen bg-[#0c101e]/95 lg:bg-[#0c101e]/60 border-r border-white/10 p-5 flex flex-col justify-between shadow-2xl backdrop-blur-xl lg:backdrop-blur-md transition-all duration-300 ease-in-out lg:translate-x-0
-          ${sidebarCollapsed ? "lg:w-20 lg:p-3" : "lg:w-72 w-72"}
+          fixed inset-y-0 left-0 z-50 lg:sticky lg:top-0 h-screen bg-white dark:bg-[#09090B] border-r border-gray-100 dark:border-zinc-800/40 p-4 flex flex-col justify-between shadow-xs dark:shadow-none transition-all duration-300 ease-in-out lg:translate-x-0
+          ${sidebarCollapsed ? "lg:w-20 lg:p-3" : "lg:w-[260px] w-[260px]"}
           ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
         `}
       >
-        <div className="flex flex-col h-full gap-6">
+        <div className="flex flex-col h-full gap-3.5">
           
           {/* Logo Brand info inside Sidebar */}
-          <div className="flex items-center justify-between border-b border-white/5 pb-4">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="bg-gradient-to-tr from-blue-500 to-indigo-600 text-white p-2 rounded-xl shadow-lg shadow-indigo-600/20 shrink-0">
-                <ShieldCheck className="w-6 h-6 animate-pulse" />
-              </div>
-              {(!sidebarCollapsed || mobileMenuOpen) && (
-                <div className="transition-opacity duration-200">
-                  <h1 className="text-base font-black tracking-tight text-white leading-tight truncate">
-                    HORASIS
-                  </h1>
-                  <p className="text-[10px] text-indigo-400 mt-0.5 uppercase tracking-wider font-semibold truncate">
-                    Licitações Inteligentes
-                  </p>
+          <div className="flex flex-col border-b border-gray-100 dark:border-zinc-800/40 pb-3.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="bg-gradient-to-br from-[#FF6B1A] to-[#FF5A00] text-white p-2 rounded-xl shrink-0 shadow-xs">
+                  <ShieldCheck className="w-5 h-5" />
                 </div>
-              )}
-            </div>
-            
-            {/* Collapse toggle button for desktop */}
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="hidden lg:flex p-1.5 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer shrink-0"
-              title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}
-            >
-              {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-            </button>
+                {(!sidebarCollapsed || mobileMenuOpen) && (
+                  <div className="transition-opacity duration-200">
+                    <h1 className="text-sm font-black tracking-wider text-gray-900 dark:text-white uppercase font-mono leading-none">
+                      HORASIS
+                    </h1>
+                    <p className="text-[10.5px] text-gray-500 dark:text-zinc-400 mt-0.5 font-semibold truncate">
+                      Enterprise SaaS v3.0
+                    </p>
+                  </div>
+                )}
+              </div>
+              
+              {/* Collapse toggle button for desktop */}
+              <button
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                className="hidden lg:flex p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer shrink-0"
+                title={sidebarCollapsed ? "Expandir menu" : "Recolher menu"}
+              >
+                {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+              </button>
 
-            {/* Close button for Mobile drawer only */}
-            <button
-              onClick={() => setMobileMenuOpen(false)}
-              className="lg:hidden p-1 rounded-lg hover:bg-white/5 border border-transparent hover:border-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
+              {/* Close button for Mobile drawer only */}
+              <button
+                onClick={() => setMobileMenuOpen(false)}
+                className="lg:hidden p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
-          {/* Navigation Links (Vertical sidebar) */}
-          <nav className="flex-1 space-y-1.5 overflow-y-auto pr-1 scrollbar-none">
+          {/* Navigation Links with Micro Group Headers (CORE, OPERATIONS, SETTINGS) */}
+          <nav className="flex-1 space-y-4 overflow-y-auto pr-1 scrollbar-none">
             
-            {/* Nav item: Análise de Edital */}
-            <button
-              id="tab-btn-analyzer"
-              onClick={() => {
-                setActiveTab("analyzer");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "analyzer"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Análise de Edital"
-            >
-              <FileText className="w-4 h-4 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Análise de Edital</span>
-            </button>
+            {/* CORE GROUP */}
+            <div>
+              {(!sidebarCollapsed || mobileMenuOpen) && (
+                <div className="text-[10px] font-extrabold text-gray-400 dark:text-zinc-500 uppercase tracking-widest px-2.5 mb-1.5">
+                  CORE
+                </div>
+              )}
+              <div className="space-y-1">
+                {[
+                  { id: "analyzer", label: "Análise de Edital", icon: FileText },
+                  { id: "radar", label: "Radar de Oportunidades", icon: Search },
+                  { id: "disputasSheet", label: "Planilha de Disputas", icon: FileSpreadsheet }
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      id={`tab-btn-${item.id}`}
+                      onClick={() => { setActiveTab(item.id as any); setMobileMenuOpen(false); }}
+                      className={`group w-full py-2 px-2.5 rounded-lg text-[12.5px] flex items-center transition-all cursor-pointer text-left ${
+                        sidebarCollapsed ? "lg:justify-center lg:px-0 px-2.5 gap-2.5" : "gap-2.5"
+                      } ${
+                        isActive
+                          ? "bg-[#FFF0E5] dark:bg-[#FF5A00]/15 text-[#E65000] dark:text-[#FF5A00] font-bold shadow-2xs border-l-3 border-[#FF5A00]"
+                          : "text-gray-700 dark:text-zinc-300 font-medium hover:bg-gray-100/80 dark:hover:bg-zinc-800/70 hover:text-gray-900 dark:hover:text-white"
+                      }`}
+                      title={item.label}
+                    >
+                      <Icon className={`w-4 h-4 shrink-0 transition-colors ${
+                        isActive 
+                          ? "text-[#FF5A00]" 
+                          : "text-gray-500 dark:text-zinc-400 group-hover:text-gray-800 dark:group-hover:text-zinc-200"
+                      }`} />
+                      <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-            {/* Nav item: Radar de Oportunidades */}
-            <button
-              id="tab-btn-radar"
-              onClick={() => {
-                setActiveTab("radar");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "radar"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Radar de Oportunidades"
-            >
-              <Search className="w-4 h-4 text-sky-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Radar de Oportunidades</span>
-            </button>
+            {/* OPERATIONS GROUP */}
+            <div>
+              {(!sidebarCollapsed || mobileMenuOpen) && (
+                <div className="text-[10px] font-extrabold text-gray-400 dark:text-zinc-500 uppercase tracking-widest px-2.5 mb-1.5">
+                  OPERATIONS
+                </div>
+              )}
+              <div className="space-y-1">
+                {[
+                  { id: "createDoc", label: "Criar Documentos", icon: FileEdit },
+                  { id: "documents", label: "Gestão de Certidões", icon: ListTodo },
+                  { id: "calculator", label: "Calculadora de Preços", icon: Calculator },
+                  { id: "comparator", label: "Comparador de Produtos", icon: Sparkles },
+                  { id: "bot", label: "Robô de Lances", icon: Cpu },
+                  { id: "competitors", label: "Analisar Concorrentes", icon: Users }
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      id={`tab-btn-${item.id}`}
+                      onClick={() => { setActiveTab(item.id as any); setMobileMenuOpen(false); }}
+                      className={`group w-full py-2 px-2.5 rounded-lg text-[12.5px] flex items-center transition-all cursor-pointer text-left ${
+                        sidebarCollapsed ? "lg:justify-center lg:px-0 px-2.5 gap-2.5" : "gap-2.5"
+                      } ${
+                        isActive
+                          ? "bg-[#FFF0E5] dark:bg-[#FF5A00]/15 text-[#E65000] dark:text-[#FF5A00] font-bold shadow-2xs border-l-3 border-[#FF5A00]"
+                          : "text-gray-700 dark:text-zinc-300 font-medium hover:bg-gray-100/80 dark:hover:bg-zinc-800/70 hover:text-gray-900 dark:hover:text-white"
+                      }`}
+                      title={item.label}
+                    >
+                      <Icon className={`w-4 h-4 shrink-0 transition-colors ${
+                        isActive 
+                          ? "text-[#FF5A00]" 
+                          : "text-gray-500 dark:text-zinc-400 group-hover:text-gray-800 dark:group-hover:text-zinc-200"
+                      }`} />
+                      <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-            {/* Nav item: Planilha de Disputas */}
-            <button
-              id="tab-btn-disputas-sheet"
-              onClick={() => {
-                setActiveTab("disputasSheet");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "disputasSheet"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Planilha de Disputas"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Planilha de Disputas</span>
-            </button>
-
-            {/* Nav item: Criar Documentos */}
-            <button
-              id="tab-btn-create-doc"
-              onClick={() => {
-                setActiveTab("createDoc");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "createDoc"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Criar Documentos"
-            >
-              <FileEdit className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Criar Documentos</span>
-            </button>
-
-            {/* Nav item: Gestão de Certidões */}
-            <button
-              id="tab-btn-documents"
-              onClick={() => {
-                setActiveTab("documents");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "documents"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Gestão de Certidões"
-            >
-              <ListTodo className="w-4 h-4 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Gestão de Certidões</span>
-            </button>
-
-            {/* Nav item: Calculadora */}
-            <button
-              id="tab-btn-calculator"
-              onClick={() => {
-                setActiveTab("calculator");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "calculator"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Calculadora de Preços"
-            >
-              <Calculator className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Calculadora de Preços</span>
-            </button>
-
-            {/* Nav item: Comparador de Produtos */}
-            <button
-              id="tab-btn-comparator"
-              onClick={() => {
-                setActiveTab("comparator");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "comparator"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Comparador de Produtos"
-            >
-              <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Comparador de Produtos</span>
-            </button>
-
-            {/* Nav item: Robô de Lances */}
-            <button
-              id="tab-btn-bot"
-              onClick={() => {
-                setActiveTab("bot");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "bot"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Robô de Lances"
-            >
-              <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Robô de Lances</span>
-            </button>
-
-            {/* Nav item: Analisar Concorrentes */}
-            <button
-              id="tab-btn-competitors"
-              onClick={() => {
-                setActiveTab("competitors");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "competitors"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="Analisar Concorrentes"
-            >
-              <Users className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>Analisar Concorrentes</span>
-            </button>
-
-            {/* Nav item: IA & Modelos */}
-            <button
-              id="tab-btn-ai-config"
-              onClick={() => {
-                setActiveTab("aiConfig");
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center transition-all cursor-pointer text-left ${
-                sidebarCollapsed ? "lg:justify-center lg:px-0 px-3.5 gap-3" : "px-3.5 gap-3"
-              } ${
-                activeTab === "aiConfig"
-                  ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-indigo-600/25 border border-white/10"
-                  : "bg-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
-              }`}
-              title="IA & Modelos"
-            >
-              <Settings className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>IA & Modelos</span>
-            </button>
+            {/* SETTINGS GROUP */}
+            <div>
+              {(!sidebarCollapsed || mobileMenuOpen) && (
+                <div className="text-[10px] font-extrabold text-gray-400 dark:text-zinc-500 uppercase tracking-widest px-2.5 mb-1.5">
+                  SETTINGS
+                </div>
+              )}
+              <div className="space-y-1">
+                <button
+                  id="tab-btn-ai-config"
+                  onClick={() => { setActiveTab("aiConfig"); setMobileMenuOpen(false); }}
+                  className={`group w-full py-2 px-2.5 rounded-lg text-[12.5px] flex items-center transition-all cursor-pointer text-left ${
+                    sidebarCollapsed ? "lg:justify-center lg:px-0 px-2.5 gap-2.5" : "gap-2.5"
+                  } ${
+                    activeTab === "aiConfig"
+                      ? "bg-[#FFF0E5] dark:bg-[#FF5A00]/15 text-[#E65000] dark:text-[#FF5A00] font-bold shadow-2xs border-l-3 border-[#FF5A00]"
+                      : "text-gray-700 dark:text-zinc-300 font-medium hover:bg-gray-100/80 dark:hover:bg-zinc-800/70 hover:text-gray-900 dark:hover:text-white"
+                  }`}
+                  title="IA & Modelos"
+                >
+                  <Settings className={`w-4 h-4 shrink-0 transition-colors ${
+                    activeTab === "aiConfig" 
+                      ? "text-[#FF5A00]" 
+                      : "text-gray-500 dark:text-zinc-400 group-hover:text-gray-800 dark:group-hover:text-zinc-200"
+                  }`} />
+                  <span className={`${sidebarCollapsed ? "lg:hidden block" : "block"}`}>IA & Modelos</span>
+                </button>
+              </div>
+            </div>
 
           </nav>
 
-          {/* Bottom Sidebar area - Highly Compact & Refined */}
-          <div className={`border-t border-white/5 pt-4 space-y-4 ${sidebarCollapsed ? "lg:hidden block" : "block"}`}>
+          {/* Bottom Sidebar area (Plan Usage, Upgrade Button, Profile) */}
+          <div className={`border-t border-gray-100 dark:border-zinc-800/40 pt-3 space-y-2.5 ${sidebarCollapsed ? "lg:hidden block" : "block"}`}>
             
-           {/* Compact Active AI Selector */}
+            {/* Plan usage progress bar (Tokens / Quota Card) */}
+            <div className="bg-slate-50/80 dark:bg-zinc-900/90 border border-slate-200/50 dark:border-zinc-800/40 text-gray-900 dark:text-white p-3 rounded-xl space-y-2 shadow-2xs">
+              <div className="flex justify-between items-center text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-[#FF5A00]" />
+                  Tokens / Cota IA
+                </span>
+                <span className="text-[#FF5A00] font-mono font-black text-xs">40%</span>
+              </div>
+              <div className="w-full bg-slate-200/70 dark:bg-zinc-800 h-2 rounded-full overflow-hidden">
+                <div className="bg-gradient-to-r from-[#FF6B1A] to-[#FF5A00] h-full rounded-full w-[40%]" />
+              </div>
+            </div>
+
+            {/* Upgrade Plan Secondary Button */}
+            <button
+              onClick={() => setActiveTab("aiConfig")}
+              className="w-full py-2.5 px-3 rounded-xl bg-white dark:bg-zinc-900 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-zinc-800/90 border border-gray-200/60 dark:border-zinc-800/40 text-xs font-bold transition-all cursor-pointer shadow-2xs hover:border-[#FF5A00]/40 flex items-center justify-center gap-2 group"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#FF5A00] group-hover:scale-110 transition-transform" />
+              <span>Upgrade Plan</span>
+            </button>
+
+            {/* Active AI Selector */}
             <div className="relative" ref={modelDropdownRef}>
               <button
                 type="button"
                 onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
-                className="w-full bg-slate-900/60 hover:bg-slate-900/90 border border-white/5 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2 text-left transition-all cursor-pointer group"
+                className="w-full bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800/90 border border-gray-200/60 dark:border-zinc-800/40 rounded-xl px-3 py-2 flex items-center justify-between text-left transition-all cursor-pointer shadow-2xs"
               >
                 <div className="flex items-center gap-2">
-                  <div className="p-1 rounded-lg bg-indigo-500/10 text-indigo-400 group-hover:scale-105 transition-transform">
-                    <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider leading-none">Modelo IA</span>
-                    <span className="text-xs font-bold text-slate-200 mt-0.5">
-                      {activeProvider === "gemini" && "Gemini 3.5"}
-                      {activeProvider === "openai" && "GPT-4o"}
-                      {activeProvider === "anthropic" && "Claude 3.7"}
-                      {activeProvider === "deepseek" && "DeepSeek V3"}
-                    </span>
-                  </div>
+                  <div className="w-2 h-2 rounded-full bg-[#FF5A00] animate-pulse" />
+                  <span className="text-xs font-bold text-gray-900 dark:text-white">
+                    {activeProvider === "gemini" && "Gemini 3.5"}
+                    {activeProvider === "openai" && "GPT-4o"}
+                    {activeProvider === "anthropic" && "Claude 3.7"}
+                    {activeProvider === "deepseek" && "DeepSeek V3"}
+                  </span>
                 </div>
-                <ChevronDown className={`w-4 h-4 text-slate-500 group-hover:text-slate-300 transition-transform duration-200 ${modelDropdownOpen ? "rotate-180 text-indigo-400" : ""}`} />
+                <ChevronDown className={`w-3.5 h-3.5 text-gray-500 dark:text-zinc-400 transition-transform ${modelDropdownOpen ? "rotate-180" : ""}`} />
               </button>
 
-              {/* Modernized Dropup List */}
               {modelDropdownOpen && (
-                <div className="absolute bottom-full left-0 right-0 mb-2 bg-slate-950 border border-white/10 rounded-xl shadow-2xl p-1.5 space-y-0.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
-                  <div className="px-2 py-1.5 border-b border-white/5 mb-1 flex items-center justify-between">
-                    <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Cérebro IA Ativo</span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping" />
-                  </div>
-                  
+                <div className="absolute bottom-full left-0 right-0 mb-1.5 bg-white dark:bg-zinc-900 border border-gray-200/60 dark:border-zinc-800/40 rounded-xl shadow-xl dark:shadow-2xl p-1.5 space-y-1 z-50 animate-scale-up">
                   {[
-                    { id: "gemini", name: "Gemini 3.5", brand: "Google", desc: "Rápido & Inteligente", badge: "Recomendado" },
-                    { id: "openai", name: "GPT-4o", brand: "OpenAI", desc: "Altamente Analítico", badge: null },
-                    { id: "anthropic", name: "Claude 3.7", brand: "Anthropic", desc: "Máxima Conformidade", badge: null },
-                    { id: "deepseek", name: "DeepSeek", brand: "Análise Cost", desc: "Raciocínio Lógico", badge: "Economia" }
-                  ].map((p) => {
-                    const isSelected = activeProvider === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => {
-                          handleGlobalProviderChange(p.id);
-                          setModelDropdownOpen(false);
-                        }}
-                        className={`w-full text-left p-2 rounded-lg flex items-center justify-between gap-2 transition-all cursor-pointer ${
-                          isSelected 
-                            ? "bg-indigo-600/15 border border-indigo-500/20 text-indigo-200" 
-                            : "hover:bg-white/5 text-slate-400 hover:text-slate-200 border border-transparent"
-                        }`}
-                      >
-                        <div className="flex flex-col">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-[11px]">{p.name}</span>
-                            <span className="text-[8px] text-slate-500 font-medium">({p.brand})</span>
-                            {p.badge && (
-                              <span className="text-[7px] px-1 py-0.2 bg-indigo-500/10 text-indigo-400 font-bold uppercase tracking-wider rounded">
-                                {p.badge}
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-[9px] text-slate-500 mt-0.5 font-medium">{p.desc}</span>
-                        </div>
-                        {isSelected && <Check className="w-4 h-4 text-indigo-400 shrink-0" />}
-                      </button>
-                    );
-                  })}
+                    { id: "gemini", name: "Gemini 3.5", desc: "Google AI" },
+                    { id: "openai", name: "GPT-4o", desc: "OpenAI" },
+                    { id: "anthropic", name: "Claude 3.7", desc: "Anthropic" },
+                    { id: "deepseek", name: "DeepSeek V3", desc: "DeepSeek" }
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => {
+                        handleGlobalProviderChange(p.id);
+                        setModelDropdownOpen(false);
+                      }}
+                      className={`w-full text-left p-2 rounded-lg flex items-center justify-between text-xs transition-all cursor-pointer ${
+                        activeProvider === p.id 
+                          ? "bg-[#FFF0E5] dark:bg-[#FF5A00]/15 text-[#E65000] dark:text-[#FF5A00] font-bold" 
+                          : "hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-700 dark:text-zinc-300 font-medium"
+                      }`}
+                    >
+                      <span>{p.name}</span>
+                      {activeProvider === p.id && <Check className="w-3.5 h-3.5 text-[#FF5A00]" />}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
             
-            {/* User Session Info & Simple Log Out Button */}
-            <div className="flex flex-col gap-1.5 px-1.5">
-              {supabaseUser?.email && (
-                <div className="text-[10px] font-mono tracking-tight text-slate-500 truncate" title={supabaseUser.email}>
-                  {supabaseUser.email}
+            {/* User Profile Menu */}
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-zinc-800/40">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FF6B1A] to-[#FF5A00] text-white flex items-center justify-center font-black text-xs shadow-2xs shrink-0">
+                  {supabaseUser?.email ? supabaseUser.email[0].toUpperCase() : "U"}
                 </div>
-              )}
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-gray-900 dark:text-white truncate">
+                    {supabaseUser?.email?.split('@')[0] || "Usuário"}
+                  </div>
+                  <div className="text-[10.5px] font-semibold text-gray-500 dark:text-zinc-400 truncate">
+                    Plano {saasPlan}
+                  </div>
+                </div>
+              </div>
               <button
                 onClick={handleSaaSSignOut}
-                className="w-full py-2.5 px-3 rounded-xl font-bold text-xs flex items-center gap-3 transition-all cursor-pointer text-slate-400 hover:text-rose-400 hover:bg-rose-950/20 text-left border border-transparent hover:border-rose-500/10"
+                className="p-2 rounded-lg text-gray-500 dark:text-zinc-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors cursor-pointer"
                 title="Sair"
               >
-                <LogOut className="w-4 h-4 shrink-0 text-slate-500 hover:text-rose-400" />
-                <span>Sair</span>
+                <LogOut className="w-4 h-4" />
               </button>
             </div>
 
@@ -878,47 +775,74 @@ export default function App() {
       {mobileMenuOpen && (
         <div 
           onClick={() => setMobileMenuOpen(false)}
-          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-40 lg:hidden"
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs z-40 lg:hidden"
         />
       )}
 
-      {/* Main Content Pane */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-auto lg:h-full lg:overflow-hidden">
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-auto lg:h-full lg:overflow-hidden bg-[#F8F9FA] dark:bg-[#000000]">
         
-        {/* Top bar header only for desktop to show page details & header spacing */}
-        <header className="hidden lg:flex bg-white/5 border-b border-white/10 backdrop-blur-xl shrink-0 px-8 py-4 items-center justify-between relative z-30">
-          <div>
-            <h2 className="text-sm font-bold text-white tracking-wide uppercase flex items-center gap-2">
-              <span className="text-indigo-400 font-extrabold">HORASIS</span>
-              <span className="text-slate-600">|</span>
-              <span>Painel Operacional</span>
-            </h2>
-            <p className="text-slate-400 text-xs mt-0.5">
-              {activeTab === "analyzer" ? "Carregamento e Inteligência Artificial de Editais" :
-               activeTab === "radar" ? "Radar de Licitações Públicas Federais (PNCP)" :
-               activeTab === "disputasSheet" ? "Planilha de Gestão de Disputas e Pregões" :
-               activeTab === "createDoc" ? "Estúdio de Criação de Documentos & Propostas (Google Docs + IA)" :
-               activeTab === "documents" ? "Gestão de Habilitação Jurídica e Fiscal" :
-               activeTab === "calculator" ? "Modelagem Financeira e BDI de Licitações" :
-               activeTab === "comparator" ? "Compatibilização Técnica de Especificações" :
-               activeTab === "bot" ? "Simulador de Disputa de Lances Finais" :
-               activeTab === "aiConfig" ? "Configurações de Provedores e Modelos de IA" :
-               "Auditoria Legal de Documentação de Concorrentes"}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <ThemeToggle />
-            <div className="text-[10px] font-mono text-slate-500 bg-slate-900/60 px-3 py-1.5 rounded-lg border border-white/5">
-              SISTEMA ATIVO (UTC)
+        {/* Top Bar Header (Sticky Top, Flex row, border-bottom 1px solid #E5E7EB, white background) */}
+        <header className="bg-white dark:bg-[#09090B] border-b border-[#E5E7EB] dark:border-[#27272A] shrink-0 px-4 sm:px-6 py-3 flex items-center justify-between sticky top-0 z-30">
+          
+          {/* Left: Mobile Menu Toggle + Breadcrumbs / Title */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="lg:hidden p-1.5 rounded-md bg-[#F3F4F6] dark:bg-[#18181B] hover:bg-[#E5E7EB] dark:hover:bg-[#27272A] text-[#374151] dark:text-[#FAFAFA] transition-colors cursor-pointer shrink-0"
+              title={mobileMenuOpen ? "Fechar menu" : "Abrir menu"}
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+              <div className="bg-[#FF5A00] text-white p-1 rounded-md shrink-0 lg:hidden flex items-center justify-center">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <span className="text-xs font-bold text-[#111827] dark:text-[#FAFAFA] font-mono tracking-tight shrink-0">HORASIS</span>
+              <span className="text-xs text-[#D1D5DB] dark:text-[#3F3F46] shrink-0">/</span>
+              <span className="text-xs font-bold text-[#111827] dark:text-[#FAFAFA] uppercase truncate">
+                {activeTab === "analyzer" ? "Análise de Edital" :
+                 activeTab === "radar" ? "Radar de Oportunidades" :
+                 activeTab === "disputasSheet" ? "Planilha de Disputas" :
+                 activeTab === "createDoc" ? "Criar Documentos" :
+                 activeTab === "documents" ? "Gestão de Certidões" :
+                 activeTab === "calculator" ? "Calculadora de Preços" :
+                 activeTab === "comparator" ? "Comparador de Produtos" :
+                 activeTab === "bot" ? "Robô de Lances" :
+                 activeTab === "aiConfig" ? "IA & Modelos" : "Analisar Concorrentes"}
+              </span>
             </div>
           </div>
+
+          {/* Right: Actions */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <button
+              onClick={() => setActiveTab("analyzer")}
+              className="bg-[#FF5A00] hover:bg-[#E65000] text-white text-xs font-medium px-2.5 sm:px-4 py-2 rounded-lg transition-all shadow-xs dark:shadow-none flex items-center gap-1.5 cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Analisar Novo Edital</span>
+              <span className="sm:hidden text-[11px]">Novo Edital</span>
+            </button>
+
+            <button 
+              className="p-1.5 text-[#6B7280] dark:text-[#A1A1AA] hover:bg-[#F3F4F6] dark:hover:bg-[#18181B] hover:text-[#111827] dark:hover:text-[#FAFAFA] rounded-md transition-colors cursor-pointer relative"
+              title="Notificações e Suporte"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
+
+            <ThemeToggle />
+          </div>
+
         </header>
 
-        {/* Content Scrolling Stage Area */}
-        <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-visible lg:overflow-y-auto relative z-10 scrollbar-thin">
-          <div className="max-w-7xl mx-auto w-full">
+        {/* Content Stage Area */}
+        <main className="flex-1 p-6 overflow-y-auto relative z-10 bg-[#F8F9FA] dark:bg-[#000000]">
+          <div className="max-w-7xl mx-auto space-y-6">
 
-            {/* Active Render Stage Tab Component */}
+            {/* Render Active View Tab */}
             <div className="select-text w-full">
               {activeTab === "analyzer" ? (
                 <EditalAnalyzerTab 
@@ -994,18 +918,18 @@ export default function App() {
 
       {/* Supabase SaaS Authentication & Account Switcher Modal */}
       {supabaseModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-          <div className="w-full max-w-md bg-[#0f1524] border border-white/10 rounded-2xl overflow-hidden shadow-2xl relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-fade-in">
+          <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xl relative">
             
             {/* Header */}
-            <div className="p-5 border-b border-white/10 bg-gradient-to-r from-[#121c33] to-[#0f1524] flex items-center justify-between">
+            <div className="p-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg border border-indigo-500/20">
+                <div className="p-2 bg-[#FFF0E5] text-[#FF5A00] rounded-lg border border-[#FF5A00]/20">
                   <Users className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-white text-sm">Portal de Clientes SaaS</h3>
-                  <p className="text-[10px] text-slate-400 font-medium">Supabase Auth Multi-tenant</p>
+                  <h3 className="font-bold text-[#1C1C1E] text-sm">Portal de Clientes SaaS</h3>
+                  <p className="text-[10px] text-[#595959] font-medium">Supabase Auth Multi-tenant</p>
                 </div>
               </div>
               <button
@@ -1013,7 +937,7 @@ export default function App() {
                   setSupabaseModalOpen(false);
                   setAuthMessage(null);
                 }}
-                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                className="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-[#595959] hover:text-[#1C1C1E] transition-colors cursor-pointer"
               >
                 <X className="w-4.5 h-4.5" />
               </button>
@@ -1025,12 +949,12 @@ export default function App() {
               {!supabaseConnected ? (
                 // Supabase not configured warning
                 <div className="space-y-4 text-center py-4">
-                  <div className="w-12 h-12 bg-amber-500/10 text-amber-400 rounded-full flex items-center justify-center mx-auto border border-amber-500/20">
+                  <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto border border-amber-200">
                     <CloudLightning className="w-6 h-6 animate-pulse" />
                   </div>
                   <div className="space-y-2">
-                    <h4 className="font-bold text-slate-200 text-sm">Credenciais não configuradas</h4>
-                    <p className="text-slate-400 text-xs leading-relaxed max-w-sm mx-auto">
+                    <h4 className="font-bold text-[#1C1C1E] text-sm">Credenciais não configuradas</h4>
+                    <p className="text-[#595959] text-xs leading-relaxed max-w-sm mx-auto">
                       Para usar a Autenticação SaaS real e isolar dados de múltiplos usuários, configure sua <strong>URL</strong> e <strong>Anon Key</strong> do Supabase primeiro.
                     </p>
                   </div>
@@ -1039,7 +963,7 @@ export default function App() {
                       setSupabaseModalOpen(false);
                       setActiveTab("aiConfig");
                     }}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                    className="px-4 py-2 bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold rounded-lg text-xs transition-colors cursor-pointer shadow-sm"
                   >
                     Configurar Provedores de IA
                   </button>
@@ -1047,33 +971,33 @@ export default function App() {
               ) : supabaseUser ? (
                 // Active User Session panel
                 <div className="space-y-5">
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl space-y-3">
+                  <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl space-y-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <span className="font-bold text-emerald-300 text-xs">Sessão Ativa no Supabase</span>
+                      <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="font-bold text-emerald-800 text-xs">Sessão Ativa no Supabase</span>
                     </div>
                     
-                    <div className="space-y-1.5 font-mono text-[11px] text-slate-300">
-                      <div className="flex justify-between border-b border-white/5 pb-1 text-slate-400">
+                    <div className="space-y-1.5 font-mono text-[11px] text-[#1C1C1E]">
+                      <div className="flex justify-between border-b border-emerald-200/60 pb-1 text-[#595959]">
                         <span>Usuário</span>
-                        <span className="font-bold text-white">{supabaseUser.email}</span>
+                        <span className="font-bold text-[#1C1C1E]">{supabaseUser.email}</span>
                       </div>
-                      <div className="flex justify-between border-b border-white/5 pb-1 text-slate-400">
+                      <div className="flex justify-between border-b border-emerald-200/60 pb-1 text-[#595959]">
                         <span>UUID</span>
-                        <span className="font-bold text-slate-400 truncate max-w-[180px]" title={supabaseUser.id}>
+                        <span className="font-bold text-[#595959] truncate max-w-[180px]" title={supabaseUser.id}>
                           {supabaseUser.id}
                         </span>
                       </div>
-                      <div className="flex justify-between text-slate-400">
+                      <div className="flex justify-between text-[#595959]">
                         <span>Plano Escolhido</span>
-                        <span className="font-bold text-amber-400">{saasPlan}</span>
+                        <span className="font-bold text-[#FF5A00]">{saasPlan}</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Plan Switcher */}
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Escolha o Plano SaaS da Conta</label>
+                    <label className="text-[10px] font-bold text-[#595959] uppercase tracking-wider block">Escolha o Plano SaaS da Conta</label>
                     <div className="grid grid-cols-3 gap-2">
                       {["Free", "Pro", "Enterprise"].map((plan) => {
                         const isActive = saasPlan === plan;
@@ -1081,10 +1005,10 @@ export default function App() {
                           <button
                             key={plan}
                             onClick={() => handleChangePlan(plan)}
-                            className={`py-2 px-1.5 rounded-xl text-[10px] font-bold border transition-all cursor-pointer ${
+                            className={`py-2 px-1.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
                               isActive 
-                                ? "bg-amber-500/15 border-amber-500 text-amber-300" 
-                                : "bg-slate-950 border-white/5 text-slate-500 hover:text-slate-300"
+                                ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00]" 
+                                : "bg-white border-gray-200 text-[#595959] hover:text-[#1C1C1E] hover:bg-gray-50"
                             }`}
                           >
                             {plan === "Free" ? "Gratuito" : plan === "Pro" ? "SaaS Pro" : "Enterprise"}
@@ -1092,15 +1016,15 @@ export default function App() {
                         );
                       })}
                     </div>
-                    <p className="text-[10px] text-slate-500 leading-normal">
+                    <p className="text-[10px] text-[#595959] leading-normal">
                       Ao trocar de plano, os limites e volume de análises são recalculados para este e-mail.
                     </p>
                   </div>
 
-                  <div className="border-t border-white/5 pt-4 flex flex-col gap-2">
+                  <div className="border-t border-gray-200 pt-4 flex flex-col gap-2">
                     <button
                       onClick={handleSaaSSignOut}
-                      className="w-full py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       Encerrar Sessão (Sign Out)
@@ -1113,9 +1037,9 @@ export default function App() {
                         setAuthMode("signin");
                         setAuthMessage(null);
                       }}
-                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-white/5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      className="w-full py-2.5 bg-white hover:bg-gray-50 text-[#1C1C1E] border border-gray-300 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
                     >
-                      <Users className="w-3.5 h-3.5" />
+                      <Users className="w-3.5 h-3.5 text-[#595959]" />
                       Entrar com Outro Usuário
                     </button>
                   </div>
@@ -1124,17 +1048,17 @@ export default function App() {
                 // Authentication Form (Login / Register)
                 <form onSubmit={handleSaaSAuthAction} className="space-y-4">
                   {/* Selector */}
-                  <div className="flex bg-slate-950 p-1 rounded-xl border border-white/5">
+                  <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
                     <button
                       type="button"
                       onClick={() => {
                         setAuthMode("signin");
                         setAuthMessage(null);
                       }}
-                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all ${
                         authMode === "signin"
-                          ? "bg-slate-800 text-white shadow"
-                          : "text-slate-500 hover:text-slate-300"
+                          ? "bg-white text-[#1C1C1E] shadow-sm"
+                          : "text-[#595959] hover:text-[#1C1C1E]"
                       }`}
                     >
                       Acessar Conta
@@ -1145,10 +1069,10 @@ export default function App() {
                         setAuthMode("signup");
                         setAuthMessage(null);
                       }}
-                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all ${
                         authMode === "signup"
-                          ? "bg-slate-800 text-white shadow"
-                          : "text-slate-500 hover:text-slate-300"
+                          ? "bg-white text-[#1C1C1E] shadow-sm"
+                          : "text-[#595959] hover:text-[#1C1C1E]"
                       }`}
                     >
                       Criar Nova Conta
@@ -1157,25 +1081,25 @@ export default function App() {
 
                   <div className="space-y-3">
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Endereço de E-mail</label>
+                      <label className="text-[10px] font-bold text-[#595959] uppercase tracking-wider block">Endereço de E-mail</label>
                       <input
                         type="email"
                         required
                         placeholder="seu-email@exemplo.com"
                         value={authEmail}
                         onChange={(e) => setAuthEmail(e.target.value)}
-                        className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-xs text-[#1C1C1E] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00] focus:border-transparent font-medium"
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Senha Secreta</label>
+                      <label className="text-[10px] font-bold text-[#595959] uppercase tracking-wider block">Senha Secreta</label>
                       <input
                         type="password"
                         required
                         placeholder="••••••••"
                         value={authPassword}
                         onChange={(e) => setAuthPassword(e.target.value)}
-                        className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-xs text-[#1C1C1E] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00] focus:border-transparent font-mono"
                       />
                     </div>
                   </div>
@@ -1183,8 +1107,8 @@ export default function App() {
                   {authMessage && (
                     <div className={`p-3 rounded-lg text-[11px] leading-relaxed border ${
                       authMessage.success
-                        ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-300"
-                        : "bg-rose-500/10 border-rose-500/20 text-rose-300"
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                        : "bg-rose-50 border-rose-200 text-rose-800"
                     }`}>
                       {authMessage.message}
                     </div>
@@ -1193,7 +1117,7 @@ export default function App() {
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-lg text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 border border-indigo-500/25 cursor-pointer"
+                    className="w-full py-2.5 bg-[#FF5A00] hover:bg-[#E65000] disabled:opacity-50 text-white font-bold rounded-lg text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
                   >
                     {authLoading ? (
                       <>
@@ -1215,7 +1139,7 @@ export default function App() {
                 </form>
               )}
 
-              <div className="text-[10px] text-slate-500 bg-slate-950/40 p-3 rounded-lg border border-white/5 leading-relaxed">
+              <div className="text-[10px] text-[#595959] bg-gray-50 p-3 rounded-lg border border-gray-200 leading-relaxed">
                 ℹ️ <strong>Isolamento Multi-tenant:</strong> Ao logar com e-mails diferentes, o Supabase Auth atribui IDs únicos (UUIDs) para cada usuário. Suas análises e documentos são segregados automaticamente, permitindo simular perfeitamente um SaaS em produção!
               </div>
 

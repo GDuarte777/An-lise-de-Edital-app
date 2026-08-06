@@ -23,7 +23,7 @@ let globalTheme: ThemeMode = (() => {
   } catch (e) {
     console.warn("Cookies are not available:", e);
   }
-  return "system";
+  return "light";
 })();
 
 const listeners = new Set<(theme: ThemeMode) => void>();
@@ -76,7 +76,9 @@ export function useTheme() {
       setResolvedTheme(activeTheme);
       if (activeTheme === "light") {
         root.classList.add("light");
+        root.classList.remove("dark");
       } else {
+        root.classList.add("dark");
         root.classList.remove("light");
       }
     };
