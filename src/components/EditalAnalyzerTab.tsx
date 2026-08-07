@@ -5,7 +5,7 @@ import {
   Sparkles, RefreshCw, ChevronRight, FileCode, CheckSquare, Edit3, Settings, ClipboardPaste, 
   Coins, HelpCircle, HardDriveDownload, MonitorCheck, Save, Send, Database, FileSpreadsheet, Eye,
   Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge, Plus, X,
-  LayoutGrid, List, Search, Check
+  LayoutGrid, List, Search, Check, Calendar, ExternalLink, Globe
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -29,14 +29,138 @@ function cleanMarkdownText(text: string | undefined): string {
     .replace(/\\t/gi, "\t")
     .replace(/\\"/g, '"');
 
-  // Repair legacy mangled backslashes (e.g. "NN##", "|N|", "NN 1.", "|N ", "N| ")
-  cleaned = cleaned.replace(/NN(#{1,6}\s)/g, "\n\n$1");
-  cleaned = cleaned.replace(/nn(#{1,6}\s)/g, "\n\n$1");
-  cleaned = cleaned.replace(/([^\n])(\|[\s\w\d\-_Á-Úá-ú]+\|)/g, "$1\n\n$2");
+  // Fix literal mangled section dividers "nn---", "n---", "NN---"
+  cleaned = cleaned.replace(/n{1,2}---/gi, "\n\n---\n\n");
+
+  // Fix mangled list bullet points "n•", "n-", "n*", "nn•", "nn-", "nn*"
+  cleaned = cleaned.replace(/\s*n{1,2}[•\-\*]\s*/g, "\n- ");
+
+  // Fix mangled numbered list items "nn1.", "n1.", "nn 1."
+  cleaned = cleaned.replace(/\s*n{1,2}\s*(\d+)\.\s*/g, "\n$1. ");
+
+  // Fix mangled markdown section headers "nn##", "NN##", "n##"
+  cleaned = cleaned.replace(/\s*n{1,2}(#{1,6}\s*)/gi, "\n\n$1");
+
+  // Fix mangled line breaks before section emojis (e.g. "n🎯", "nn💰", "n✅", "n⚠️", "n📜", "n💡")
+  cleaned = cleaned.replace(/\s*n{1,2}([\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}])/gu, "\n\n$1");
+
+  // Fix mangled 'n' before bold headers like "n. **Lote", "nn. **Lote"
+  cleaned = cleaned.replace(/\s*n{1,2}\.\s*(\*\*|\*)/g, "\n\n- $1");
+  cleaned = cleaned.replace(/\s*n{1,2}\s*(\*\*|\*)/g, "\n\n$1");
+
+  // Fix mangled "n " or "nn " between sentences/titles
+  cleaned = cleaned.replace(/([a-z0-9\):])\s*n{1,2}\s*([A-ZÁÉÍÓÚÀÂÊÔÃÕ0-9\-\*•])/g, "$1\n\n$2");
+
+  // Fix legacy table backslashes
   cleaned = cleaned.replace(/\|N\|\s*/gi, "|\n| ");
   cleaned = cleaned.replace(/\|N\s*/gi, "|\n");
 
-  return cleaned;
+  return cleaned.trim();
+}
+
+function extractCleanPncpQuery(rawIdNum: string, fullText: string): string {
+  const combined = (rawIdNum + " " + fullText).trim();
+
+  // 1. Look for process number format (e.g. 1.00.000.008453/2025-95 or 23078.001234/2026-12)
+  const processMatch = combined.match(/\b(\d{1,3}\.\d{2,3}\.\d{3}\.\d{6}\/\d{4}-\d{2})\b/) 
+    || combined.match(/\b(\d{5,6}\.\d{6}\/\d{4}-\d{2})\b/)
+    || combined.match(/\b(\d{6}\/\d{4}-\d{2})\b/);
+
+  if (processMatch) {
+    return processMatch[1];
+  }
+
+  // 2. Look for edital / dispensa / pregão number format (e.g. 77/2026 or 00077/2026)
+  const editalNumMatch = combined.match(/\b(\d{1,6}\/202[4-9])\b/);
+  if (editalNumMatch) {
+    return editalNumMatch[1];
+  }
+
+  // Fallback: strip Portuguese labels like "Dispensa nº", "Processo nº", "Edital", parentheses, etc.
+  let cleaned = rawIdNum
+    .replace(/(?:Dispensa|Preg[aã]o|Concorr[eê]ncia|Inexigibilidade|Edital|Processo|Certame|Licita[cç][aã]o|Contrata[cç][aã]o)\s*(?:n[oºª\.]*)?/gi, "")
+    .replace(/[\(\)\[\]\{\}]/g, " ")
+    .replace(/[\:\;\,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || rawIdNum.trim();
+}
+
+function getPncpLink(edital: EditalAnalysis | null): string | null {
+  if (!edital) return null;
+
+  const knownLink = edital.identificacaoCertame?.linkPNCP || edital.linkPNCP;
+  if (knownLink && typeof knownLink === "string" && knownLink.startsWith("http")) {
+    if (knownLink.includes("/app/editais/")) {
+      return knownLink;
+    }
+  }
+
+  const text = (edital.rawText || "") + " " + (edital.reportMarkdown || "");
+
+  // Direct PNCP edital page link in text (/app/editais/CNPJ/ANO/SEQ)
+  const directPncpMatch = text.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/\d{14}\/\d{4}\/\d+)/i);
+  if (directPncpMatch) {
+    return directPncpMatch[1];
+  }
+
+  // Any generic PNCP or Comprasnet URL in text
+  const anyUrlMatch = text.match(/(https?:\/\/(?:www\.)?(?:pncp\.gov\.br|cnetmobile\.estaleiro\.serpro\.gov\.br|gov\.br\/compras)\/[^\s\)\"\'>]+)/i);
+  if (anyUrlMatch) {
+    return anyUrlMatch[1].replace(/[.,;]$/, "");
+  }
+
+  // PNCP control number (e.g. 26989715000102-1-000077/2026 or 00394804000100-1-000012/2026)
+  const numControleMatch = text.match(/(\d{14})[-_]?1[-_]?(\d{1,6})\/(\d{4})/);
+  if (numControleMatch) {
+    const cnpj = numControleMatch[1];
+    const seq = parseInt(numControleMatch[2], 10);
+    const ano = numControleMatch[3];
+    return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`;
+  }
+
+  // CNPJ (14 digits) + Year + Seq
+  const cnpjMatch = text.match(/(?:CNPJ[:\s]*)?(\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{14})/i);
+  const yearMatch = text.match(/\b(202[4-9])\b/);
+  const numSeqMatch = text.match(/(?:Dispensa|Pregão|Edital|Processo|Contratação|nº|n°)\s*(?:nº|n°)?\s*(\d{1,6})\/202[4-9]/i);
+
+  if (cnpjMatch && yearMatch && numSeqMatch) {
+    const cleanCnpj = cnpjMatch[1].replace(/\D/g, "");
+    if (cleanCnpj.length === 14) {
+      const seq = parseInt(numSeqMatch[1], 10);
+      const ano = yearMatch[1];
+      if (!isNaN(seq) && seq > 0) {
+        return `https://pncp.gov.br/app/editais/${cleanCnpj}/${ano}/${seq}`;
+      }
+    }
+  }
+
+  // Fallback to knownLink if it exists
+  if (knownLink && typeof knownLink === "string" && knownLink.startsWith("http")) {
+    return knownLink;
+  }
+
+  // Clean query fallback
+  const idNum = edital.identificacaoCertame?.identificacaoNumerica || "";
+  const cleanTerm = extractCleanPncpQuery(idNum, text);
+
+  if (cleanTerm && cleanTerm.length >= 2) {
+    return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(cleanTerm)}`;
+  }
+
+  return "https://pncp.gov.br/app/editais";
+}
+
+function getDataHoraDisputa(edital: EditalAnalysis | null): string {
+  if (!edital) return "Não especificada no Edital";
+  if (edital.identificacaoCertame?.dataHoraSessao) return edital.identificacaoCertame.dataHoraSessao;
+  
+  const text = (edital.rawText || "") + " " + (edital.reportMarkdown || "");
+  const match = text.match(/(?:Abertura|Sessão|Disputa|Data|Sessão Pública)[:\s]+(\d{2}\/\d{2}\/\d{4}[^.\n]*)/i);
+  if (match) return match[1].trim();
+
+  return edital.prazoEntrega || "A Definir no Edital";
 }
 
 interface EditalAnalyzerTabProps {
@@ -1650,44 +1774,90 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
           {/* TAB 1: EXECUTIVE BRIEFING (MARKDOWN REPORT) */}
           {analysisActiveTab === "report" && (
-            <div className="bg-white p-5 md:p-7 rounded-xl border border-[#E5E7EB] shadow-xs space-y-4 animate-fade-in relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-4 font-mono text-[9px] text-[#FF5A00] uppercase tracking-widest hidden md:block">
-                Senior Market Strategy Report
-              </div>
-              
-              {activeEdital.reportMarkdown ? (
-                <div className="prose max-w-none text-[#374151] text-xs md:text-sm leading-relaxed space-y-4">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                    h1: ({node, ...props}) => <h1 className="text-sm md:text-base font-bold text-[#111827] border-b border-[#E5E7EB] pb-2 mt-6 mb-3 flex items-center gap-2 uppercase tracking-wide text-[#FF5A00]" {...props} />,
-                    h2: ({node, ...props}) => <h2 className="text-xs md:text-sm font-bold text-[#111827] mt-5 mb-2 border-b border-[#E5E7EB] pb-1" {...props} />,
-                    h3: ({node, ...props}) => <h3 className="text-xs font-bold text-[#FF5A00] mt-4 mb-2" {...props} />,
-                    p: ({node, ...props}) => <p className="mb-3 text-[#374151] leading-relaxed font-sans" {...props} />,
-                    ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-1.5 text-[#374151] font-sans" {...props} />,
-                    ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-1.5 text-[#374151] font-sans" {...props} />,
-                    li: ({node, ...props}) => <li className="leading-relaxed" {...props} />,
-                    table: ({node, ...props}) => (
-                      <div className="overflow-x-auto my-4 rounded-xl border border-[#E5E7EB] bg-white">
-                        <table className="w-full text-left border-collapse text-[11px] md:text-xs" {...props} />
-                      </div>
-                    ),
-                    thead: ({node, ...props}) => <thead className="bg-[#F9FAFB] border-b border-[#E5E7EB] text-[#111827] font-semibold" {...props} />,
-                    th: ({node, ...props}) => <th className="p-2.5 font-semibold text-[10px] uppercase tracking-wider text-[#6B7280]" {...props} />,
-                    tbody: ({node, ...props}) => <tbody className="divide-y divide-[#E5E7EB]" {...props} />,
-                    td: ({node, ...props}) => <td className="p-2.5 text-[#374151] font-sans leading-normal" {...props} />,
-                    strong: ({node, ...props}) => <strong className="font-semibold text-[#111827] bg-[#FFF0E5] px-1 rounded text-[#FF5A00]" {...props} />,
-                  }}>{cleanMarkdownText(activeEdital.reportMarkdown)}</ReactMarkdown>
-                </div>
-              ) : (
-                <div className="text-center py-10 space-y-2">
-                  <div className="bg-amber-50 text-amber-600 p-3 rounded-full w-12 h-12 flex items-center justify-center mx-auto border border-amber-200">
-                    <ShieldAlert className="w-6 h-6" />
+            <div className="space-y-6 animate-fade-in">
+              {/* Main Executive Report Card */}
+              <div className="bg-white dark:bg-[#121212] p-6 md:p-8 rounded-xl border border-[#E5E7EB] dark:border-[#27272A] shadow-xs space-y-6 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-[#E5E7EB] dark:border-[#27272A] pb-4">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-[#FF5A00]" />
+                    <h3 className="text-sm md:text-base font-bold text-[#111827] dark:text-zinc-100 tracking-tight">
+                      Parecer Executivo de Estratégia de Mercado
+                    </h3>
                   </div>
-                  <h5 className="font-bold text-[#111827] text-sm">Parecer Executivo Indisponível</h5>
-                  <p className="text-[#6B7280] text-xs max-w-sm mx-auto leading-normal">
-                    Este item do histórico não possui o parecer executivo formatado. Faça uma nova análise para visualizar o parecer executivo completo.
-                  </p>
+                  <span className="font-mono text-[9px] text-[#FF5A00] font-bold uppercase tracking-widest hidden sm:block bg-[#FFF0E5] dark:bg-[#2A170A] px-2.5 py-1 rounded">
+                    Senior Market Strategy Report
+                  </span>
                 </div>
-              )}
+
+                {/* Prominent Quick Action Bar for Dispute Date & PNCP Link */}
+                {activeEdital && (
+                  <div className="bg-[#FFF0E5] dark:bg-[#2A170A]/60 border border-[#FF5A00]/30 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
+                    <div className="flex items-start sm:items-center gap-3">
+                      <div className="p-2.5 bg-[#FF5A00] text-white rounded-lg shadow-2xs shrink-0 mt-0.5 sm:mt-0">
+                        <Calendar className="w-5 h-5" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B7280] dark:text-zinc-400 font-bold block">
+                          Data e Hora Oficial da Disputa / Sessão Pública
+                        </span>
+                        <span className="text-xs sm:text-sm font-extrabold text-[#111827] dark:text-zinc-100 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-[#FF5A00]" />
+                          {getDataHoraDisputa(activeEdital)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {getPncpLink(activeEdital) && (
+                      <a
+                        href={getPncpLink(activeEdital)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#FF5A00] hover:bg-[#E65000] text-white text-xs font-bold rounded-lg transition-all shadow-2xs hover:shadow-xs shrink-0 cursor-pointer"
+                      >
+                        <Globe className="w-4 h-4" />
+                        <span>Acessar Licitação no Portal PNCP</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                )}
+
+                {activeEdital.reportMarkdown ? (
+                  <div className="prose max-w-none text-[#111827] dark:text-zinc-200 text-xs md:text-sm leading-relaxed">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                      h1: ({node, ...props}) => <h1 className="text-sm md:text-base font-bold text-[#111827] dark:text-zinc-100 border-b border-[#E5E7EB] dark:border-[#27272A] pb-2 mt-6 mb-3 flex items-center gap-2 uppercase tracking-wide text-[#FF5A00]" {...props} />,
+                      h2: ({node, ...props}) => <h2 className="text-xs md:text-sm font-bold text-[#111827] dark:text-zinc-100 mt-5 mb-2.5 border-b border-[#E5E7EB] dark:border-[#27272A] pb-1 flex items-center gap-2" {...props} />,
+                      h3: ({node, ...props}) => <h3 className="text-xs md:text-sm font-bold text-[#FF5A00] mt-4 mb-2" {...props} />,
+                      p: ({node, ...props}) => <p className="mb-3.5 text-[#111827] dark:text-zinc-200 leading-relaxed font-sans text-xs md:text-sm font-medium" {...props} />,
+                      ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-2 text-[#111827] dark:text-zinc-200 font-sans text-xs md:text-sm font-medium" {...props} />,
+                      ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-2 text-[#111827] dark:text-zinc-200 font-sans text-xs md:text-sm font-medium" {...props} />,
+                      li: ({node, ...props}) => <li className="leading-relaxed text-[#111827] dark:text-zinc-200" {...props} />,
+                      hr: ({node, ...props}) => <hr className="border-t border-[#E5E7EB] dark:border-[#27272A] my-6" {...props} />,
+                      blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-[#FF5A00] pl-4 py-2 my-4 bg-[#FFF0E5] dark:bg-[#2A170A]/40 rounded-r-lg text-xs md:text-sm text-[#111827] dark:text-zinc-200 italic font-medium" {...props} />,
+                      table: ({node, ...props}) => (
+                        <div className="overflow-x-auto my-4 rounded-xl border border-[#E5E7EB] dark:border-[#27272A] bg-white dark:bg-[#121212]">
+                          <table className="w-full text-left border-collapse text-[11px] md:text-xs" {...props} />
+                        </div>
+                      ),
+                      thead: ({node, ...props}) => <thead className="bg-gray-100 dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] text-[#111827] dark:text-zinc-100 font-bold" {...props} />,
+                      th: ({node, ...props}) => <th className="p-2.5 font-bold text-[10px] uppercase tracking-wider text-[#111827] dark:text-zinc-300" {...props} />,
+                      tbody: ({node, ...props}) => <tbody className="divide-y divide-[#E5E7EB] dark:divide-[#27272A]" {...props} />,
+                      td: ({node, ...props}) => <td className="p-2.5 text-[#111827] dark:text-zinc-200 font-sans leading-normal" {...props} />,
+                      strong: ({node, ...props}) => <strong className="font-extrabold text-[#111827] dark:text-white" {...props} />,
+                    }}>{cleanMarkdownText(activeEdital.reportMarkdown)}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <div className="text-center py-10 space-y-2">
+                    <div className="bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 p-3 rounded-full w-12 h-12 flex items-center justify-center mx-auto border border-amber-200 dark:border-amber-900">
+                      <ShieldAlert className="w-6 h-6" />
+                    </div>
+                    <h5 className="font-bold text-[#111827] dark:text-zinc-100 text-sm">Parecer Executivo Indisponível</h5>
+                    <p className="text-[#6B7280] dark:text-zinc-400 text-xs max-w-sm mx-auto leading-normal">
+                      Este item do histórico não possui o parecer executivo formatado. Faça uma nova análise para visualizar o parecer executivo completo.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1717,7 +1887,27 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                     </div>
                     <div>
                       <span className="text-[#6B7280] block font-mono text-[9px] uppercase tracking-wider">Sessão Pública (Data/Hora/Fuso)</span>
-                      <span className="text-[#111827] font-semibold">{activeEdital.identificacaoCertame.dataHoraSessao}</span>
+                      <span className="text-[#111827] font-extrabold flex items-center gap-1.5 mt-0.5 text-[#FF5A00]">
+                        <Calendar className="w-3.5 h-3.5" />
+                        {getDataHoraDisputa(activeEdital)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[#6B7280] block font-mono text-[9px] uppercase tracking-wider">Link Direto no Portal PNCP</span>
+                      {getPncpLink(activeEdital) ? (
+                        <a
+                          href={getPncpLink(activeEdital)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#FF5A00] font-bold hover:text-[#E65000] hover:underline flex items-center gap-1 mt-0.5"
+                        >
+                          <Globe className="w-3.5 h-3.5 shrink-0" />
+                          <span>Acessar Licitação no PNCP</span>
+                          <ExternalLink className="w-3 h-3 shrink-0" />
+                        </a>
+                      ) : (
+                        <span className="text-[#9CA3AF]">Não informado</span>
+                      )}
                     </div>
                   </div>
                 ) : (

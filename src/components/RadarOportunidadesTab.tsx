@@ -258,7 +258,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   const handleTriggerAnalysis = (item: LicitacaoDetailed) => {
     const formattedText = `EDITAL DE LICITAÇÃO PÚBLICA NACIONAL (SISTEMA PNCP)
 NÚMERO DE CONTROLE PNCP: ${item.numeroControlePNCP}
-NÚMERO DO PROCESSOCERTAME: ${item.numero}
+NÚMERO DO PROCESSO / CERTAME: ${item.numero}
 MODALIDADE: ${item.modalidade}
 SITUAÇÃO DO REGISTRO: ${item.situacao}
 LOCALIZAÇÃO: ${item.municipio} - Estado de ${item.uf}

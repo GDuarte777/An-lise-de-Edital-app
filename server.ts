@@ -969,6 +969,24 @@ function parseEditalLocally(text: string): any {
     dataSessao = `${dateMatch[1]} às 10:00h (Fuso de Brasília - Horário Oficial)`;
   }
 
+  // 4b. Extract direct PNCP Link or Control Number
+  let linkPNCP = "";
+  const directPncpMatch = content.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/\d{14}\/\d{4}\/\d+)/i)
+    || content.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/[^\s\)\"\'>]+)/i)
+    || content.match(/LINK OFICIAL PNCP:\s*(https?:\/\/[^\s\)\"\'>]+)/i);
+
+  if (directPncpMatch) {
+    linkPNCP = directPncpMatch[1].replace(/[.,;]$/, "");
+  } else {
+    const numControleMatch = content.match(/(\d{14})[-_]?1[-_]?(\d{1,6})\/(\d{4})/);
+    if (numControleMatch) {
+      const cnpj = numControleMatch[1];
+      const seq = parseInt(numControleMatch[2], 10);
+      const ano = numControleMatch[3];
+      linkPNCP = `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`;
+    }
+  }
+
   // 5. Descrição do Produto & Valores
   let produto = "";
   
@@ -1116,11 +1134,13 @@ Aproveite o modelo de contratação para cotar previamente com fornecedores e di
         "Balanço Patrimonial do último exercício social registrado"
       ];
     })(),
+    linkPNCP: linkPNCP || undefined,
     identificacaoCertame: {
       orgaoComprador: orgao,
       modalidade,
       identificacaoNumerica: numProcesso,
-      dataHoraSessao: dataSessao
+      dataHoraSessao: dataSessao,
+      linkPNCP: linkPNCP || undefined
     },
     especificacoesTecnicas: {
       exigenciasFisicas: [
@@ -1558,6 +1578,32 @@ const PORT = 3000;
     const key = supabaseServiceKey || supabaseAnonKey;
     
     const sql = `
+      create table if not exists planilhas_disputas (
+        id text primary key,
+        user_id uuid references auth.users(id) on delete cascade not null,
+        orgao text not null,
+        uasg_und_compradora text default '',
+        numero_licitacao text default '',
+        portal text default 'Compras.gov.br',
+        produto_item text not null,
+        quantidade numeric default 1,
+        unidade_medida text default 'Unidade',
+        valor_estimado_item numeric default 0,
+        nosso_valor_alvo numeric default 0,
+        valor_minimo_piso numeric default 0,
+        data_hora_disputa text default '',
+        status text default 'Agendada',
+        observacoes text default '',
+        updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+      );
+      alter table planilhas_disputas enable row level security;
+      do $$ begin
+        if not exists (select 1 from pg_policies where tablename = 'planilhas_disputas' and policyname = 'Usuarios acessam suas disputas') then
+          create policy "Usuarios acessam suas disputas" on planilhas_disputas
+            for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+        end if;
+      end $$;
+
       create table if not exists configuracoes_usuario (
         user_id uuid references auth.users(id) on delete cascade not null primary key,
         active_provider text not null default 'gemini',
@@ -2097,7 +2143,8 @@ Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos 
                   orgaoComprador: { type: Type.STRING, description: "Órgão comprador e Unidade Gestora" },
                   modalidade: { type: Type.STRING, description: "Modalidade do processo (eg. Pregão Eletrônico, Concorrência)" },
                   identificacaoNumerica: { type: Type.STRING, description: "Número do Processo ou Edital / busca no portal" },
-                  dataHoraSessao: { type: Type.STRING, description: "Data, horário e fuso da sessão de disputa/lances" }
+                  dataHoraSessao: { type: Type.STRING, description: "Data, horário e fuso da sessão de disputa/lances" },
+                  linkPNCP: { type: Type.STRING, description: "URL ou link direto da licitação/edital no Portal PNCP (se identificado)" }
                 },
                 required: ["orgaoComprador", "modalidade", "identificacaoNumerica", "dataHoraSessao"]
               },
@@ -2180,6 +2227,31 @@ Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos 
 
       if (!parsedData || Object.keys(parsedData).length === 0) {
         throw new Error("A IA não retornou um formato de JSON estruturado válido.");
+      }
+
+      // Preserve or extract direct PNCP URL or PNCP control number if present in input text
+      const textForUrl = ((req.body.textInput || "") + "\n" + (req.body.editalText || "")).trim();
+      const directUrlMatch = textForUrl.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/\d{14}\/\d{4}\/\d+)/i)
+        || textForUrl.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/[^\s\)\"\'>]+)/i)
+        || textForUrl.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/[^\s\)\"\'>]+)/i)
+        || textForUrl.match(/LINK OFICIAL PNCP:\s*(https?:\/\/[^\s\)\"\'>]+)/i);
+
+      if (directUrlMatch) {
+        const extractedPncpUrl = directUrlMatch[1].replace(/[.,;]$/, "");
+        parsedData.linkPNCP = extractedPncpUrl;
+        if (!parsedData.identificacaoCertame) parsedData.identificacaoCertame = {};
+        parsedData.identificacaoCertame.linkPNCP = extractedPncpUrl;
+      } else {
+        const numControleMatch = textForUrl.match(/(\d{14})[-_]?1[-_]?(\d{1,6})\/(\d{4})/);
+        if (numControleMatch) {
+          const cnpj = numControleMatch[1];
+          const seq = parseInt(numControleMatch[2], 10);
+          const ano = numControleMatch[3];
+          const constructedUrl = `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`;
+          parsedData.linkPNCP = constructedUrl;
+          if (!parsedData.identificacaoCertame) parsedData.identificacaoCertame = {};
+          parsedData.identificacaoCertame.linkPNCP = constructedUrl;
+        }
       }
 
       return res.json({ analysis: parsedData });

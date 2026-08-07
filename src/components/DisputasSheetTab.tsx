@@ -6,6 +6,11 @@ import {
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer } from "../utils/aiClientHelper";
+import { 
+  fetchDisputasFromSupabase, 
+  saveDisputaToSupabase, 
+  deleteDisputaFromSupabase 
+} from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 
 interface DisputasSheetTabProps {
@@ -131,6 +136,15 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     }
     return INITIAL_DISPUTAS;
   });
+
+  // Load from Supabase on component mount
+  useEffect(() => {
+    fetchDisputasFromSupabase().then(dbRows => {
+      if (dbRows && dbRows.length > 0) {
+        setDisputas(dbRows);
+      }
+    }).catch(e => console.warn("Erro ao buscar disputas do Supabase:", e));
+  }, []);
 
   // History Editais list for auto-fill feature
   const [historyOptions, setHistoryOptions] = useState<AnalyzedEditalOption[]>([]);
@@ -378,8 +392,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     }
 
     if (editingRow) {
-      setDisputas(prev => prev.map(r => r.id === editingRow.id ? { ...r, ...formData } as DisputaRow : r));
-      showToast("Disputa atualizada com sucesso na planilha!");
+      const updatedRow = { ...editingRow, ...formData } as DisputaRow;
+      setDisputas(prev => prev.map(r => r.id === editingRow.id ? updatedRow : r));
+      saveDisputaToSupabase(updatedRow).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
+      showToast("Disputa atualizada com sucesso na planilha e no Supabase!");
     } else {
       const newRow: DisputaRow = {
         id: "disp-" + Date.now(),
@@ -398,8 +414,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
         observacoes: formData.observacoes || ""
       };
       setDisputas(prev => [newRow, ...prev]);
+      saveDisputaToSupabase(newRow).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
       confetti({ particleCount: 35, spread: 40 });
-      showToast("Nova linha adicionada com sucesso!");
+      showToast("Nova linha adicionada com sucesso no Supabase!");
     }
 
     setIsModalOpen(false);
@@ -424,6 +441,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       observacoes: ""
     };
     setDisputas(prev => [...prev, newRow]);
+    saveDisputaToSupabase(newRow).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
     showToast("Nova linha inserida na planilha!");
   };
 
@@ -431,7 +449,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const handleCellChange = (id: string, field: keyof DisputaRow, value: any) => {
     setDisputas(prev => prev.map(r => {
       if (r.id === id) {
-        return { ...r, [field]: value };
+        const updated = { ...r, [field]: value };
+        saveDisputaToSupabase(updated).catch(e => console.warn("Erro ao salvar célula no Supabase:", e));
+        return updated;
       }
       return r;
     }));
@@ -441,13 +461,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const handleDeleteRow = (id: string) => {
     if (confirm("Tem certeza que deseja remover esta linha da planilha?")) {
       setDisputas(prev => prev.filter(r => r.id !== id));
+      deleteDisputaFromSupabase(id).catch(e => console.warn("Erro ao excluir disputa do Supabase:", e));
       showToast("Linha removida com sucesso.", "info");
     }
   };
 
   // Change Status Quick Handler
   const handleStatusChange = (id: string, newStatus: DisputaStatus) => {
-    setDisputas(prev => prev.map(r => r.id === id ? { ...r, status: newStatus } : r));
+    setDisputas(prev => prev.map(r => {
+      if (r.id === id) {
+        const updated = { ...r, status: newStatus };
+        saveDisputaToSupabase(updated).catch(e => console.warn("Erro ao atualizar status no Supabase:", e));
+        return updated;
+      }
+      return r;
+    }));
     if (newStatus === "Vencida" || newStatus === "Homologada") {
       confetti({ particleCount: 50, spread: 60 });
     }

@@ -171,13 +171,13 @@ export async function syncDocumentToSupabase(file: any): Promise<{ success: bool
 }
 
 // Fetch live database metrics to prove the real-time SaaS connection is active
-export async function fetchSupabaseTableCounts(): Promise<{ editais: number; documentos: number; certidoes: number; concorrentes: number; chatSessions: number }> {
+export async function fetchSupabaseTableCounts(): Promise<{ editais: number; documentos: number; certidoes: number; concorrentes: number; chatSessions: number; disputas: number }> {
   const client = getSupabaseClient();
-  if (!client) return { editais: 0, documentos: 0, certidoes: 0, concorrentes: 0, chatSessions: 0 };
+  if (!client) return { editais: 0, documentos: 0, certidoes: 0, concorrentes: 0, chatSessions: 0, disputas: 0 };
 
   try {
     const user = await getActiveUser();
-    if (!user) return { editais: 0, documentos: 0, certidoes: 0, concorrentes: 0, chatSessions: 0 };
+    if (!user) return { editais: 0, documentos: 0, certidoes: 0, concorrentes: 0, chatSessions: 0, disputas: 0 };
 
     const { count: editaisCount } = await client
       .from("editais_analisados")
@@ -204,16 +204,22 @@ export async function fetchSupabaseTableCounts(): Promise<{ editais: number; doc
       .select("*", { count: "exact", head: true })
       .eq("user_id", user.id);
 
+    const { count: disputasCount } = await client
+      .from("planilhas_disputas")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id);
+
     return {
       editais: editaisCount || 0,
       documentos: docsCount || 0,
       certidoes: certCount || 0,
       concorrentes: competitorCount || 0,
-      chatSessions: chatCount || 0
+      chatSessions: chatCount || 0,
+      disputas: disputasCount || 0
     };
   } catch (e) {
     console.warn("Could not fetch table counts (tables may not exist yet):", e);
-    return { editais: 0, documentos: 0, certidoes: 0, concorrentes: 0, chatSessions: 0 };
+    return { editais: 0, documentos: 0, certidoes: 0, concorrentes: 0, chatSessions: 0, disputas: 0 };
   }
 }
 
@@ -652,6 +658,99 @@ export async function deleteDocumentFromSupabase(id: string): Promise<boolean> {
     if (!user) return false;
     const { error } = await client
       .from("documentos_sincronizados")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", user.id);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+// 6. Planilhas de Disputas (planilhas_disputas)
+export async function fetchDisputasFromSupabase(): Promise<any[]> {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  try {
+    const user = await getActiveUser();
+    if (!user) return [];
+    const { data, error } = await client
+      .from("planilhas_disputas")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false });
+    if (error) {
+      console.warn("fetchDisputasFromSupabase error:", error.message);
+      return [];
+    }
+    return (data || []).map(item => ({
+      id: item.id,
+      orgao: item.orgao,
+      uasgUndCompradora: item.uasg_und_compradora,
+      numeroLicitacao: item.numero_licitacao,
+      portal: item.portal,
+      produtoItem: item.produto_item,
+      quantidade: Number(item.quantidade) || 1,
+      unidadeMedida: item.unidade_medida,
+      valorEstimadoItem: Number(item.valor_estimado_item) || 0,
+      nossoValorAlvo: Number(item.nosso_valor_alvo) || 0,
+      valorMinimoPiso: Number(item.valor_minimo_piso) || 0,
+      dataHoraDisputa: item.data_hora_disputa,
+      status: item.status,
+      observacoes: item.observacoes
+    }));
+  } catch (err: any) {
+    console.warn("fetchDisputasFromSupabase error:", err?.message || err);
+    return [];
+  }
+}
+
+export async function saveDisputaToSupabase(item: any): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  try {
+    const user = await getActiveUser();
+    if (!user) return { success: false, message: "Usuário não autenticado." };
+    
+    const record = {
+      id: item.id,
+      user_id: user.id,
+      orgao: item.orgao || "",
+      uasg_und_compradora: item.uasgUndCompradora || "",
+      numero_licitacao: item.numeroLicitacao || "",
+      portal: item.portal || "Compras.gov.br",
+      produto_item: item.produtoItem || "",
+      quantidade: Number(item.quantidade) || 1,
+      unidade_medida: item.unidadeMedida || "Unidade",
+      valor_estimado_item: Number(item.valorEstimadoItem) || 0,
+      nosso_valor_alvo: Number(item.nossoValorAlvo) || 0,
+      valor_minimo_piso: Number(item.valorMinimoPiso) || 0,
+      data_hora_disputa: item.dataHoraDisputa || "",
+      status: item.status || "Agendada",
+      observacoes: item.observacoes || "",
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("planilhas_disputas")
+      .upsert([record], { onConflict: "id" });
+
+    if (error) throw error;
+    return { success: true, message: "Disputa salva com sucesso no Supabase!" };
+  } catch (err: any) {
+    console.warn("saveDisputaToSupabase error:", err?.message || err);
+    return { success: false, message: err.message };
+  }
+}
+
+export async function deleteDisputaFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const user = await getActiveUser();
+    if (!user) return false;
+    const { error } = await client
+      .from("planilhas_disputas")
       .delete()
       .eq("id", id)
       .eq("user_id", user.id);

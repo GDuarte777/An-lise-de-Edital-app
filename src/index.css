@@ -730,7 +730,9 @@ html:not(.dark) .text-gray-200,
 html:not(.dark) .text-zinc-100,
 html:not(.dark) .text-zinc-200,
 html:not(.dark) [class*="text-slate-100"],
-html:not(.dark) [class*="text-slate-200"] {
+html:not(.dark) [class*="text-slate-200"],
+html:not(.dark) [class*="text-zinc-100"],
+html:not(.dark) [class*="text-zinc-200"] {
   color: #111827 !important;
 }
 
@@ -738,7 +740,8 @@ html:not(.dark) .text-slate-300,
 html:not(.dark) .text-gray-300,
 html:not(.dark) .text-zinc-300,
 html:not(.dark) [class*="text-slate-300"],
-html:not(.dark) [class*="text-gray-300"] {
+html:not(.dark) [class*="text-gray-300"],
+html:not(.dark) [class*="text-zinc-300"] {
   color: #1F2937 !important;
 }
 
@@ -746,7 +749,8 @@ html:not(.dark) .text-slate-400,
 html:not(.dark) .text-gray-400,
 html:not(.dark) .text-zinc-400,
 html:not(.dark) [class*="text-slate-400"],
-html:not(.dark) [class*="text-gray-400"] {
+html:not(.dark) [class*="text-gray-400"],
+html:not(.dark) [class*="text-zinc-400"] {
   color: #374151 !important;
 }
 
@@ -754,7 +758,8 @@ html:not(.dark) .text-slate-500,
 html:not(.dark) .text-gray-500,
 html:not(.dark) .text-zinc-500,
 html:not(.dark) [class*="text-slate-500"],
-html:not(.dark) [class*="text-gray-500"] {
+html:not(.dark) [class*="text-gray-500"],
+html:not(.dark) [class*="text-zinc-500"] {
   color: #4B5563 !important;
 }
 
