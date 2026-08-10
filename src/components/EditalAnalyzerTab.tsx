@@ -5,7 +5,7 @@ import {
   Sparkles, RefreshCw, ChevronRight, FileCode, CheckSquare, Edit3, Settings, ClipboardPaste, 
   Coins, HelpCircle, HardDriveDownload, MonitorCheck, Save, Send, Database, FileSpreadsheet, Eye,
   Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge, Plus, X,
-  LayoutGrid, List, Search, Check, Calendar, ExternalLink, Globe
+  LayoutGrid, List, Search, Check, Calendar, ExternalLink, Globe, Building2
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -87,69 +87,190 @@ function extractCleanPncpQuery(rawIdNum: string, fullText: string): string {
   return cleaned || rawIdNum.trim();
 }
 
-function getPncpLink(edital: EditalAnalysis | null): string | null {
+export function buildPncpEditalUrl(str: string): string | null {
+  if (!str) return null;
+  const cleanedText = str.trim();
+
+  // 1. Canonical PNCP URL or URL in text (/app/editais/CNPJ/ANO/SEQ)
+  const canonicalMatch = cleanedText.match(/https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/(\d{14})\/(\d{4})\/(\d{1,6})/i);
+  if (canonicalMatch) {
+    const cnpj = canonicalMatch[1];
+    const ano = canonicalMatch[2];
+    const seqPadded = canonicalMatch[3].padStart(6, '0');
+    return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seqPadded}`;
+  }
+
+  // 2. ID Contratação PNCP / Controle PNCP format: e.g. 79151312000156-1-000501/2026 or 79151312000156-1-000501-2026
+  const controlMatch = cleanedText.match(/(\d{14})[-_\s/]?1[-_\s/]?(\d{1,6})[/-_](\d{4})/);
+  if (controlMatch) {
+    const cnpj = controlMatch[1];
+    const seqPadded = controlMatch[2].padStart(6, '0');
+    const ano = controlMatch[3];
+    return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seqPadded}`;
+  }
+
+  // 3. Slash format: 14-digit CNPJ / 4-digit Year / 1-6 digit Seq
+  const slashMatch1 = cleanedText.match(/(\d{14})[/-_](\d{4})[/-_](\d{1,6})/);
+  if (slashMatch1) {
+    const cnpj = slashMatch1[1];
+    const ano = slashMatch1[2];
+    const seqPadded = slashMatch1[3].padStart(6, '0');
+    return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seqPadded}`;
+  }
+
+  // 4. Slash format: 14-digit CNPJ / 1-6 digit Seq / 4-digit Year
+  const slashMatch2 = cleanedText.match(/(\d{14})[/-_](\d{1,6})[/-_](\d{4})/);
+  if (slashMatch2) {
+    const cnpj = slashMatch2[1];
+    const seqPadded = slashMatch2[2].padStart(6, '0');
+    const ano = slashMatch2[3];
+    return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seqPadded}`;
+  }
+
+  // 5. Generic PNCP URL
+  const genericMatch = cleanedText.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/[^\s\)\"\'>]+)/i);
+  if (genericMatch) {
+    return genericMatch[1].replace(/[.,;]$/, "");
+  }
+
+  return null;
+}
+
+export function getUasg(edital: EditalAnalysis | null): string {
+  if (!edital) return "Não informada";
+
+  const explicitUasg = edital.uasg || (edital as any).uasgUndCompradora || edital.identificacaoCertame?.uasg || (edital.identificacaoCertame as any)?.uasgUndCompradora;
+  if (explicitUasg && typeof explicitUasg === "string" && explicitUasg.trim().length > 0) {
+    return explicitUasg.trim();
+  }
+
+  const combinedText = [
+    edital.identificacaoCertame?.orgaoComprador || "",
+    edital.identificacaoCertame?.identificacaoNumerica || "",
+    edital.rawText || "",
+    edital.reportMarkdown || ""
+  ].join(" ");
+
+  const uasgMatch = combinedText.match(/(?:UASG|Unidade\s+Compradora|Unidade\s+Gestora|Código\s+Unidade|Und\.?\s*Compradora)[:\s]*(\d{5,6}\b[^\n,;]*)/i)
+    || combinedText.match(/\b(\d{5,6})\s*-\s*[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s]{3,}/i);
+
+  if (uasgMatch) {
+    return uasgMatch[1].trim();
+  }
+
+  return "Não informada";
+}
+
+export function getIdContratacaoPNCP(edital: EditalAnalysis | null): string {
+  if (!edital) return "Não identificado";
+
+  const explicitId = edital.idContratacaoPNCP || edital.identificacaoCertame?.idContratacaoPNCP;
+  if (explicitId && typeof explicitId === "string" && explicitId.trim().length > 0) {
+    return explicitId.trim();
+  }
+
+  const combinedText = [
+    edital.identificacaoCertame?.linkPNCP || "",
+    edital.linkPNCP || "",
+    edital.rawText || "",
+    edital.reportMarkdown || "",
+    edital.identificacaoCertame?.identificacaoNumerica || ""
+  ].join(" ");
+
+  const matchControl = combinedText.match(/(\d{14})[-_\s/]?1[-_\s/]?(\d{1,6})[/-_](\d{4})/);
+  if (matchControl) {
+    const cnpj = matchControl[1];
+    const seqPadded = matchControl[2].padStart(6, '0');
+    const ano = matchControl[3];
+    return `${cnpj}-1-${seqPadded}/${ano}`;
+  }
+
+  const matchUrl = combinedText.match(/pncp\.gov\.br\/app\/editais\/(\d{14})\/(\d{4})\/(\d{1,6})/i);
+  if (matchUrl) {
+    const cnpj = matchUrl[1];
+    const ano = matchUrl[2];
+    const seqPadded = matchUrl[3].padStart(6, '0');
+    return `${cnpj}-1-${seqPadded}/${ano}`;
+  }
+
+  const cnpjMatch = combinedText.match(/(?:CNPJ[:\s]*)?(\d{14}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);
+  const yearMatch = combinedText.match(/\b(202[4-9])\b/);
+  const seqMatch = combinedText.match(/(?:Dispensa|Pregão|Edital|Processo|Contratação|nº|n°)\s*(?:nº|n°)?\s*(\d{1,6})\/202[4-9]/i);
+
+  if (cnpjMatch && yearMatch && seqMatch) {
+    const cleanCnpj = cnpjMatch[1].replace(/\D/g, "");
+    const ano = yearMatch[1];
+    const seqPadded = seqMatch[1].padStart(6, '0');
+    if (cleanCnpj.length === 14) {
+      return `${cleanCnpj}-1-${seqPadded}/${ano}`;
+    }
+  }
+
+  return "Não identificado";
+}
+
+export function getPncpDirectUrl(edital: EditalAnalysis | null): string | null {
   if (!edital) return null;
 
   const knownLink = edital.identificacaoCertame?.linkPNCP || edital.linkPNCP;
-  if (knownLink && typeof knownLink === "string" && knownLink.startsWith("http")) {
-    if (knownLink.includes("/app/editais/")) {
-      return knownLink;
+  if (knownLink && typeof knownLink === "string") {
+    const directMatch = knownLink.match(/https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/(\d{14})\/(\d{4})\/(\d{1,6})/i);
+    if (directMatch) {
+      const cnpj = directMatch[1];
+      const ano = directMatch[2];
+      const seq = directMatch[3].padStart(6, '0');
+      return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`;
     }
   }
 
-  const text = (edital.rawText || "") + " " + (edital.reportMarkdown || "");
+  const idPNCP = getIdContratacaoPNCP(edital);
+  if (idPNCP && idPNCP !== "Não identificado") {
+    const m = idPNCP.match(/(\d{14})[-_\s/]?1?[-_\s/]?(\d{1,6})[/-_](\d{4})/);
+    if (m) {
+      const cnpj = m[1];
+      const seq = m[2].padStart(6, '0');
+      const ano = m[3];
+      return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`;
+    }
 
-  // Direct PNCP edital page link in text (/app/editais/CNPJ/ANO/SEQ)
-  const directPncpMatch = text.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/\d{14}\/\d{4}\/\d+)/i);
-  if (directPncpMatch) {
-    return directPncpMatch[1];
-  }
+    const m2 = idPNCP.match(/(\d{14})[/-_](\d{4})[/-_](\d{1,6})/);
+    if (m2) {
+      const cnpj = m2[1];
+      const ano = m2[2];
+      const seq = m2[3].padStart(6, '0');
+      return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`;
+    }
 
-  // Any generic PNCP or Comprasnet URL in text
-  const anyUrlMatch = text.match(/(https?:\/\/(?:www\.)?(?:pncp\.gov\.br|cnetmobile\.estaleiro\.serpro\.gov\.br|gov\.br\/compras)\/[^\s\)\"\'>]+)/i);
-  if (anyUrlMatch) {
-    return anyUrlMatch[1].replace(/[.,;]$/, "");
-  }
-
-  // PNCP control number (e.g. 26989715000102-1-000077/2026 or 00394804000100-1-000012/2026)
-  const numControleMatch = text.match(/(\d{14})[-_]?1[-_]?(\d{1,6})\/(\d{4})/);
-  if (numControleMatch) {
-    const cnpj = numControleMatch[1];
-    const seq = parseInt(numControleMatch[2], 10);
-    const ano = numControleMatch[3];
-    return `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`;
-  }
-
-  // CNPJ (14 digits) + Year + Seq
-  const cnpjMatch = text.match(/(?:CNPJ[:\s]*)?(\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{14})/i);
-  const yearMatch = text.match(/\b(202[4-9])\b/);
-  const numSeqMatch = text.match(/(?:Dispensa|Pregão|Edital|Processo|Contratação|nº|n°)\s*(?:nº|n°)?\s*(\d{1,6})\/202[4-9]/i);
-
-  if (cnpjMatch && yearMatch && numSeqMatch) {
-    const cleanCnpj = cnpjMatch[1].replace(/\D/g, "");
-    if (cleanCnpj.length === 14) {
-      const seq = parseInt(numSeqMatch[1], 10);
-      const ano = yearMatch[1];
-      if (!isNaN(seq) && seq > 0) {
-        return `https://pncp.gov.br/app/editais/${cleanCnpj}/${ano}/${seq}`;
-      }
+    const cleanPath = idPNCP.replace(/^https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\//i, "").trim();
+    if (cleanPath) {
+      return `https://pncp.gov.br/app/editais/${cleanPath}`;
     }
   }
 
-  // Fallback to knownLink if it exists
-  if (knownLink && typeof knownLink === "string" && knownLink.startsWith("http")) {
-    return knownLink;
+  const combinedText = [
+    edital.rawText || "",
+    edital.reportMarkdown || "",
+    edital.identificacaoCertame?.identificacaoNumerica || "",
+    edital.identificacaoCertame?.orgaoComprador || ""
+  ].join(" ");
+
+  const builtFromText = buildPncpEditalUrl(combinedText);
+  if (builtFromText && builtFromText.includes("/app/editais/")) {
+    return builtFromText;
   }
 
-  // Clean query fallback
   const idNum = edital.identificacaoCertame?.identificacaoNumerica || "";
-  const cleanTerm = extractCleanPncpQuery(idNum, text);
+  const cleanTerm = extractCleanPncpQuery(idNum, combinedText);
 
   if (cleanTerm && cleanTerm.length >= 2) {
     return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(cleanTerm)}`;
   }
 
   return "https://pncp.gov.br/app/editais";
+}
+
+export function getPncpLink(edital: EditalAnalysis | null): string | null {
+  return getPncpDirectUrl(edital);
 }
 
 function getDataHoraDisputa(edital: EditalAnalysis | null): string {
@@ -1789,30 +1910,63 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                   </span>
                 </div>
 
-                {/* Prominent Quick Action Bar for Dispute Date & PNCP Link */}
+                {/* Prominent Quick Action Bar for Dispute Date, UASG, ID PNCP & Direct PNCP Link */}
                 {activeEdital && (
-                  <div className="bg-[#FFF0E5] dark:bg-[#2A170A]/60 border border-[#FF5A00]/30 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-2xs">
-                    <div className="flex items-start sm:items-center gap-3">
-                      <div className="p-2.5 bg-[#FF5A00] text-white rounded-lg shadow-2xs shrink-0 mt-0.5 sm:mt-0">
-                        <Calendar className="w-5 h-5" />
+                  <div className="bg-[#FFF0E5] dark:bg-[#2A170A]/60 border border-[#FF5A00]/30 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 shadow-2xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1">
+                      {/* 1. Data e Hora da Disputa */}
+                      <div className="flex items-center gap-2.5 bg-white/80 dark:bg-[#121212]/80 p-2.5 rounded-lg border border-[#FFD6C2] dark:border-[#4A2410]">
+                        <div className="p-2 bg-[#FF5A00] text-white rounded-md shrink-0">
+                          <Calendar className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-[9px] font-mono uppercase tracking-wider text-[#6B7280] dark:text-zinc-400 font-bold block truncate">
+                            Data e Hora da Disputa
+                          </span>
+                          <span className="text-xs font-extrabold text-[#111827] dark:text-zinc-100 flex items-center gap-1 truncate">
+                            <Clock className="w-3 h-3 text-[#FF5A00] shrink-0" />
+                            <span className="truncate">{getDataHoraDisputa(activeEdital)}</span>
+                          </span>
+                        </div>
                       </div>
-                      <div className="space-y-0.5">
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B7280] dark:text-zinc-400 font-bold block">
-                          Data e Hora Oficial da Disputa / Sessão Pública
-                        </span>
-                        <span className="text-xs sm:text-sm font-extrabold text-[#111827] dark:text-zinc-100 flex items-center gap-1.5">
-                          <Clock className="w-3.5 h-3.5 text-[#FF5A00]" />
-                          {getDataHoraDisputa(activeEdital)}
-                        </span>
+
+                      {/* 2. UASG / Unidade Compradora */}
+                      <div className="flex items-center gap-2.5 bg-white/80 dark:bg-[#121212]/80 p-2.5 rounded-lg border border-[#FFD6C2] dark:border-[#4A2410]">
+                        <div className="p-2 bg-[#FF5A00] text-white rounded-md shrink-0">
+                          <Building2 className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-[9px] font-mono uppercase tracking-wider text-[#6B7280] dark:text-zinc-400 font-bold block truncate">
+                            UASG / Unidade
+                          </span>
+                          <span className="text-xs font-extrabold text-[#111827] dark:text-zinc-100 block truncate" title={getUasg(activeEdital)}>
+                            {getUasg(activeEdital)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 3. Id Contratação PNCP */}
+                      <div className="flex items-center gap-2.5 bg-white/80 dark:bg-[#121212]/80 p-2.5 rounded-lg border border-[#FFD6C2] dark:border-[#4A2410]">
+                        <div className="p-2 bg-[#FF5A00] text-white rounded-md shrink-0">
+                          <FileText className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-[9px] font-mono uppercase tracking-wider text-[#6B7280] dark:text-zinc-400 font-bold block truncate">
+                            Id Contratação PNCP
+                          </span>
+                          <span className="text-xs font-mono font-extrabold text-[#FF5A00] dark:text-[#FF7A33] block truncate" title={getIdContratacaoPNCP(activeEdital)}>
+                            {getIdContratacaoPNCP(activeEdital)}
+                          </span>
+                        </div>
                       </div>
                     </div>
 
-                    {getPncpLink(activeEdital) && (
+                    {getPncpDirectUrl(activeEdital) && (
                       <a
-                        href={getPncpLink(activeEdital)!}
+                        href={getPncpDirectUrl(activeEdital)!}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#FF5A00] hover:bg-[#E65000] text-white text-xs font-bold rounded-lg transition-all shadow-2xs hover:shadow-xs shrink-0 cursor-pointer"
+                        className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-[#FF5A00] hover:bg-[#E65000] text-white text-xs font-bold rounded-xl transition-all shadow-2xs hover:shadow-xs shrink-0 cursor-pointer w-full xl:w-auto"
                       >
                         <Globe className="w-4 h-4" />
                         <span>Acessar Licitação no Portal PNCP</span>

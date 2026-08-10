@@ -98,25 +98,8 @@ function extractEditalFields(editalObj: EditalAnalysis, fileNameFallback?: strin
   };
 }
 
-// 1 Example item only as requested
-const INITIAL_DISPUTAS: DisputaRow[] = [
-  {
-    id: "disp-101",
-    orgao: "TRF 3ª Região - São Paulo",
-    uasgUndCompradora: "090012 - TRF3",
-    numeroLicitacao: "PE 14/2026",
-    portal: "Compras.gov.br",
-    produtoItem: "Laptops Corporativos i7 16GB NVMe",
-    quantidade: 100,
-    unidadeMedida: "Unidade",
-    valorEstimadoItem: 4500000.00,
-    nossoValorAlvo: 4120000.00,
-    valorMinimoPiso: 3850000.00,
-    dataHoraDisputa: "2026-08-05 10:00",
-    status: "Agendada",
-    observacoes: "Monitorar concorrência da Lenovo e Dell. Margem estimada em 18%."
-  }
-];
+// Initial empty array - only user/Supabase data exists
+const INITIAL_DISPUTAS: DisputaRow[] = [];
 
 export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps) {
   // Mode Switcher: "spreadsheet" (Planilha Interativa Excel) vs "dashboard" (Painel Visual)
@@ -129,19 +112,22 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter((r: any) => r.id !== "disp-101");
+        }
       } catch (e) {
         console.error(e);
       }
     }
-    return INITIAL_DISPUTAS;
+    return [];
   });
 
   // Load from Supabase on component mount
   useEffect(() => {
     fetchDisputasFromSupabase().then(dbRows => {
-      if (dbRows && dbRows.length > 0) {
+      if (dbRows && Array.isArray(dbRows)) {
         setDisputas(dbRows);
+        localStorage.setItem("aip_disputas_sheet", JSON.stringify(dbRows));
       }
     }).catch(e => console.warn("Erro ao buscar disputas do Supabase:", e));
   }, []);
@@ -629,23 +615,23 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const activeCellValue = activeRowObj && activeCell ? activeRowObj[activeCell.colKey] : "";
 
   return (
-    <div id="disputas-sheet-view" className="flex-1 flex flex-col h-full bg-[#F8F9FA] overflow-y-auto select-text font-sans">
+    <div id="disputas-sheet-view" className="flex-1 flex flex-col h-full bg-[#F8F9FA] dark:bg-[#09090B] overflow-y-auto select-text font-sans text-[#111827] dark:text-zinc-100">
       
       {/* Top Banner & Mode Switcher Bar */}
-      <div className="p-5 border-b border-[#E5E7EB] bg-white flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-xs">
+      <div className="p-5 border-b border-[#E5E7EB] dark:border-[#27272A] bg-white dark:bg-[#121212] flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-xs">
         <div>
           <div className="flex items-center gap-2.5">
-            <span className="bg-[#FFF0E5] text-[#FF5A00] p-2 rounded-xl border border-[#FFD6C2]">
+            <span className="bg-[#FFF0E5] dark:bg-[#2A170A] text-[#FF5A00] p-2 rounded-xl border border-[#FFD6C2] dark:border-[#4A2410]">
               <FileSpreadsheet className="w-5 h-5" />
             </span>
             <div>
-              <h2 className="text-xl font-bold text-[#111827] tracking-tight flex items-center gap-2">
+              <h2 className="text-xl font-bold text-[#111827] dark:text-zinc-100 tracking-tight flex items-center gap-2">
                 <span>Planilha de Disputas & Pregões</span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#FFF0E5] text-[#FF5A00] border border-[#FFD6C2] font-semibold uppercase">
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[#FFF0E5] dark:bg-[#2A170A] text-[#FF5A00] border border-[#FFD6C2] dark:border-[#4A2410] font-semibold uppercase">
                   {viewMode === "spreadsheet" ? "Modo Planilha Interativa" : "Modo Painel / Dashboard"}
                 </span>
               </h2>
-              <p className="text-[#6B7280] text-xs mt-0.5">
+              <p className="text-[#6B7280] dark:text-zinc-400 text-xs mt-0.5">
                 Alterne livremente entre a visão de **Planilha Excel em Grade** ou a **Visão Painel Visual**.
               </p>
             </div>
@@ -656,13 +642,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
         <div className="flex flex-wrap items-center gap-3">
           
           {/* Mode Switcher Buttons */}
-          <div className="flex items-center bg-[#F3F4F6] p-1 rounded-xl border border-[#E5E7EB]">
+          <div className="flex items-center bg-[#F3F4F6] dark:bg-[#18181B] p-1 rounded-xl border border-[#E5E7EB] dark:border-[#27272A]">
             <button
               onClick={() => setViewMode("spreadsheet")}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition duration-150 cursor-pointer ${
                 viewMode === "spreadsheet"
                   ? "bg-[#FF5A00] text-white shadow-xs"
-                  : "text-[#6B7280] hover:text-[#111827]"
+                  : "text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white"
               }`}
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -673,7 +659,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition duration-150 cursor-pointer ${
                 viewMode === "dashboard"
                   ? "bg-[#FF5A00] text-white shadow-xs"
-                  : "text-[#6B7280] hover:text-[#111827]"
+                  : "text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white"
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" />
@@ -681,21 +667,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </button>
           </div>
 
-          <div className="h-6 w-px bg-[#E5E7EB] hidden sm:block" />
+          <div className="h-6 w-px bg-[#E5E7EB] dark:bg-[#27272A] hidden sm:block" />
 
           {/* Action buttons */}
           <button
             onClick={handleCopyClipboard}
-            className="bg-white hover:bg-gray-50 border border-[#D1D5DB] text-[#374151] font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            className="bg-white dark:bg-[#18181B] hover:bg-gray-50 dark:hover:bg-zinc-800 border border-[#D1D5DB] dark:border-[#27272A] text-[#374151] dark:text-zinc-200 font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
             title="Copiar dados para colar direto no Excel ou Google Sheets"
           >
-            <Copy className="w-3.5 h-3.5 text-[#6B7280]" />
+            <Copy className="w-3.5 h-3.5 text-[#6B7280] dark:text-zinc-400" />
             <span>Copiar Tabela</span>
           </button>
 
           <button
             onClick={handleExportCSV}
-            className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
+            className="bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer"
             title="Baixar arquivo .CSV para Excel"
           >
             <Download className="w-3.5 h-3.5" />
@@ -730,17 +716,17 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       {/* Filter Toolbar & Search */}
       <div className="p-6 space-y-4">
         
-        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white p-3.5 border border-[#E5E7EB] rounded-xl shadow-xs">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white dark:bg-[#121212] p-3.5 border border-[#E5E7EB] dark:border-[#27272A] rounded-xl shadow-xs">
           
           {/* Search box */}
           <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-[#9CA3AF]" />
+            <Search className="absolute left-3 top-2.5 w-4 h-4 text-[#9CA3AF] dark:text-zinc-500" />
             <input
               type="text"
               placeholder="Buscar por órgão, UASG, nº da licitação, produto..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-1.5 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00]"
+              className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-lg pl-9 pr-3 py-1.5 text-xs text-[#111827] dark:text-zinc-100 placeholder:text-[#9CA3AF] dark:placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#FF5A00]"
             />
           </div>
 
@@ -748,13 +734,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           <div className="flex flex-wrap items-center gap-2">
             
             {/* Status Filter */}
-            <div className="flex items-center gap-1.5 bg-[#F9FAFB] border border-[#D1D5DB] rounded-lg px-2.5 py-1 text-xs text-[#374151]">
+            <div className="flex items-center gap-1.5 bg-[#F9FAFB] dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-lg px-2.5 py-1 text-xs text-[#374151] dark:text-zinc-300">
               <Filter className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
-              <span className="text-[10px] uppercase font-bold text-[#6B7280]">Status:</span>
+              <span className="text-[10px] uppercase font-bold text-[#6B7280] dark:text-zinc-400">Status:</span>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-transparent text-xs text-[#111827] font-semibold focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs text-[#111827] dark:text-zinc-100 font-semibold focus:outline-none cursor-pointer dark:bg-[#18181B]"
               >
                 <option value="Todas">Todas</option>
                 <option value="Agendada">Agendadas</option>
@@ -767,12 +753,12 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </div>
 
             {/* Portal Filter */}
-            <div className="flex items-center gap-1.5 bg-[#F9FAFB] border border-[#D1D5DB] rounded-lg px-2.5 py-1 text-xs text-[#374151]">
-              <span className="text-[10px] uppercase font-bold text-[#6B7280]">Portal:</span>
+            <div className="flex items-center gap-1.5 bg-[#F9FAFB] dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-lg px-2.5 py-1 text-xs text-[#374151] dark:text-zinc-300">
+              <span className="text-[10px] uppercase font-bold text-[#6B7280] dark:text-zinc-400">Portal:</span>
               <select
                 value={portalFilter}
                 onChange={(e) => setPortalFilter(e.target.value)}
-                className="bg-transparent text-xs text-[#111827] font-semibold focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs text-[#111827] dark:text-zinc-100 font-semibold focus:outline-none cursor-pointer dark:bg-[#18181B]"
               >
                 <option value="Todos">Todos</option>
                 <option value="Compras.gov.br">Compras.gov.br</option>
@@ -785,7 +771,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
             <button
               onClick={handleAddBlankRow}
-              className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold px-3 py-1 rounded-lg text-xs transition cursor-pointer"
+              className="flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold px-3 py-1 rounded-lg text-xs transition cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>+ Inserir Linha</span>
@@ -797,20 +783,20 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
         {/* MODE 1: MODELO PLANILHA INTERATIVA EXCEL */}
         {viewMode === "spreadsheet" ? (
-          <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden shadow-xs flex flex-col">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-xl overflow-hidden shadow-xs flex flex-col">
             
             {/* Spreadsheet Top Excel-Style Formula & Active Cell Bar */}
-            <div className="bg-[#F9FAFB] px-4 py-2 border-b border-[#E5E7EB] flex items-center gap-3 font-mono text-xs">
+            <div className="bg-[#F9FAFB] dark:bg-[#18181B] px-4 py-2 border-b border-[#E5E7EB] dark:border-[#27272A] flex items-center gap-3 font-mono text-xs">
               
               {/* Selected Cell Tag */}
-              <div className="flex items-center gap-1.5 bg-[#FFF0E5] border border-[#FFD6C2] text-[#FF5A00] font-bold px-2.5 py-1 rounded-md text-[11px] min-w-[110px]">
+              <div className="flex items-center gap-1.5 bg-[#FFF0E5] dark:bg-[#2A170A] border border-[#FFD6C2] dark:border-[#4A2410] text-[#FF5A00] font-bold px-2.5 py-1 rounded-md text-[11px] min-w-[110px]">
                 <span className="font-mono">fx</span>
                 <span>{activeCell ? `Célula ${activeCell.colLetter}${disputas.findIndex(r => r.id === activeCell.rowId) + 1}` : 'A1'}</span>
               </div>
 
               {/* Formula input box for active cell */}
-              <div className="flex-1 flex items-center gap-2 bg-white border border-[#D1D5DB] rounded-md px-3 py-1">
-                <span className="text-[#6B7280] text-[11px] font-bold">
+              <div className="flex-1 flex items-center gap-2 bg-white dark:bg-[#121212] border border-[#D1D5DB] dark:border-[#27272A] rounded-md px-3 py-1">
+                <span className="text-[#6B7280] dark:text-zinc-400 text-[11px] font-bold">
                   {activeCell?.colName || 'Valor'}:
                 </span>
                 <input
@@ -827,7 +813,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     }
                   }}
                   placeholder="Edite o valor da célula diretamente aqui ou clique na tabela..."
-                  className="w-full bg-transparent text-[#111827] font-mono text-xs focus:outline-none"
+                  className="w-full bg-transparent text-[#111827] dark:text-zinc-100 font-mono text-xs focus:outline-none"
                 />
               </div>
 
@@ -839,82 +825,82 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                 
                 {/* Spreadsheet Column Headers (A, B, C, D...) */}
                 <thead>
-                  <tr className="bg-[#F3F4F6] border-b border-[#E5E7EB] text-[#374151] text-[10.5px] font-bold">
-                    <th className="w-12 py-2 px-2 text-center border-r border-[#E5E7EB] bg-[#E5E7EB] text-[#4B5563]">#</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left min-w-[200px]">A - Órgão Comprador</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-36">B - UASG/Cod</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-32">C - Nº Licitação</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-32">D - Portal</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left min-w-[240px]">E - Produto / Item</th>
-                    <th className="py-2 px-2 border-r border-[#E5E7EB] text-center w-20">F - Qtd</th>
-                    <th className="py-2 px-2 border-r border-[#E5E7EB] text-center w-20">G - Und</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-right w-36">H - Val. Estimado</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-right w-36">I - Nosso Alvo</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-right w-36">J - Preço Piso</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-left w-36">K - Data/Hora</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] text-center w-32">L - Status</th>
+                  <tr className="bg-[#F3F4F6] dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] text-[#374151] dark:text-zinc-300 text-[10.5px] font-bold">
+                    <th className="w-12 py-2 px-2 text-center border-r border-[#E5E7EB] dark:border-[#27272A] bg-[#E5E7EB] dark:bg-[#27272A] text-[#4B5563] dark:text-zinc-300">#</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left min-w-[200px]">A - Órgão Comprador</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-36">B - UASG/Cod</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-32">C - Nº Licitação</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-32">D - Portal</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left min-w-[240px]">E - Produto / Item</th>
+                    <th className="py-2 px-2 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-20">F - Qtd</th>
+                    <th className="py-2 px-2 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-20">G - Und</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">H - Val. Estimado</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">I - Nosso Alvo</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">J - Preço Piso</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-36">K - Data/Hora</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-32">L - Status</th>
                     <th className="py-2 px-2 text-center w-16">Ações</th>
                   </tr>
                 </thead>
 
                 {/* Grid Rows */}
-                <tbody className="divide-y divide-[#E5E7EB] bg-white text-[#111827]">
+                <tbody className="divide-y divide-[#E5E7EB] dark:divide-[#27272A] bg-white dark:bg-[#121212] text-[#111827] dark:text-zinc-100">
                   {filteredDisputas.map((row, index) => (
-                    <tr key={row.id} className="hover:bg-[#FFF0E5]/40 transition-colors group">
+                    <tr key={row.id} className="hover:bg-[#FFF0E5]/40 dark:hover:bg-zinc-800/60 transition-colors group">
                       
                       {/* Row Index # */}
-                      <td className="py-2 px-2 text-center font-bold text-[#6B7280] border-r border-[#E5E7EB] bg-[#F9FAFB] text-[11px]">
+                      <td className="py-2 px-2 text-center font-bold text-[#6B7280] dark:text-zinc-400 border-r border-[#E5E7EB] dark:border-[#27272A] bg-[#F9FAFB] dark:bg-[#18181B] text-[11px]">
                         {index + 1}
                       </td>
 
                       {/* Col A: Órgão */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "orgao" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "orgao" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "orgao", colName: "Órgão Comprador", colLetter: "A" })}
                       >
                         <input
                           type="text"
                           value={row.orgao}
                           onChange={(e) => handleCellChange(row.id, "orgao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-[#111827] focus:outline-none focus:bg-white rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded"
                         />
                       </td>
 
                       {/* Col B: UASG */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "uasgUndCompradora" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "uasgUndCompradora" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "uasgUndCompradora", colName: "UASG/Cod Unidade", colLetter: "B" })}
                       >
                         <input
                           type="text"
                           value={row.uasgUndCompradora}
                           onChange={(e) => handleCellChange(row.id, "uasgUndCompradora", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-[#4B5563] focus:outline-none focus:bg-white rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#4B5563] dark:text-zinc-400 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded"
                         />
                       </td>
 
                       {/* Col C: Nº Licitação */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "numeroLicitacao" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "numeroLicitacao" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "numeroLicitacao", colName: "Nº Licitação", colLetter: "C" })}
                       >
                         <input
                           type="text"
                           value={row.numeroLicitacao}
                           onChange={(e) => handleCellChange(row.id, "numeroLicitacao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-[#FF5A00] font-bold focus:outline-none focus:bg-white rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#FF5A00] font-bold focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded"
                         />
                       </td>
 
                       {/* Col D: Portal */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "portal" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "portal" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "portal", colName: "Portal", colLetter: "D" })}
                       >
                         <select
                           value={row.portal}
                           onChange={(e) => handleCellChange(row.id, "portal", e.target.value)}
-                          className="w-full bg-transparent text-xs text-[#374151] px-1 py-1 focus:outline-none focus:bg-white rounded cursor-pointer"
+                          className="w-full bg-transparent text-xs text-[#374151] dark:text-zinc-300 px-1 py-1 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded cursor-pointer dark:bg-[#121212]"
                         >
                           <option value="Compras.gov.br">Compras.gov.br</option>
                           <option value="BLL Compras">BLL Compras</option>
@@ -926,46 +912,46 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                       {/* Col E: Produto / Item */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "produtoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "produtoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "produtoItem", colName: "Produto / Item", colLetter: "E" })}
                       >
                         <input
                           type="text"
                           value={row.produtoItem}
                           onChange={(e) => handleCellChange(row.id, "produtoItem", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-[#111827] focus:outline-none focus:bg-white rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded"
                         />
                       </td>
 
                       {/* Col F: Qtd */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "quantidade" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "quantidade" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "quantidade", colName: "Quantidade", colLetter: "F" })}
                       >
                         <input
                           type="number"
                           value={row.quantidade}
                           onChange={(e) => handleCellChange(row.id, "quantidade", Number(e.target.value))}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-[#111827] focus:outline-none focus:bg-white rounded"
+                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded"
                         />
                       </td>
 
                       {/* Col G: Und */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "unidadeMedida" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "unidadeMedida" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "unidadeMedida", colName: "Unidade", colLetter: "G" })}
                       >
                         <input
                           type="text"
                           value={row.unidadeMedida}
                           onChange={(e) => handleCellChange(row.id, "unidadeMedida", e.target.value)}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-[#4B5563] focus:outline-none focus:bg-white rounded"
+                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-[#4B5563] dark:text-zinc-400 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded"
                         />
                       </td>
 
                       {/* Col H: Val. Estimado */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorEstimadoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorEstimadoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "valorEstimadoItem", colName: "Valor Estimado (R$)", colLetter: "H" })}
                       >
                         <input
@@ -973,13 +959,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           step="0.01"
                           value={row.valorEstimadoItem}
                           onChange={(e) => handleCellChange(row.id, "valorEstimadoItem", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#4B5563] focus:outline-none focus:bg-white rounded font-mono"
+                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#4B5563] dark:text-zinc-400 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded font-mono"
                         />
                       </td>
 
                       {/* Col I: Nosso Alvo */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "nossoValorAlvo" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "nossoValorAlvo" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "nossoValorAlvo", colName: "Nosso Valor Alvo (R$)", colLetter: "I" })}
                       >
                         <input
@@ -987,13 +973,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           step="0.01"
                           value={row.nossoValorAlvo}
                           onChange={(e) => handleCellChange(row.id, "nossoValorAlvo", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#FF5A00] font-bold focus:outline-none focus:bg-white rounded font-mono"
+                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#FF5A00] font-bold focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded font-mono"
                         />
                       </td>
 
                       {/* Col J: Preço Piso */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorMinimoPiso" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorMinimoPiso" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "valorMinimoPiso", colName: "Preço Piso (R$)", colLetter: "J" })}
                       >
                         <input
@@ -1001,25 +987,25 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           step="0.01"
                           value={row.valorMinimoPiso}
                           onChange={(e) => handleCellChange(row.id, "valorMinimoPiso", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#6B7280] focus:outline-none focus:bg-white rounded font-mono"
+                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-[#6B7280] dark:text-zinc-400 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded font-mono"
                         />
                       </td>
 
                       {/* Col K: Data/Hora */}
                       <td 
-                        className={`p-1 border-r border-[#E5E7EB] ${activeCell?.rowId === row.id && activeCell?.colKey === "dataHoraDisputa" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60' : ''}`}
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "dataHoraDisputa" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
                         onClick={() => setActiveCell({ rowId: row.id, colKey: "dataHoraDisputa", colName: "Data e Hora Disputa", colLetter: "K" })}
                       >
                         <input
                           type="text"
                           value={row.dataHoraDisputa}
                           onChange={(e) => handleCellChange(row.id, "dataHoraDisputa", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-[#374151] focus:outline-none focus:bg-white rounded"
+                          className="w-full bg-transparent px-2 py-1 text-xs text-[#374151] dark:text-zinc-300 focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded"
                         />
                       </td>
 
                       {/* Col L: Status */}
-                      <td className="p-1 border-r border-[#E5E7EB] text-center">
+                      <td className="p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-center">
                         <select
                           value={row.status}
                           onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
@@ -1038,7 +1024,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       <td className="p-1 text-center">
                         <button
                           onClick={() => handleDeleteRow(row.id)}
-                          className="p-1 text-[#9CA3AF] hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
+                          className="p-1 text-[#9CA3AF] hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition cursor-pointer"
                           title="Excluir Linha"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1053,14 +1039,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </div>
 
             {/* Bottom Excel Totals Summary Bar */}
-            <div className="bg-[#F9FAFB] px-4 py-2 border-t border-[#E5E7EB] flex flex-wrap items-center justify-between text-xs font-mono text-[#4B5563] gap-4">
+            <div className="bg-[#F9FAFB] dark:bg-[#18181B] px-4 py-2 border-t border-[#E5E7EB] dark:border-[#27272A] flex flex-wrap items-center justify-between text-xs font-mono text-[#4B5563] dark:text-zinc-400 gap-4">
               <div className="flex items-center gap-4">
                 <span className="text-[#FF5A00] font-bold">∑ Fórmulas de Totais:</span>
-                <span>Soma (H): <strong className="text-[#111827]">{valorTotalEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
+                <span>Soma (H): <strong className="text-[#111827] dark:text-zinc-100">{valorTotalEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
                 <span>Soma (I): <strong className="text-[#FF5A00]">{valorNossoAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-[#6B7280]">Linhas Totais: {filteredDisputas.length}</span>
+                <span className="text-[#6B7280] dark:text-zinc-400">Linhas Totais: {filteredDisputas.length}</span>
                 <button
                   onClick={handleAddBlankRow}
                   className="bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold px-3 py-1 rounded text-[11px] transition cursor-pointer flex items-center gap-1 shadow-xs"
@@ -1074,23 +1060,23 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           </div>
         ) : (
           /* MODE 2: MODELO PAINEL / DASHBOARD VISUAL */
-          <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden shadow-xs">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-xl overflow-hidden shadow-xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 
                 {/* Header */}
                 <thead>
-                  <tr className="border-b border-[#E5E7EB] bg-[#F9FAFB] text-[10.5px] uppercase tracking-wider font-bold text-[#4B5563] select-none">
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-[#111827] transition" onClick={() => handleSort("status")}>
+                  <tr className="border-b border-[#E5E7EB] dark:border-[#27272A] bg-[#F9FAFB] dark:bg-[#18181B] text-[10.5px] uppercase tracking-wider font-bold text-[#4B5563] dark:text-zinc-400 select-none">
+                    <th className="py-3.5 px-4 cursor-pointer hover:text-[#111827] dark:hover:text-white transition" onClick={() => handleSort("status")}>
                       <div className="flex items-center gap-1">
                         <span>Status</span>
-                        <ArrowUpDown className="w-3 h-3 text-[#9CA3AF]" />
+                        <ArrowUpDown className="w-3 h-3 text-[#9CA3AF] dark:text-zinc-500" />
                       </div>
                     </th>
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-[#111827] transition" onClick={() => handleSort("orgao")}>
+                    <th className="py-3.5 px-4 cursor-pointer hover:text-[#111827] dark:hover:text-white transition" onClick={() => handleSort("orgao")}>
                       <div className="flex items-center gap-1">
                         <span>Órgão Comprador</span>
-                        <ArrowUpDown className="w-3 h-3 text-[#9CA3AF]" />
+                        <ArrowUpDown className="w-3 h-3 text-[#9CA3AF] dark:text-zinc-500" />
                       </div>
                     </th>
                     <th className="py-3.5 px-4">UASG / Und</th>
@@ -1107,17 +1093,17 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                 </thead>
 
                 {/* Body */}
-                <tbody className="divide-y divide-[#E5E7EB] text-xs text-[#111827]">
+                <tbody className="divide-y divide-[#E5E7EB] dark:divide-[#27272A] text-xs text-[#111827] dark:text-zinc-100 bg-white dark:bg-[#121212]">
                   {filteredDisputas.length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="py-12 text-center text-[#6B7280]">
-                        <FileSpreadsheet className="w-8 h-8 mx-auto mb-2 text-[#9CA3AF]" />
-                        <p className="font-bold text-sm text-[#4B5563]">Nenhum registro encontrado</p>
+                      <td colSpan={12} className="py-12 text-center text-[#6B7280] dark:text-zinc-400">
+                        <FileSpreadsheet className="w-8 h-8 mx-auto mb-2 text-[#9CA3AF] dark:text-zinc-500" />
+                        <p className="font-bold text-sm text-[#4B5563] dark:text-zinc-300">Nenhum registro encontrado</p>
                       </td>
                     </tr>
                   ) : (
                     filteredDisputas.map((row) => (
-                      <tr key={row.id} className="hover:bg-[#F9FAFB] transition-colors group">
+                      <tr key={row.id} className="hover:bg-[#F9FAFB] dark:hover:bg-[#1E1E22] transition-colors group">
                         
                         <td className="py-3 px-4">
                           <select
@@ -1134,11 +1120,11 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           </select>
                         </td>
 
-                        <td className="py-3 px-4 font-semibold text-[#111827] max-w-[180px] truncate" title={row.orgao}>
+                        <td className="py-3 px-4 font-semibold text-[#111827] dark:text-zinc-100 max-w-[180px] truncate" title={row.orgao}>
                           {row.orgao}
                         </td>
 
-                        <td className="py-3 px-4 font-mono text-[#6B7280] text-[11px]">
+                        <td className="py-3 px-4 font-mono text-[#6B7280] dark:text-zinc-400 text-[11px]">
                           {row.uasgUndCompradora}
                         </td>
 
@@ -1146,21 +1132,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           {row.numeroLicitacao}
                         </td>
 
-                        <td className="py-3 px-4 text-[#374151] text-[11px]">
-                          <span className="bg-[#F3F4F6] px-2 py-0.5 rounded border border-[#E5E7EB] text-[10.5px]">
+                        <td className="py-3 px-4 text-[#374151] dark:text-zinc-300 text-[11px]">
+                          <span className="bg-[#F3F4F6] dark:bg-[#27272A] px-2 py-0.5 rounded border border-[#E5E7EB] dark:border-[#3F3F46] text-[10.5px]">
                             {row.portal}
                           </span>
                         </td>
 
                         <td className="py-3 px-4 max-w-[240px]">
-                          <p className="line-clamp-2 text-[#374151] leading-snug">{row.produtoItem}</p>
+                          <p className="line-clamp-2 text-[#374151] dark:text-zinc-300 leading-snug">{row.produtoItem}</p>
                         </td>
 
-                        <td className="py-3 px-4 text-center font-mono text-[11px] text-[#374151]">
-                          {row.quantidade} <span className="text-[10px] text-[#9CA3AF]">{row.unidadeMedida}</span>
+                        <td className="py-3 px-4 text-center font-mono text-[11px] text-[#374151] dark:text-zinc-300">
+                          {row.quantidade} <span className="text-[10px] text-[#9CA3AF] dark:text-zinc-500">{row.unidadeMedida}</span>
                         </td>
 
-                        <td className="py-3 px-4 text-right font-mono text-[#374151]">
+                        <td className="py-3 px-4 text-right font-mono text-[#374151] dark:text-zinc-300">
                           {row.valorEstimadoItem > 0 
                             ? row.valorEstimadoItem.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                             : "—"}
@@ -1172,13 +1158,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                             : "—"}
                         </td>
 
-                        <td className="py-3 px-4 text-right font-mono text-[#6B7280] text-[11px]">
+                        <td className="py-3 px-4 text-right font-mono text-[#6B7280] dark:text-zinc-400 text-[11px]">
                           {row.valorMinimoPiso > 0 
                             ? row.valorMinimoPiso.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
                             : "—"}
                         </td>
 
-                        <td className="py-3 px-4 font-mono text-[#374151] text-[11px] whitespace-nowrap">
+                        <td className="py-3 px-4 font-mono text-[#374151] dark:text-zinc-300 text-[11px] whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
                             <Calendar className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
                             <span>{row.dataHoraDisputa}</span>
@@ -1189,14 +1175,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           <div className="flex items-center justify-center gap-1.5 opacity-80 group-hover:opacity-100 transition">
                             <button
                               onClick={() => handleOpenEditModal(row)}
-                              className="p-1.5 rounded-lg bg-[#F3F4F6] hover:bg-[#E5E7EB] text-[#4B5563] hover:text-[#111827] transition cursor-pointer"
+                              className="p-1.5 rounded-lg bg-[#F3F4F6] dark:bg-[#27272A] hover:bg-[#E5E7EB] dark:hover:bg-zinc-700 text-[#4B5563] dark:text-zinc-300 hover:text-[#111827] dark:hover:text-white transition cursor-pointer"
                               title="Editar linha"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
                               onClick={() => handleDeleteRow(row.id)}
-                              className="p-1.5 rounded-lg bg-[#F3F4F6] hover:bg-rose-50 text-[#4B5563] hover:text-rose-600 transition cursor-pointer"
+                              className="p-1.5 rounded-lg bg-[#F3F4F6] dark:bg-[#27272A] hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[#4B5563] dark:text-zinc-300 hover:text-rose-600 transition cursor-pointer"
                               title="Excluir da planilha"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -1218,18 +1204,18 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
       {/* Add / Edit Form Modal with History Pull & Attachment AI Extractions */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 animate-fade-in overflow-y-auto">
-          <div className="bg-white border border-[#E5E7EB] rounded-xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-xl overflow-hidden my-auto">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 animate-fade-in overflow-y-auto">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-xl overflow-hidden my-auto">
             
             {/* Modal Header */}
-            <div className="p-4 sm:p-5 border-b border-[#E5E7EB] flex items-center justify-between bg-[#F9FAFB] shrink-0">
-              <h3 className="text-base font-bold text-[#111827] flex items-center gap-2">
+            <div className="p-4 sm:p-5 border-b border-[#E5E7EB] dark:border-[#27272A] flex items-center justify-between bg-[#F9FAFB] dark:bg-[#18181B] shrink-0">
+              <h3 className="text-base font-bold text-[#111827] dark:text-zinc-100 flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-[#FF5A00]" />
                 <span>{editingRow ? "Editar Registro da Disputa" : "Cadastrar Nova Disputa na Planilha"}</span>
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-[#6B7280] hover:text-[#111827] p-1 rounded-lg hover:bg-[#E5E7EB] transition cursor-pointer"
+                className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1 rounded-lg hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1240,10 +1226,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
               
               {/* Top Auto-Fill Panel (History Pull OR Attachment Upload) */}
               {!editingRow && (
-                <div className="bg-[#FFF0E5] p-3.5 sm:p-4 rounded-xl border border-[#FFD6C2] space-y-3">
+                <div className="bg-[#FFF0E5] dark:bg-[#2A170A] p-3.5 sm:p-4 rounded-xl border border-[#FFD6C2] dark:border-[#4A2410] space-y-3">
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-[#FF5A00] animate-pulse shrink-0" />
-                    <span className="text-xs font-bold text-[#111827] uppercase tracking-wider">
+                    <span className="text-xs font-bold text-[#111827] dark:text-zinc-100 uppercase tracking-wider">
                       Preenchimento Automatizado via IA
                     </span>
                   </div>
@@ -1259,7 +1245,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       <select
                         value={selectedHistoryId}
                         onChange={(e) => handleApplyHistoryEdital(e.target.value)}
-                        className="w-full bg-white border border-[#D1D5DB] rounded-xl px-2.5 py-2 text-xs text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00] cursor-pointer truncate"
+                        className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-2.5 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00] cursor-pointer truncate"
                       >
                         <option value="">-- Selecione do histórico --</option>
                         {historyOptions.map(opt => (
@@ -1272,11 +1258,11 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                     {/* Option B: Upload de Anexo para Preencher Automático */}
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-emerald-700 uppercase flex items-center gap-1">
+                      <label className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase flex items-center gap-1">
                         <Upload className="w-3 h-3 shrink-0" />
                         <span>Anexo / Edital (Preencher IA)</span>
                       </label>
-                      <label className="flex items-center justify-center gap-2 w-full bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold py-2 px-3 rounded-xl cursor-pointer transition">
+                      <label className="flex items-center justify-center gap-2 w-full bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold py-2 px-3 rounded-xl cursor-pointer transition">
                         <Upload className="w-3.5 h-3.5 shrink-0" />
                         <span className="truncate">{isExtractingFile ? "Analisando..." : "Carregar Anexo (PDF/TXT)"}</span>
                         <input
@@ -1306,48 +1292,48 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   
                   {/* Órgão */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Órgão Comprador *</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Órgão Comprador *</label>
                     <input
                       type="text"
                       required
                       placeholder="Ex: Tribunal Regional Federal da 3ª Região"
                       value={formData.orgao}
                       onChange={(e) => setFormData({ ...formData, orgao: e.target.value })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 placeholder-[#9CA3AF] dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* UASG / Código Und */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">UASG / Código Unidade</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">UASG / Código Unidade</label>
                     <input
                       type="text"
                       placeholder="Ex: 090012 - TRF3"
                       value={formData.uasgUndCompradora}
                       onChange={(e) => setFormData({ ...formData, uasgUndCompradora: e.target.value })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 placeholder-[#9CA3AF] dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Nº Licitação */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Nº Licitação / Processo</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Nº Licitação / Processo</label>
                     <input
                       type="text"
                       placeholder="Ex: Pregão Eletrônico 14/2026"
                       value={formData.numeroLicitacao}
                       onChange={(e) => setFormData({ ...formData, numeroLicitacao: e.target.value })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 placeholder-[#9CA3AF] dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Portal */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Portal Eletrônico</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Portal Eletrônico</label>
                     <select
                       value={formData.portal}
                       onChange={(e) => setFormData({ ...formData, portal: e.target.value })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     >
                       <option value="Compras.gov.br">Compras.gov.br</option>
                       <option value="BLL Compras">BLL Compras</option>
@@ -1362,14 +1348,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                 {/* Produto / Objeto */}
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-[#4B5563]">Produto / Objeto *</label>
+                  <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Produto / Objeto *</label>
                   <textarea
                     required
                     rows={2}
                     placeholder="Descrição detalhada do item/produto cotado na disputa..."
                     value={formData.produtoItem}
                     onChange={(e) => setFormData({ ...formData, produtoItem: e.target.value })}
-                    className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
+                    className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 placeholder-[#9CA3AF] dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                   />
                 </div>
 
@@ -1377,35 +1363,35 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   
                   {/* Quantidade */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Quantidade</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Quantidade</label>
                     <input
                       type="number"
                       min={1}
                       value={formData.quantidade}
                       onChange={(e) => setFormData({ ...formData, quantidade: Number(e.target.value) })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Unidade Medida */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Unidade</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Unidade</label>
                     <input
                       type="text"
                       placeholder="Unidade, Caixa, Lote"
                       value={formData.unidadeMedida}
                       onChange={(e) => setFormData({ ...formData, unidadeMedida: e.target.value })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Status */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Status</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Status</label>
                     <select
                       value={formData.status}
                       onChange={(e) => setFormData({ ...formData, status: e.target.value as DisputaStatus })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:border-[#FF5A00]"
                     >
                       <option value="Agendada">Agendada</option>
                       <option value="Em Disputa">Em Disputa</option>
@@ -1423,14 +1409,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   
                   {/* Valor Estimado */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Valor Estimado (R$)</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Valor Estimado (R$)</label>
                     <input
                       type="number"
                       step="0.01"
                       placeholder="0.00"
                       value={formData.valorEstimadoItem || ""}
                       onChange={(e) => setFormData({ ...formData, valorEstimadoItem: Number(e.target.value) })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
@@ -1443,20 +1429,20 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       placeholder="0.00"
                       value={formData.nossoValorAlvo || ""}
                       onChange={(e) => setFormData({ ...formData, nossoValorAlvo: Number(e.target.value) })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
                     />
                   </div>
 
                   {/* Preço Mínimo Piso */}
                   <div className="space-y-1">
-                    <label className="text-[10px] uppercase font-bold text-[#4B5563]">Preço Mínimo Piso (R$)</label>
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Preço Mínimo Piso (R$)</label>
                     <input
                       type="number"
                       step="0.01"
                       placeholder="0.00"
                       value={formData.valorMinimoPiso || ""}
                       onChange={(e) => setFormData({ ...formData, valorMinimoPiso: Number(e.target.value) })}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:border-[#FF5A00]"
                     />
                   </div>
 
@@ -1464,25 +1450,25 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                 {/* Data e Hora */}
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-[#4B5563]">Data e Hora da Disputa</label>
+                  <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Data e Hora da Disputa</label>
                   <input
                     type="text"
                     placeholder="Ex: 2026-08-15 09:30 ou 15/08/2026 09:30"
                     value={formData.dataHoraDisputa}
                     onChange={(e) => setFormData({ ...formData, dataHoraDisputa: e.target.value })}
-                    className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
+                    className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:border-[#FF5A00]"
                   />
                 </div>
 
                 {/* Observações */}
                 <div className="space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-[#4B5563]">Observações & Estratégia de Lance</label>
+                  <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400">Observações & Estratégia de Lance</label>
                   <input
                     type="text"
                     placeholder="Anotações internas, concorrentes mapeados, margem esperada..."
                     value={formData.observacoes}
                     onChange={(e) => setFormData({ ...formData, observacoes: e.target.value })}
-                    className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:border-[#FF5A00]"
+                    className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 focus:outline-none focus:border-[#FF5A00]"
                   />
                 </div>
 
@@ -1491,11 +1477,11 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </div>
 
             {/* Modal Footer (Always visible & fixed at bottom) */}
-            <div className="p-4 border-t border-[#E5E7EB] bg-[#F9FAFB] shrink-0 flex items-center justify-end gap-3">
+            <div className="p-4 border-t border-[#E5E7EB] dark:border-[#27272A] bg-[#F9FAFB] dark:bg-[#18181B] shrink-0 flex items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-[#D1D5DB] text-[#374151] text-xs hover:bg-[#E5E7EB] transition cursor-pointer"
+                className="px-4 py-2 rounded-xl border border-[#D1D5DB] dark:border-[#27272A] text-[#374151] dark:text-zinc-300 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 transition cursor-pointer"
               >
                 Cancelar
               </button>

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { 
   Search, ShieldCheck, MapPin, Calendar, Clock, Landmark, Coins, 
   ExternalLink, Sparkles, RefreshCw, AlertCircle, FileText, CheckCircle2,
-  Filter, Info, ChevronLeft, ChevronRight, X, Check, Building2, SlidersHorizontal, RotateCcw
+  Filter, Info, ChevronLeft, ChevronRight, ChevronDown, X, Check, Building2, SlidersHorizontal, RotateCcw
 } from "lucide-react";
 
 interface RadarOportunidadesTabProps {
@@ -18,6 +18,7 @@ interface LicitacaoDetailed {
   uf: string;
   municipio: string;
   unidade: string;
+  uasg?: string;
   objeto: string;
   dataPublicacao: string;
   dataAbertura: string;
@@ -71,7 +72,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   // Filter States
   const [keyword, setKeyword] = useState("");
   const [cityQuery, setCityQuery] = useState("");
-  const [selectedUfs, setSelectedUfs] = useState<string[]>(["BA", "SP"]);
+  const [selectedUfs, setSelectedUfs] = useState<string[]>([]); // Default empty = All UFs (Brasil)
   const [selectedModalidades, setSelectedModalidades] = useState<string[]>([]);
   const [valorMin, setValorMin] = useState<string>("");
   const [valorMax, setValorMax] = useState<string>("");
@@ -89,6 +90,8 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [dataSource, setDataSource] = useState<string>("PNCP Live");
   const [showStatePicker, setShowStatePicker] = useState<boolean>(false);
+  const [showModalidadesPicker, setShowModalidadesPicker] = useState<boolean>(false);
+  const [ufSearchQuery, setUfSearchQuery] = useState<string>("");
 
   // Toggle UF Selection
   const handleToggleUf = (sigla: string) => {
@@ -119,6 +122,13 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     setPage(1);
   };
 
+  // Filter UFs list by search query
+  const filteredUfs = useMemo(() => {
+    if (!ufSearchQuery.trim()) return ALL_UFS;
+    const q = ufSearchQuery.toLowerCase();
+    return ALL_UFS.filter(uf => uf.sigla.toLowerCase().includes(q) || uf.nome.toLowerCase().includes(q));
+  }, [ufSearchQuery]);
+
   // Clear all filters
   const handleResetFilters = () => {
     setKeyword("");
@@ -128,6 +138,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     setValorMin("");
     setValorMax("");
     setPeriodDays(90);
+    setUfSearchQuery("");
     setPage(1);
   };
 
@@ -155,6 +166,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
         queryParams.set("municipio", cityQuery.trim());
       }
 
+      queryParams.set("periodDays", String(periodDays));
       queryParams.set("pagina", String(targetPage));
       queryParams.set("tamanhoPagina", String(pageSize));
 
@@ -167,7 +179,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
       
       if (json && Array.isArray(json.data)) {
         const mapped: LicitacaoDetailed[] = json.data.map((item: any, idx: number) => {
-          const numControle = item.numeroControlePNCP || `${item.cnpjOrgao || '00000000000100'}-1-${idx}/${item.anoCompra || 2026}`;
+          const numControle = item.idContratacaoPNCP || item.numeroControlePNCP || `${item.cnpjOrgao || '00000000000100'}-1-${idx}/${item.anoCompra || 2026}`;
           const cnpj = item.cnpjOrgao || item.orgaoEntidade?.cnpj || "";
           const ano = item.anoCompra || 2026;
           const seq = item.sequencialCompra || idx + 1;
@@ -177,6 +189,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
           const ufSigla = item.unidadeOrgao?.ufSigla || item.uf || (selectedUfs.length === 1 ? selectedUfs[0] : "BR");
           const municipioNome = item.unidadeOrgao?.municipioNome || "Município Atendido";
           const unidadeNome = item.unidadeOrgao?.nomeUnidade || "Setor de Licitações e Compras";
+          const uasgFormatted = item.uasg || (item.unidadeOrgao?.codigoUnidade ? `UASG ${item.unidadeOrgao.codigoUnidade}` : `UASG 925001`);
           const desc = item.objetoCompra || item.objeto || "Objeto de aquisição ou prestação de serviço público.";
           
           const rawVal = typeof item.valorTotalEstimado === "number" ? item.valorTotalEstimado : 0;
@@ -201,6 +214,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
             uf: ufSigla,
             municipio: municipioNome,
             unidade: unidadeNome,
+            uasg: uasgFormatted,
             objeto: desc,
             dataPublicacao: pubDateFormatted,
             dataAbertura: openDateFormatted,
@@ -253,7 +267,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
 
   useEffect(() => {
     handleFetchPNCP(1);
-  }, [selectedUfs, selectedModalidades, pageSize]);
+  }, [selectedUfs, selectedModalidades, pageSize, periodDays]);
 
   const handleTriggerAnalysis = (item: LicitacaoDetailed) => {
     const formattedText = `EDITAL DE LICITAÇÃO PÚBLICA NACIONAL (SISTEMA PNCP)
@@ -384,79 +398,240 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
               </div>
             </div>
 
-            {/* Multi-State Selector */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">
-                  Estados (UFs) {selectedUfs.length > 0 ? `(${selectedUfs.length})` : "(Brasil Inteiro)"}
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowStatePicker(!showStatePicker)}
-                  className="text-[10px] text-[#FF5A00] hover:underline font-bold cursor-pointer"
-                >
-                  {showStatePicker ? "Ocultar Grade" : "Ver Todos os Estados"}
-                </button>
-              </div>
+            {/* Multi-State Dropdown */}
+            <div className="space-y-1.5 relative">
+              <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">
+                Estados / UFs {selectedUfs.length > 0 ? `(${selectedUfs.length} selecionados)` : "(Brasil Inteiro)"}
+              </label>
 
-              {/* State Badges Quick Row */}
-              <div className="flex flex-wrap gap-1.5 items-center bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB] max-h-36 overflow-y-auto scrollbar-thin">
-                <button
-                  type="button"
-                  onClick={handleSelectAllUfs}
-                  className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
-                    selectedUfs.length === 0 
-                      ? "bg-[#FF5A00] border-[#FF5A00] text-white shadow-2xs" 
-                      : "bg-white border-[#E5E7EB] text-[#4B5563] hover:text-[#111827]"
-                  }`}
-                >
-                  Brasil Inteiro
-                </button>
-                {ALL_UFS.map(uf => {
-                  const isSelected = selectedUfs.includes(uf.sigla);
-                  return (
+              {/* Trigger Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStatePicker(!showStatePicker);
+                  setShowModalidadesPicker(false);
+                }}
+                className="w-full bg-white border border-[#D1D5DB] hover:border-[#FF5A00] rounded-lg p-2.5 text-xs text-[#111827] flex items-center justify-between gap-2 shadow-2xs transition-all cursor-pointer text-left focus:outline-none focus:ring-1 focus:ring-[#FF5A00]"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <MapPin className="w-4 h-4 text-[#FF5A00] shrink-0" />
+                  <span className="truncate font-semibold text-[#111827]">
+                    {selectedUfs.length === 0
+                      ? "Brasil Inteiro (Todos os 27 Estados)"
+                      : selectedUfs.length === 1
+                      ? ALL_UFS.find(u => u.sigla === selectedUfs[0]) ? `${ALL_UFS.find(u => u.sigla === selectedUfs[0])?.nome} (${selectedUfs[0]})` : selectedUfs[0]
+                      : `${selectedUfs.slice(0, 3).join(", ")}${selectedUfs.length > 3 ? ` (+${selectedUfs.length - 3})` : ""}`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {selectedUfs.length > 0 && (
+                    <span className="bg-[#FFF0E5] text-[#FF5A00] text-[10px] font-extrabold px-1.5 py-0.5 rounded-full border border-[#FFD6C2]">
+                      {selectedUfs.length}
+                    </span>
+                  )}
+                  <ChevronDown className={`w-4 h-4 text-[#9CA3AF] transition-transform duration-200 ${showStatePicker ? "rotate-180 text-[#FF5A00]" : ""}`} />
+                </div>
+              </button>
+
+              {/* Dropdown Menu Popover */}
+              {showStatePicker && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-[#E5E7EB] rounded-xl shadow-xl z-50 p-2.5 space-y-2 animate-in fade-in zoom-in-95 duration-150">
+                  {/* Search inside dropdown */}
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#9CA3AF]" />
+                    <input
+                      type="text"
+                      placeholder="Buscar estado (ex: SP, Bahia, Rio)..."
+                      value={ufSearchQuery}
+                      onChange={(e) => setUfSearchQuery(e.target.value)}
+                      className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-lg pl-8 pr-2 py-1.5 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00]"
+                    />
+                    {ufSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setUfSearchQuery("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-[#9CA3AF] hover:text-[#111827]"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Actions Header */}
+                  <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-1.5 text-[10px]">
                     <button
                       type="button"
-                      key={uf.sigla}
-                      onClick={() => handleToggleUf(uf.sigla)}
-                      className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-all cursor-pointer ${
-                        isSelected 
-                          ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00] shadow-2xs" 
-                          : "bg-white border-[#E5E7EB] text-[#4B5563] hover:border-[#D1D5DB] hover:text-[#111827]"
-                      }`}
+                      onClick={handleSelectAllUfs}
+                      className={`font-bold transition-colors ${selectedUfs.length === 0 ? "text-[#FF5A00]" : "text-[#6B7280] hover:text-[#FF5A00]"}`}
                     >
-                      {uf.sigla}
+                      ✓ Brasil Inteiro
                     </button>
-                  );
-                })}
-              </div>
+                    {selectedUfs.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedUfs([])}
+                        className="text-[#EF4444] hover:underline font-medium"
+                      >
+                        Limpar seleção
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Scrollable UF Options List */}
+                  <div className="max-h-52 overflow-y-auto space-y-1 scrollbar-thin pr-1">
+                    {filteredUfs.length === 0 ? (
+                      <div className="p-3 text-center text-xs text-[#9CA3AF]">Nenhum estado encontrado</div>
+                    ) : (
+                      filteredUfs.map(uf => {
+                        const isSelected = selectedUfs.includes(uf.sigla);
+                        return (
+                          <button
+                            type="button"
+                            key={uf.sigla}
+                            onClick={() => handleToggleUf(uf.sigla)}
+                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                              isSelected
+                                ? "bg-[#FFF0E5] text-[#FF5A00] font-bold"
+                                : "hover:bg-[#F3F4F6] text-[#374151]"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className={`w-6 h-5 flex items-center justify-center rounded text-[10px] font-mono font-bold ${isSelected ? "bg-[#FF5A00] text-white" : "bg-[#E5E7EB] text-[#4B5563]"}`}>
+                                {uf.sigla}
+                              </span>
+                              <span>{uf.nome}</span>
+                            </div>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-[#FF5A00]" />}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="pt-1 border-t border-[#F3F4F6] flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowStatePicker(false)}
+                      className="px-3 py-1 bg-[#FF5A00] text-white text-[10px] font-bold rounded-md hover:bg-[#E65000]"
+                    >
+                      Concluir
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Modalidades Multi-select */}
-            <div className="space-y-2">
+            {/* Modalidade Dropdown */}
+            <div className="space-y-1.5 relative">
               <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">
                 Modalidade PNCP {selectedModalidades.length > 0 ? `(${selectedModalidades.length})` : "(Todas)"}
               </label>
-              <div className="grid grid-cols-1 gap-1.5 bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB]">
-                {ALL_MODALIDADES.map(m => {
-                  const isSelected = selectedModalidades.includes(m.id);
-                  return (
+
+              {/* Trigger Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowModalidadesPicker(!showModalidadesPicker);
+                  setShowStatePicker(false);
+                }}
+                className="w-full bg-white border border-[#D1D5DB] hover:border-[#FF5A00] rounded-lg p-2.5 text-xs text-[#111827] flex items-center justify-between gap-2 shadow-2xs transition-all cursor-pointer text-left focus:outline-none focus:ring-1 focus:ring-[#FF5A00]"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <SlidersHorizontal className="w-4 h-4 text-[#FF5A00] shrink-0" />
+                  <span className="truncate font-semibold text-[#111827]">
+                    {selectedModalidades.length === 0
+                      ? "Todas as Modalidades (Pregão, Dispensa...)"
+                      : selectedModalidades
+                          .map(id => ALL_MODALIDADES.find(m => m.id === id)?.nome)
+                          .filter(Boolean)
+                          .join(", ")}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {selectedModalidades.length > 0 && (
+                    <span className="bg-[#FFF0E5] text-[#FF5A00] text-[10px] font-extrabold px-1.5 py-0.5 rounded-full border border-[#FFD6C2]">
+                      {selectedModalidades.length}
+                    </span>
+                  )}
+                  <ChevronDown className={`w-4 h-4 text-[#9CA3AF] transition-transform duration-200 ${showModalidadesPicker ? "rotate-180 text-[#FF5A00]" : ""}`} />
+                </div>
+              </button>
+
+              {/* Dropdown Menu Popover */}
+              {showModalidadesPicker && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-[#E5E7EB] rounded-xl shadow-xl z-50 p-2.5 space-y-1.5 animate-in fade-in zoom-in-95 duration-150">
+                  {/* Actions Header */}
+                  <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-1.5 text-[10px]">
                     <button
                       type="button"
-                      key={m.id}
-                      onClick={() => handleToggleModalidade(m.id)}
-                      className={`w-full text-left px-2.5 py-1.5 text-[10px] font-medium rounded-lg border flex items-center justify-between transition-all cursor-pointer ${
-                        isSelected
-                          ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00] font-bold"
-                          : "bg-white border-[#E5E7EB] text-[#4B5563] hover:bg-[#F3F4F6] hover:text-[#111827]"
-                      }`}
+                      onClick={() => setSelectedModalidades([])}
+                      className={`font-bold transition-colors ${selectedModalidades.length === 0 ? "text-[#FF5A00]" : "text-[#6B7280] hover:text-[#FF5A00]"}`}
                     >
-                      <span>{m.nome}</span>
-                      {isSelected ? <Check className="w-3 h-3 text-[#FF5A00]" /> : <span className="text-[9px] text-[#9CA3AF]">+</span>}
+                      ✓ Todas as Modalidades
                     </button>
-                  );
-                })}
-              </div>
+                    {selectedModalidades.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedModalidades([])}
+                        className="text-[#EF4444] hover:underline font-medium"
+                      >
+                        Limpar
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Options */}
+                  <div className="space-y-1">
+                    {ALL_MODALIDADES.map(m => {
+                      const isSelected = selectedModalidades.includes(m.id);
+                      return (
+                        <button
+                          type="button"
+                          key={m.id}
+                          onClick={() => handleToggleModalidade(m.id)}
+                          className={`w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                            isSelected
+                              ? "bg-[#FFF0E5] text-[#FF5A00] font-bold"
+                              : "hover:bg-[#F3F4F6] text-[#374151]"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-[#9CA3AF]">Cod {m.id}</span>
+                            <span>{m.nome}</span>
+                          </div>
+                          {isSelected && <Check className="w-4 h-4 text-[#FF5A00]" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="pt-1.5 border-t border-[#F3F4F6] flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowModalidadesPicker(false)}
+                      className="px-3 py-1 bg-[#FF5A00] text-white text-[10px] font-bold rounded-md hover:bg-[#E65000]"
+                    >
+                      Concluir
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Period Filter */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Período de Publicação</label>
+              <select
+                value={periodDays}
+                onChange={(e) => setPeriodDays(Number(e.target.value))}
+                className="w-full bg-white border border-[#D1D5DB] rounded-lg p-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] focus:border-[#FF5A00] font-medium"
+              >
+                <option value={30}>Últimos 30 dias</option>
+                <option value={60}>Últimos 60 dias</option>
+                <option value={90}>Últimos 90 dias (Padrão)</option>
+                <option value={180}>Últimos 180 dias</option>
+                <option value={365}>Último 1 ano (365 dias)</option>
+              </select>
             </div>
 
             {/* Value Range Filters */}
@@ -644,7 +819,7 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                   </div>
 
                   {/* Fields */}
-                  <div className="space-y-3.5 text-[#374151] text-[11px] leading-relaxed">
+                  <div className="space-y-3 text-[#374151] text-[11px] leading-relaxed">
                     <div className="space-y-1">
                       <span className="font-bold text-[#6B7280] uppercase text-[9px] block tracking-wider">Órgão Comprador</span>
                       <p className="text-[#111827] font-semibold flex items-center gap-1.5">
@@ -656,8 +831,24 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                       )}
                     </div>
 
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="bg-[#F9FAFB] p-2 rounded-lg border border-[#E5E7EB]">
+                        <span className="font-bold text-[#6B7280] uppercase text-[8px] block tracking-wider">UASG / Unidade</span>
+                        <p className="text-[#111827] font-extrabold text-[10px] truncate" title={activeItem.uasg || activeItem.unidade}>
+                          {activeItem.uasg || activeItem.unidade}
+                        </p>
+                      </div>
+
+                      <div className="bg-[#F9FAFB] p-2 rounded-lg border border-[#E5E7EB]">
+                        <span className="font-bold text-[#6B7280] uppercase text-[8px] block tracking-wider">ID Contratação PNCP</span>
+                        <p className="text-[#FF5A00] font-mono font-bold text-[10px] truncate" title={activeItem.numeroControlePNCP}>
+                          {activeItem.numeroControlePNCP}
+                        </p>
+                      </div>
+                    </div>
+
                     <div className="space-y-1">
-                      <span className="font-bold text-[#6B7280] uppercase text-[9px] block tracking-wider">Localização & Unidade</span>
+                      <span className="font-bold text-[#6B7280] uppercase text-[9px] block tracking-wider">Localização</span>
                       <p className="text-[#374151] font-medium flex items-center gap-1.5">
                         <MapPin className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
                         {activeItem.municipio} - {activeItem.uf} ({activeItem.unidade})
@@ -666,12 +857,12 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
 
                     <div className="space-y-1">
                       <span className="font-bold text-[#6B7280] uppercase text-[9px] block tracking-wider">Objeto / Termo de Referência</span>
-                      <div className="bg-[#F9FAFB] p-3 rounded-xl text-[#374151] border border-[#E5E7EB] text-[11px] leading-relaxed max-h-40 overflow-y-auto font-sans scrollbar-thin">
+                      <div className="bg-[#F9FAFB] p-3 rounded-xl text-[#374151] border border-[#E5E7EB] text-[11px] leading-relaxed max-h-36 overflow-y-auto font-sans scrollbar-thin">
                         {activeItem.objeto}
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-2.5">
                       <div className="bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB] space-y-0.5">
                         <span className="text-[8px] text-[#6B7280] uppercase font-bold block">Valor Estimado</span>
                         <p className="text-[#059669] font-bold font-mono text-xs">{activeItem.valorEstimado}</p>
@@ -689,10 +880,10 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                           href={activeItem.linkPNCP}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 text-[10px] text-[#FF5A00] hover:text-[#E65000] font-bold hover:underline"
+                          className="w-full py-2 px-3 bg-[#FFF0E5] hover:bg-[#FFE1D1] border border-[#FFD6C2] text-[#FF5A00] text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 shadow-2xs cursor-pointer"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
-                          Ver Edital Completo no Portal PNCP Oficial
+                          <span>Ver Edital Completo no Portal PNCP Oficial</span>
                         </a>
                       </div>
                     )}

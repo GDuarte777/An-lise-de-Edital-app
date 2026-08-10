@@ -37,8 +37,10 @@ export interface EditalAnalysis {
     modalidade: string;
     identificacaoNumerica: string;
     dataHoraSessao: string;
+    idContratacaoPNCP?: string;
     linkPNCP?: string;
   };
+  idContratacaoPNCP?: string;
   linkPNCP?: string;
   especificacoesTecnicas?: {
     exigenciasFisicas: string[];
