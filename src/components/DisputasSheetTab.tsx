@@ -2,14 +2,15 @@ import { useState, useEffect } from "react";
 import { 
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles, 
   CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown, 
-  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink
+  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer } from "../utils/aiClientHelper";
 import { 
   fetchDisputasFromSupabase, 
   saveDisputaToSupabase, 
-  deleteDisputaFromSupabase 
+  deleteDisputaFromSupabase,
+  generateUUID
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 
@@ -125,19 +126,29 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     return [];
   });
 
-  // Load from Supabase on component mount
+  // Load from Supabase on component mount & auto-sync local rows
   useEffect(() => {
     fetchDisputasFromSupabase().then(dbRows => {
-      if (dbRows && Array.isArray(dbRows) && dbRows.length > 0) {
-        setDisputas(prev => {
-          const map = new Map<string, DisputaRow>();
-          prev.forEach(r => map.set(r.id, r));
+      setDisputas(prev => {
+        const map = new Map<string, DisputaRow>();
+        
+        // Add DB rows to map
+        if (Array.isArray(dbRows)) {
           dbRows.forEach(r => map.set(r.id, r));
-          const merged = Array.from(map.values());
-          localStorage.setItem("aip_disputas_sheet", JSON.stringify(merged));
-          return merged;
+        }
+
+        // Add local storage rows if missing in DB, and automatically persist them to Supabase
+        prev.forEach(r => {
+          if (!map.has(r.id)) {
+            map.set(r.id, r);
+            saveDisputaToSupabase(r).catch(e => console.warn("Auto-sync local disputa error:", e));
+          }
         });
-      }
+
+        const merged = Array.from(map.values());
+        localStorage.setItem("aip_disputas_sheet", JSON.stringify(merged));
+        return merged;
+      });
     }).catch(e => console.warn("Erro ao buscar disputas do Supabase:", e));
   }, []);
 
@@ -400,7 +411,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       }).catch(() => showToast("Disputa salva localmente."));
     } else {
       const newRow: DisputaRow = {
-        id: "disp-" + Date.now(),
+        id: generateUUID(),
         orgao: formData.orgao || "",
         uasgUndCompradora: formData.uasgUndCompradora || "S/N",
         numeroLicitacao: formData.numeroLicitacao || "S/N",
@@ -420,9 +431,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       confetti({ particleCount: 35, spread: 40 });
       saveDisputaToSupabase(newRow).then(res => {
         if (res.success) {
-          showToast("Nova disputa salva no Supabase e na planilha!");
+          showToast("Nova disputa salva com sucesso no Supabase e na planilha!");
         } else {
-          showToast("Nova disputa salva na planilha local!", "info");
+          showToast("Nova disputa salva na planilha local.", "info");
         }
       }).catch(() => showToast("Nova disputa salva localmente!"));
     }
@@ -433,7 +444,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   // Add blank row directly in Spreadsheet mode
   const handleAddBlankRow = () => {
     const newRow: DisputaRow = {
-      id: "disp-" + Date.now(),
+      id: generateUUID(),
       orgao: "Novo Órgão Comprador",
       uasgUndCompradora: "000000",
       numeroLicitacao: "PE " + Math.floor(Math.random() * 800 + 100) + "/2026",
@@ -450,8 +461,37 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       linkPNCP: ""
     };
     setDisputas(prev => [...prev, newRow]);
-    saveDisputaToSupabase(newRow).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
-    showToast("Nova linha inserida na planilha!");
+    saveDisputaToSupabase(newRow).then(res => {
+      if (res.success) {
+        showToast("Nova linha salva no Supabase!");
+      } else {
+        showToast("Nova linha inserida na planilha local.");
+      }
+    }).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
+  };
+
+  // Explicit action to sync all disputes with Supabase
+  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
+
+  const handleSyncAllToSupabase = async () => {
+    if (disputas.length === 0) {
+      showToast("A planilha está vazia.", "info");
+      return;
+    }
+    setIsSyncingSupabase(true);
+    showToast("Sincronizando todas as disputas com o Supabase...", "info");
+    try {
+      let count = 0;
+      for (const item of disputas) {
+        const res = await saveDisputaToSupabase(item);
+        if (res.success) count++;
+      }
+      showToast(`${count} de ${disputas.length} disputas salvas com sucesso no Supabase!`, "success");
+    } catch (err) {
+      showToast("Erro ao sincronizar com o Supabase.", "info");
+    } finally {
+      setIsSyncingSupabase(false);
+    }
   };
 
   // Inline Cell Edit handler for Spreadsheet mode
@@ -713,6 +753,16 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           >
             <Download className="w-3.5 h-3.5" />
             <span>Exportar CSV</span>
+          </button>
+
+          <button
+            onClick={handleSyncAllToSupabase}
+            disabled={isSyncingSupabase}
+            className="bg-[#FFF0E5] dark:bg-[#2A170A] hover:bg-[#FFE5D4] dark:hover:bg-[#3D210E] border border-[#FFD6C2] dark:border-[#4A2410] text-[#FF5A00] font-bold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+            title="Sincronizar todas as disputas com o banco de dados Supabase"
+          >
+            <Database className={`w-3.5 h-3.5 ${isSyncingSupabase ? "animate-spin" : ""}`} />
+            <span>{isSyncingSupabase ? "Sincronizando..." : "Salvar no Supabase"}</span>
           </button>
 
           <button

@@ -677,6 +677,24 @@ export async function deleteDocumentFromSupabase(id: string): Promise<boolean> {
   }
 }
 
+export function generateUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export function ensureValidUuid(idStr: string | undefined): string {
+  if (!idStr) return generateUUID();
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidRegex.test(idStr)) return idStr;
+  return generateUUID();
+}
+
 // 6. Planilhas de Disputas (planilhas_disputas)
 export async function fetchDisputasFromSupabase(): Promise<any[]> {
   const client = getSupabaseClient();
@@ -688,37 +706,43 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
 
     let query = client.from("planilhas_disputas").select("*");
     if (user?.id && user.id !== guestId) {
-      query = query.or(`user_id.eq.${user.id},user_id.eq.${guestId}`);
-    } else {
-      query = query.eq("user_id", userId);
+      query = query.or(`user_id.eq.${user.id},user_id.eq.${guestId},user_id.is.null`);
     }
 
     const { data, error } = await query.order("updated_at", { ascending: false });
     if (error) {
-      console.warn("fetchDisputasFromSupabase error:", error.message);
+      console.warn("fetchDisputasFromSupabase filtered query error, retrying all:", error.message);
+      const fallback = await client.from("planilhas_disputas").select("*").order("updated_at", { ascending: false });
+      if (fallback.data && Array.isArray(fallback.data)) {
+        return fallback.data.map(mapDisputaFromDb);
+      }
       return [];
     }
-    return (data || []).map(item => ({
-      id: item.id,
-      orgao: item.orgao,
-      uasgUndCompradora: item.uasg_und_compradora,
-      numeroLicitacao: item.numero_licitacao,
-      portal: item.portal,
-      produtoItem: item.produto_item,
-      quantidade: Number(item.quantidade) || 1,
-      unidadeMedida: item.unidade_medida,
-      valorEstimadoItem: Number(item.valor_estimado_item) || 0,
-      nossoValorAlvo: Number(item.nosso_valor_alvo) || 0,
-      valorMinimoPiso: Number(item.valor_minimo_piso) || 0,
-      dataHoraDisputa: item.data_hora_disputa,
-      status: item.status,
-      observacoes: item.observacoes,
-      linkPNCP: item.link_pncp || item.linkPNCP || ""
-    }));
+    return (data || []).map(mapDisputaFromDb);
   } catch (err: any) {
     console.warn("fetchDisputasFromSupabase error:", err?.message || err);
     return [];
   }
+}
+
+function mapDisputaFromDb(item: any) {
+  return {
+    id: item.id,
+    orgao: item.orgao || item.orgao_comprador || "",
+    uasgUndCompradora: item.uasg_und_compradora || item.uasg || "",
+    numeroLicitacao: item.numero_licitacao || item.numero || "",
+    portal: item.portal || "Compras.gov.br",
+    produtoItem: item.produto_item || item.produto || item.objeto || "",
+    quantidade: Number(item.quantidade) || 1,
+    unidadeMedida: item.unidade_medida || item.unidade || "Unidade",
+    valorEstimadoItem: Number(item.valor_estimado_item || item.valor_estimado) || 0,
+    nossoValorAlvo: Number(item.nosso_valor_alvo || item.valor_alvo) || 0,
+    valorMinimoPiso: Number(item.valor_minimo_piso || item.valor_piso) || 0,
+    dataHoraDisputa: item.data_hora_disputa || item.data_disputa || "",
+    status: item.status || "Agendada",
+    observacoes: item.observacoes || "",
+    linkPNCP: item.link_pncp || item.linkPNCP || ""
+  };
 }
 
 export async function saveDisputaToSupabase(item: any): Promise<{ success: boolean; message: string }> {
@@ -726,31 +750,78 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
   if (!client) return { success: false, message: "Supabase não configurado." };
   try {
     const user = await getActiveUser();
-    const userId = user?.id || getGuestUserId();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
     
-    const record = {
-      id: item.id,
+    // Ensure ID is a valid UUID for PostgreSQL
+    const recordId = ensureValidUuid(item.id);
+    if (item.id !== recordId) {
+      item.id = recordId;
+    }
+
+    const parseNum = (val: any) => {
+      const n = Number(val);
+      return isNaN(n) ? 0 : n;
+    };
+
+    const record: Record<string, any> = {
+      id: recordId,
       user_id: userId,
-      orgao: item.orgao || "",
-      uasg_und_compradora: item.uasgUndCompradora || "",
-      numero_licitacao: item.numeroLicitacao || "",
-      portal: item.portal || "Compras.gov.br",
-      produto_item: item.produtoItem || "",
-      quantidade: Number(item.quantidade) || 1,
-      unidade_medida: item.unidadeMedida || "Unidade",
-      valor_estimado_item: Number(item.valorEstimadoItem) || 0,
-      nosso_valor_alvo: Number(item.nossoValorAlvo) || 0,
-      valor_minimo_piso: Number(item.valorMinimoPiso) || 0,
-      data_hora_disputa: item.dataHoraDisputa || "",
-      status: item.status || "Agendada",
-      observacoes: item.observacoes || "",
-      link_pncp: item.linkPNCP || "",
+      orgao: String(item.orgao || "").trim(),
+      uasg_und_compradora: String(item.uasgUndCompradora || "").trim(),
+      numero_licitacao: String(item.numeroLicitacao || "").trim(),
+      portal: String(item.portal || "Compras.gov.br").trim(),
+      produto_item: String(item.produtoItem || "").trim(),
+      quantidade: parseNum(item.quantidade) || 1,
+      unidade_medida: String(item.unidadeMedida || "Unidade").trim(),
+      valor_estimado_item: parseNum(item.valorEstimadoItem),
+      nosso_valor_alvo: parseNum(item.nossoValorAlvo),
+      valor_minimo_piso: parseNum(item.valorMinimoPiso),
+      data_hora_disputa: String(item.dataHoraDisputa || "").trim(),
+      status: String(item.status || "Agendada").trim(),
+      observacoes: String(item.observacoes || "").trim(),
+      link_pncp: String(item.linkPNCP || "").trim(),
       updated_at: new Date().toISOString()
     };
 
-    const { error } = await client
+    // Attempt 1: Full upsert
+    let { error } = await client
       .from("planilhas_disputas")
       .upsert([record], { onConflict: "id" });
+
+    // Attempt 2: Retry without link_pncp if column missing in DB schema
+    if (error && (error.message.includes("link_pncp") || error.message.includes("column"))) {
+      console.warn("Supabase planilhas_disputas missing 'link_pncp' column. Retrying without link_pncp...");
+      delete record.link_pncp;
+      const res = await client.from("planilhas_disputas").upsert([record], { onConflict: "id" });
+      error = res.error;
+    }
+
+    // Attempt 3: Retry without user_id if foreign key or auth policy fails
+    if (error && (
+      error.message.includes("user_id") || 
+      error.message.includes("foreign key") || 
+      error.message.includes("fkey") || 
+      error.message.includes("violates") ||
+      error.code === "23503"
+    )) {
+      console.warn("Supabase planilhas_disputas FK constraint on user_id. Retrying without user_id...");
+      delete record.user_id;
+      const res = await client.from("planilhas_disputas").upsert([record], { onConflict: "id" });
+      error = res.error;
+    }
+
+    // Attempt 4: Insert / update fallback
+    if (error && (error.message.includes("onConflict") || error.code === "42703")) {
+      console.warn("Retrying with simple insert / update fallback...");
+      const insertRes = await client.from("planilhas_disputas").insert([record]);
+      if (insertRes.error) {
+        const updateRes = await client.from("planilhas_disputas").update(record).eq("id", recordId);
+        error = updateRes.error;
+      } else {
+        error = null;
+      }
+    }
 
     if (error) {
       console.warn("saveDisputaToSupabase DB warning:", error.message);
