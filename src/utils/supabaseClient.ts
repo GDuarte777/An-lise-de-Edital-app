@@ -712,7 +712,8 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
       valorMinimoPiso: Number(item.valor_minimo_piso) || 0,
       dataHoraDisputa: item.data_hora_disputa,
       status: item.status,
-      observacoes: item.observacoes
+      observacoes: item.observacoes,
+      linkPNCP: item.link_pncp || item.linkPNCP || ""
     }));
   } catch (err: any) {
     console.warn("fetchDisputasFromSupabase error:", err?.message || err);
@@ -743,6 +744,7 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
       data_hora_disputa: item.dataHoraDisputa || "",
       status: item.status || "Agendada",
       observacoes: item.observacoes || "",
+      link_pncp: item.linkPNCP || "",
       updated_at: new Date().toISOString()
     };
 

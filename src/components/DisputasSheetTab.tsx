@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { 
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles, 
   CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown, 
-  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X
+  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer } from "../utils/aiClientHelper";
@@ -79,6 +79,8 @@ function extractEditalFields(editalObj: EditalAnalysis, fileNameFallback?: strin
 
   const dataHoraDisputa = iden.dataHoraSessao || iden.dataAbertura || iden.dataSessao || new Date().toLocaleDateString("pt-BR") + " 09:00";
 
+  const linkPNCP = iden.linkPNCP || editalObj.linkPNCP || editalAny.linkPNCP || (iden.idContratacaoPNCP ? `https://pncp.gov.br/app/editais/${iden.idContratacaoPNCP}` : editalAny.idContratacaoPNCP ? `https://pncp.gov.br/app/editais/${editalAny.idContratacaoPNCP}` : "");
+
   const veredito = editalObj.parecerFinal?.veredito || (editalObj.parecerFinal as any)?.recomendacao || "Favorável";
   const observacoes = (editalObj as any).resumoExecutivo || `Extraído de análise do edital. Veredito: ${veredito}`;
 
@@ -94,7 +96,8 @@ function extractEditalFields(editalObj: EditalAnalysis, fileNameFallback?: strin
     nossoValorAlvo,
     valorMinimoPiso,
     dataHoraDisputa,
-    observacoes
+    observacoes,
+    linkPNCP
   };
 }
 
@@ -175,7 +178,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     valorMinimoPiso: 0,
     dataHoraDisputa: "",
     status: "Agendada",
-    observacoes: ""
+    observacoes: "",
+    linkPNCP: ""
   });
 
   // Attachment auto-extract state inside modal
@@ -257,7 +261,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       valorMinimoPiso: 0,
       dataHoraDisputa: formattedDate,
       status: "Agendada",
-      observacoes: ""
+      observacoes: "",
+      linkPNCP: ""
     });
     setIsModalOpen(true);
   };
@@ -408,7 +413,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
         valorMinimoPiso: Number(formData.valorMinimoPiso) || 0,
         dataHoraDisputa: formData.dataHoraDisputa || new Date().toLocaleString("pt-BR"),
         status: (formData.status as DisputaStatus) || "Agendada",
-        observacoes: formData.observacoes || ""
+        observacoes: formData.observacoes || "",
+        linkPNCP: formData.linkPNCP || ""
       };
       setDisputas(prev => [newRow, ...prev]);
       confetti({ particleCount: 35, spread: 40 });
@@ -440,7 +446,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       valorMinimoPiso: 80000.00,
       dataHoraDisputa: new Date().toLocaleDateString("pt-BR") + " 10:00",
       status: "Agendada",
-      observacoes: ""
+      observacoes: "",
+      linkPNCP: ""
     };
     setDisputas(prev => [...prev, newRow]);
     saveDisputaToSupabase(newRow).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
@@ -497,6 +504,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       "UASG / Cód. Unidade",
       "Nº Licitação",
       "Portal",
+      "Link PNCP",
       "Produto / Item",
       "Quantidade",
       "Unidade Medida",
@@ -514,6 +522,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       `"${r.uasgUndCompradora.replace(/"/g, '""')}"`,
       `"${r.numeroLicitacao.replace(/"/g, '""')}"`,
       `"${r.portal.replace(/"/g, '""')}"`,
+      `"${(r.linkPNCP || "").replace(/"/g, '""')}"`,
       `"${r.produtoItem.replace(/"/g, '""')}"`,
       r.quantidade,
       `"${r.unidadeMedida.replace(/"/g, '""')}"`,
@@ -540,12 +549,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
   // Copy to Clipboard (TSV format)
   const handleCopyClipboard = () => {
-    const headers = ["Órgão", "UASG/Cod", "Nº Licitação", "Portal", "Produto/Objeto", "Qtd", "Und", "Valor Estimado", "Nosso Alvo", "Preço Piso", "Data Disputa", "Status"];
+    const headers = ["Órgão", "UASG/Cod", "Nº Licitação", "Portal", "Link PNCP", "Produto/Objeto", "Qtd", "Und", "Valor Estimado", "Nosso Alvo", "Preço Piso", "Data Disputa", "Status"];
     const rows = filteredDisputas.map(r => [
       r.orgao,
       r.uasgUndCompradora,
       r.numeroLicitacao,
       r.portal,
+      r.linkPNCP || "",
       r.produtoItem,
       r.quantidade,
       r.unidadeMedida,
@@ -568,6 +578,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       row.uasgUndCompradora.toLowerCase().includes(searchQuery.toLowerCase()) ||
       row.numeroLicitacao.toLowerCase().includes(searchQuery.toLowerCase()) ||
       row.produtoItem.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (row.linkPNCP && row.linkPNCP.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (row.observacoes && row.observacoes.toLowerCase().includes(searchQuery.toLowerCase()));
 
     const matchesStatus = statusFilter === "Todas" || row.status === statusFilter;
@@ -847,14 +858,15 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-36">B - UASG/Cod</th>
                     <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-32">C - Nº Licitação</th>
                     <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-32">D - Portal</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left min-w-[240px]">E - Produto / Item</th>
-                    <th className="py-2 px-2 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-20">F - Qtd</th>
-                    <th className="py-2 px-2 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-20">G - Und</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">H - Val. Estimado</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">I - Nosso Alvo</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">J - Preço Piso</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-36">K - Data/Hora</th>
-                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-32">L - Status</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left min-w-[180px]">E - Link PNCP</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left min-w-[240px]">F - Produto / Item</th>
+                    <th className="py-2 px-2 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-20">G - Qtd</th>
+                    <th className="py-2 px-2 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-20">H - Und</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">I - Val. Estimado</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">J - Nosso Alvo</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-right w-36">K - Preço Piso</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-left w-36">L - Data/Hora</th>
+                    <th className="py-2 px-3 border-r border-[#E5E7EB] dark:border-[#27272A] text-center w-32">M - Status</th>
                     <th className="py-2 px-2 text-center w-16">Ações</th>
                   </tr>
                 </thead>
@@ -926,10 +938,38 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         </select>
                       </td>
 
-                      {/* Col E: Produto / Item */}
+                      {/* Col E: Link PNCP */}
+                      <td 
+                        className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "linkPNCP" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "linkPNCP", colName: "Link PNCP", colLetter: "E" })}
+                      >
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            placeholder="https://..."
+                            value={row.linkPNCP || ""}
+                            onChange={(e) => handleCellChange(row.id, "linkPNCP", e.target.value)}
+                            className="w-full bg-transparent px-2 py-1 text-xs text-blue-600 dark:text-blue-400 underline focus:no-underline focus:outline-none focus:bg-white dark:focus:bg-[#1F1F23] rounded font-mono truncate"
+                          />
+                          {row.linkPNCP && (
+                            <a
+                              href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 rounded shrink-0 cursor-pointer"
+                              title="Abrir Link PNCP"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Col F: Produto / Item */}
                       <td 
                         className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "produtoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "produtoItem", colName: "Produto / Item", colLetter: "E" })}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "produtoItem", colName: "Produto / Item", colLetter: "F" })}
                       >
                         <input
                           type="text"
@@ -939,10 +979,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         />
                       </td>
 
-                      {/* Col F: Qtd */}
+                      {/* Col G: Qtd */}
                       <td 
                         className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "quantidade" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "quantidade", colName: "Quantidade", colLetter: "F" })}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "quantidade", colName: "Quantidade", colLetter: "G" })}
                       >
                         <input
                           type="number"
@@ -952,10 +992,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         />
                       </td>
 
-                      {/* Col G: Und */}
+                      {/* Col H: Und */}
                       <td 
                         className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "unidadeMedida" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "unidadeMedida", colName: "Unidade", colLetter: "G" })}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "unidadeMedida", colName: "Unidade", colLetter: "H" })}
                       >
                         <input
                           type="text"
@@ -965,10 +1005,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         />
                       </td>
 
-                      {/* Col H: Val. Estimado */}
+                      {/* Col I: Val. Estimado */}
                       <td 
                         className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorEstimadoItem" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorEstimadoItem", colName: "Valor Estimado (R$)", colLetter: "H" })}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorEstimadoItem", colName: "Valor Estimado (R$)", colLetter: "I" })}
                       >
                         <input
                           type="number"
@@ -979,10 +1019,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         />
                       </td>
 
-                      {/* Col I: Nosso Alvo */}
+                      {/* Col J: Nosso Alvo */}
                       <td 
                         className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "nossoValorAlvo" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "nossoValorAlvo", colName: "Nosso Valor Alvo (R$)", colLetter: "I" })}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "nossoValorAlvo", colName: "Nosso Valor Alvo (R$)", colLetter: "J" })}
                       >
                         <input
                           type="number"
@@ -993,10 +1033,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         />
                       </td>
 
-                      {/* Col J: Preço Piso */}
+                      {/* Col K: Preço Piso */}
                       <td 
                         className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorMinimoPiso" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorMinimoPiso", colName: "Preço Piso (R$)", colLetter: "J" })}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorMinimoPiso", colName: "Preço Piso (R$)", colLetter: "K" })}
                       >
                         <input
                           type="number"
@@ -1007,10 +1047,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         />
                       </td>
 
-                      {/* Col K: Data/Hora */}
+                      {/* Col L: Data/Hora */}
                       <td 
                         className={`p-1 border-r border-[#E5E7EB] dark:border-[#27272A] ${activeCell?.rowId === row.id && activeCell?.colKey === "dataHoraDisputa" ? 'ring-2 ring-[#FF5A00] bg-[#FFF0E5]/60 dark:bg-[#FF5A00]/20' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "dataHoraDisputa", colName: "Data e Hora Disputa", colLetter: "K" })}
+                        onClick={() => setActiveCell({ rowId: row.id, colKey: "dataHoraDisputa", colName: "Data e Hora Disputa", colLetter: "L" })}
                       >
                         <input
                           type="text"
@@ -1098,6 +1138,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     <th className="py-3.5 px-4">UASG / Und</th>
                     <th className="py-3.5 px-4">Nº Licitação</th>
                     <th className="py-3.5 px-4">Portal</th>
+                    <th className="py-3.5 px-4">Link PNCP</th>
                     <th className="py-3.5 px-4 min-w-[200px]">Produto / Objeto</th>
                     <th className="py-3.5 px-4 text-center">Qtd / Und</th>
                     <th className="py-3.5 px-4 text-right">Val. Estimado</th>
@@ -1152,6 +1193,23 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           <span className="bg-[#F3F4F6] dark:bg-[#27272A] px-2 py-0.5 rounded border border-[#E5E7EB] dark:border-[#3F3F46] text-[10.5px]">
                             {row.portal}
                           </span>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          {row.linkPNCP ? (
+                            <a 
+                              href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-lg text-xs font-semibold hover:bg-blue-100 dark:hover:bg-blue-900/60 transition cursor-pointer"
+                              title={row.linkPNCP}
+                            >
+                              <ExternalLink className="w-3.5 h-3.5 shrink-0 text-blue-500" />
+                              <span>Abrir PNCP</span>
+                            </a>
+                          ) : (
+                            <span className="text-[#9CA3AF] dark:text-zinc-500 text-xs">—</span>
+                          )}
                         </td>
 
                         <td className="py-3 px-4 max-w-[240px]">
@@ -1358,6 +1416,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       <option value="PNCP">PNCP - Portal Nacional</option>
                       <option value="Outro Portal">Outro Portal</option>
                     </select>
+                  </div>
+
+                  {/* Link PNCP */}
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-[10px] uppercase font-bold text-[#4B5563] dark:text-zinc-400 flex items-center gap-1">
+                      <ExternalLink className="w-3 h-3 text-[#FF5A00]" />
+                      <span>Link PNCP (Portal Nacional de Contratações Públicas)</span>
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="Ex: https://pncp.gov.br/app/editais/123456/2026/000001"
+                      value={formData.linkPNCP || ""}
+                      onChange={(e) => setFormData({ ...formData, linkPNCP: e.target.value })}
+                      className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl px-3 py-2 text-xs text-[#111827] dark:text-zinc-100 placeholder-[#9CA3AF] dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00]/20 focus:border-[#FF5A00]"
+                    />
                   </div>
 
                 </div>

@@ -154,5 +154,6 @@ export interface DisputaRow {
   dataHoraDisputa: string; // Data e Hora da disputa
   status: DisputaStatus; // Status da Disputa
   observacoes?: string; // Anotações / Estratégia
+  linkPNCP?: string; // Link direto do edital/contratação no PNCP
 }
 
