@@ -139,7 +139,7 @@ export function buildPncpEditalUrl(str: string): string | null {
 export function getUasg(edital: EditalAnalysis | null): string {
   if (!edital) return "Não informada";
 
-  const explicitUasg = edital.uasg || (edital as any).uasgUndCompradora || edital.identificacaoCertame?.uasg || (edital.identificacaoCertame as any)?.uasgUndCompradora;
+  const explicitUasg = (edital as any).uasg || (edital as any).uasgUndCompradora || (edital.identificacaoCertame as any)?.uasg || (edital.identificacaoCertame as any)?.uasgUndCompradora;
   if (explicitUasg && typeof explicitUasg === "string" && explicitUasg.trim().length > 0) {
     return explicitUasg.trim();
   }

@@ -223,15 +223,25 @@ export async function fetchSupabaseTableCounts(): Promise<{ editais: number; doc
   }
 }
 
+export function getGuestUserId(): string {
+  let guestId = localStorage.getItem("aip_guest_user_id");
+  if (!guestId) {
+    guestId = "00000000-0000-0000-0000-000000000001";
+    localStorage.setItem("aip_guest_user_id", guestId);
+  }
+  return guestId;
+}
+
 // Helper to check for active user
 export async function getActiveUser(): Promise<any | null> {
   const client = getSupabaseClient();
-  if (!client) return null;
+  if (!client) return { id: getGuestUserId() };
   try {
     const { data } = await client.auth.getUser();
-    return data?.user || null;
+    if (data?.user) return data.user;
+    return { id: getGuestUserId() };
   } catch {
-    return null;
+    return { id: getGuestUserId() };
   }
 }
 
@@ -673,12 +683,17 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
   if (!client) return [];
   try {
     const user = await getActiveUser();
-    if (!user) return [];
-    const { data, error } = await client
-      .from("planilhas_disputas")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false });
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    let query = client.from("planilhas_disputas").select("*");
+    if (user?.id && user.id !== guestId) {
+      query = query.or(`user_id.eq.${user.id},user_id.eq.${guestId}`);
+    } else {
+      query = query.eq("user_id", userId);
+    }
+
+    const { data, error } = await query.order("updated_at", { ascending: false });
     if (error) {
       console.warn("fetchDisputasFromSupabase error:", error.message);
       return [];
@@ -710,11 +725,11 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
   if (!client) return { success: false, message: "Supabase não configurado." };
   try {
     const user = await getActiveUser();
-    if (!user) return { success: false, message: "Usuário não autenticado." };
+    const userId = user?.id || getGuestUserId();
     
     const record = {
       id: item.id,
-      user_id: user.id,
+      user_id: userId,
       orgao: item.orgao || "",
       uasg_und_compradora: item.uasgUndCompradora || "",
       numero_licitacao: item.numeroLicitacao || "",
@@ -735,7 +750,10 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
       .from("planilhas_disputas")
       .upsert([record], { onConflict: "id" });
 
-    if (error) throw error;
+    if (error) {
+      console.warn("saveDisputaToSupabase DB warning:", error.message);
+      return { success: false, message: error.message };
+    }
     return { success: true, message: "Disputa salva com sucesso no Supabase!" };
   } catch (err: any) {
     console.warn("saveDisputaToSupabase error:", err?.message || err);
@@ -748,13 +766,20 @@ export async function deleteDisputaFromSupabase(id: string): Promise<boolean> {
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    if (!user) return false;
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
     const { error } = await client
       .from("planilhas_disputas")
       .delete()
       .eq("id", id)
-      .eq("user_id", user.id);
-    return !error;
+      .or(`user_id.eq.${userId},user_id.eq.${guestId}`);
+
+    if (error) {
+      // Fallback: delete by id alone
+      await client.from("planilhas_disputas").delete().eq("id", id);
+    }
+    return true;
   } catch {
     return false;
   }

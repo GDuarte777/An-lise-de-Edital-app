@@ -125,9 +125,15 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   // Load from Supabase on component mount
   useEffect(() => {
     fetchDisputasFromSupabase().then(dbRows => {
-      if (dbRows && Array.isArray(dbRows)) {
-        setDisputas(dbRows);
-        localStorage.setItem("aip_disputas_sheet", JSON.stringify(dbRows));
+      if (dbRows && Array.isArray(dbRows) && dbRows.length > 0) {
+        setDisputas(prev => {
+          const map = new Map<string, DisputaRow>();
+          prev.forEach(r => map.set(r.id, r));
+          dbRows.forEach(r => map.set(r.id, r));
+          const merged = Array.from(map.values());
+          localStorage.setItem("aip_disputas_sheet", JSON.stringify(merged));
+          return merged;
+        });
       }
     }).catch(e => console.warn("Erro ao buscar disputas do Supabase:", e));
   }, []);
@@ -380,8 +386,13 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     if (editingRow) {
       const updatedRow = { ...editingRow, ...formData } as DisputaRow;
       setDisputas(prev => prev.map(r => r.id === editingRow.id ? updatedRow : r));
-      saveDisputaToSupabase(updatedRow).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
-      showToast("Disputa atualizada com sucesso na planilha e no Supabase!");
+      saveDisputaToSupabase(updatedRow).then(res => {
+        if (res.success) {
+          showToast("Disputa atualizada no Supabase e na planilha!");
+        } else {
+          showToast("Disputa atualizada na planilha local.", "info");
+        }
+      }).catch(() => showToast("Disputa salva localmente."));
     } else {
       const newRow: DisputaRow = {
         id: "disp-" + Date.now(),
@@ -400,9 +411,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
         observacoes: formData.observacoes || ""
       };
       setDisputas(prev => [newRow, ...prev]);
-      saveDisputaToSupabase(newRow).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
       confetti({ particleCount: 35, spread: 40 });
-      showToast("Nova linha adicionada com sucesso no Supabase!");
+      saveDisputaToSupabase(newRow).then(res => {
+        if (res.success) {
+          showToast("Nova disputa salva no Supabase e na planilha!");
+        } else {
+          showToast("Nova disputa salva na planilha local!", "info");
+        }
+      }).catch(() => showToast("Nova disputa salva localmente!"));
     }
 
     setIsModalOpen(false);
