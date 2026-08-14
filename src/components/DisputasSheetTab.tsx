@@ -10,7 +10,10 @@ import {
   fetchDisputasFromSupabase, 
   saveDisputaToSupabase, 
   deleteDisputaFromSupabase,
-  generateUUID
+  subscribeToSupabaseTable,
+  mapDisputaFromDb,
+  generateUUID,
+  getSupabaseFullSchemaSQL
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 
@@ -126,30 +129,130 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     return [];
   });
 
-  // Load from Supabase on component mount & auto-sync local rows
-  useEffect(() => {
-    fetchDisputasFromSupabase().then(dbRows => {
-      setDisputas(prev => {
-        const map = new Map<string, DisputaRow>();
-        
-        // Add DB rows to map
-        if (Array.isArray(dbRows)) {
-          dbRows.forEach(r => map.set(r.id, r));
-        }
+  const [syncingWithSupabase, setSyncingWithSupabase] = useState(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [lastRealtimeEvent, setLastRealtimeEvent] = useState<{ type: "INSERT" | "UPDATE" | "DELETE"; label: string; time: number } | null>(null);
 
-        // Add local storage rows if missing in DB, and automatically persist them to Supabase
-        prev.forEach(r => {
-          if (!map.has(r.id)) {
-            map.set(r.id, r);
-            saveDisputaToSupabase(r).catch(e => console.warn("Auto-sync local disputa error:", e));
-          }
+  // Synchronize state with Supabase database
+  const refreshFromSupabase = async (showToastFeedback = false) => {
+    setSyncingWithSupabase(true);
+    try {
+      const dbRows = await fetchDisputasFromSupabase();
+      if (Array.isArray(dbRows)) {
+        setDisputas(prev => {
+          const map = new Map<string, DisputaRow>();
+          
+          // Add DB rows to map
+          dbRows.forEach(r => map.set(r.id, r));
+
+          // If there were local rows that didn't have DB entry yet, persist them to DB
+          prev.forEach(r => {
+            if (!map.has(r.id)) {
+              map.set(r.id, r);
+              saveDisputaToSupabase(r).catch(() => {});
+            }
+          });
+
+          const merged = Array.from(map.values());
+          localStorage.setItem("aip_disputas_sheet", JSON.stringify(merged));
+          return merged;
         });
 
-        const merged = Array.from(map.values());
-        localStorage.setItem("aip_disputas_sheet", JSON.stringify(merged));
-        return merged;
-      });
-    }).catch(e => console.warn("Erro ao buscar disputas do Supabase:", e));
+        if (showToastFeedback) {
+          showToast(`Sincronizado! ${dbRows.length} planilhas carregadas do Supabase.`);
+        }
+      }
+    } catch (e) {
+      console.warn("Erro ao buscar disputas do Supabase:", e);
+    } finally {
+      setSyncingWithSupabase(false);
+    }
+  };
+
+  // Load from Supabase on mount and listen to Realtime changes (INSERT, UPDATE, DELETE)
+  useEffect(() => {
+    refreshFromSupabase(false);
+
+    // Subscribe to granular real-time changes from Supabase across all devices & tabs
+    const unsubscribe = subscribeToSupabaseTable(
+      "planilhas_disputas",
+      (payload: any) => {
+        if (!payload) return;
+
+        const eventType = payload.eventType; // 'INSERT' | 'UPDATE' | 'DELETE' | '*'
+        
+        if (eventType === "INSERT" && payload.new) {
+          const newRow = mapDisputaFromDb(payload.new);
+          setDisputas(prev => {
+            if (prev.some(r => r.id === newRow.id)) {
+              return prev.map(r => r.id === newRow.id ? newRow : r);
+            }
+            const updated = [newRow, ...prev];
+            localStorage.setItem("aip_disputas_sheet", JSON.stringify(updated));
+            return updated;
+          });
+          setLastRealtimeEvent({ 
+            type: "INSERT", 
+            label: newRow.produtoItem || newRow.orgao || "Nova linha", 
+            time: Date.now() 
+          });
+          showToast(`Nova linha inserida via Realtime: ${newRow.produtoItem?.slice(0, 32) || newRow.orgao}`);
+        } else if (eventType === "UPDATE" && payload.new) {
+          const updatedRow = mapDisputaFromDb(payload.new);
+          setDisputas(prev => {
+            const exists = prev.some(r => r.id === updatedRow.id);
+            let updated: DisputaRow[];
+            if (exists) {
+              updated = prev.map(r => r.id === updatedRow.id ? updatedRow : r);
+            } else {
+              updated = [updatedRow, ...prev];
+            }
+            localStorage.setItem("aip_disputas_sheet", JSON.stringify(updated));
+            return updated;
+          });
+          setLastRealtimeEvent({ 
+            type: "UPDATE", 
+            label: updatedRow.produtoItem || updatedRow.orgao || "Linha atualizada", 
+            time: Date.now() 
+          });
+        } else if (eventType === "DELETE" && payload.old?.id) {
+          const deletedId = payload.old.id;
+          setDisputas(prev => {
+            const updated = prev.filter(r => r.id !== deletedId);
+            localStorage.setItem("aip_disputas_sheet", JSON.stringify(updated));
+            return updated;
+          });
+          setLastRealtimeEvent({ 
+            type: "DELETE", 
+            label: `ID: ${deletedId.slice(0, 8)}`, 
+            time: Date.now() 
+          });
+        } else {
+          // General fallback for batch or untyped operations
+          refreshFromSupabase(false);
+        }
+      },
+      (status) => {
+        if (status === "SUBSCRIBED") {
+          setRealtimeConnected(true);
+        } else if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+          setRealtimeConnected(false);
+        }
+      }
+    );
+
+    const handleFocus = () => refreshFromSupabase(false);
+    const handleCustomSync = () => refreshFromSupabase(false);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("aip_sync_disputas", handleCustomSync);
+    window.addEventListener("aip_edital_history_updated", handleCustomSync);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("aip_sync_disputas", handleCustomSync);
+      window.removeEventListener("aip_edital_history_updated", handleCustomSync);
+    };
   }, []);
 
   // History Editais list for auto-fill feature
@@ -174,6 +277,11 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   // Modal State for Add / Edit
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<DisputaRow | null>(null);
+
+  // Modal State for Row Deletion & SQL Setup
+  const [rowToDelete, setRowToDelete] = useState<DisputaRow | null>(null);
+  const [showSqlSetupModal, setShowSqlSetupModal] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState<Partial<DisputaRow>>({
@@ -395,7 +503,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const handleSaveForm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.orgao || !formData.produtoItem) {
-      alert("Por favor, informe o nome do Órgão e a Descrição do Produto/Item.");
+      showToast("Por favor, informe o nome do Órgão e a Descrição do Produto/Item.", "info");
       return;
     }
 
@@ -470,30 +578,6 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     }).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
   };
 
-  // Explicit action to sync all disputes with Supabase
-  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
-
-  const handleSyncAllToSupabase = async () => {
-    if (disputas.length === 0) {
-      showToast("A planilha está vazia.", "info");
-      return;
-    }
-    setIsSyncingSupabase(true);
-    showToast("Sincronizando todas as disputas com o Supabase...", "info");
-    try {
-      let count = 0;
-      for (const item of disputas) {
-        const res = await saveDisputaToSupabase(item);
-        if (res.success) count++;
-      }
-      showToast(`${count} de ${disputas.length} disputas salvas com sucesso no Supabase!`, "success");
-    } catch (err) {
-      showToast("Erro ao sincronizar com o Supabase.", "info");
-    } finally {
-      setIsSyncingSupabase(false);
-    }
-  };
-
   // Inline Cell Edit handler for Spreadsheet mode
   const handleCellChange = (id: string, field: keyof DisputaRow, value: any) => {
     setDisputas(prev => prev.map(r => {
@@ -506,13 +590,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     }));
   };
 
-  // Delete Row
+  // Delete Row Trigger (opens in-app confirmation modal, no window.confirm)
   const handleDeleteRow = (id: string) => {
-    if (confirm("Tem certeza que deseja remover esta linha da planilha?")) {
-      setDisputas(prev => prev.filter(r => r.id !== id));
-      deleteDisputaFromSupabase(id).catch(e => console.warn("Erro ao excluir disputa do Supabase:", e));
-      showToast("Linha removida com sucesso.", "info");
+    const row = disputas.find(r => r.id === id);
+    if (row) {
+      setRowToDelete(row);
     }
+  };
+
+  const confirmDeleteRow = () => {
+    if (!rowToDelete) return;
+    const id = rowToDelete.id;
+    setDisputas(prev => prev.filter(r => r.id !== id));
+    deleteDisputaFromSupabase(id).catch(() => {});
+    showToast("Linha removida com sucesso.", "info");
+    setRowToDelete(null);
   };
 
   // Change Status Quick Handler
@@ -531,10 +623,91 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     showToast(`Status alterado para "${newStatus}".`);
   };
 
+  // Import all analyzed edital items directly into the spreadsheet and sync with Supabase
+  const handleImportFromAnalyzedEditais = async () => {
+    const savedHistory = localStorage.getItem("aip_edital_history");
+    let itemsToImport: any[] = [];
+    if (savedHistory) {
+      try {
+        const parsed = JSON.parse(savedHistory);
+        if (Array.isArray(parsed)) {
+          itemsToImport = parsed;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    if (itemsToImport.length === 0 && historyOptions.length === 0) {
+      showToast("Nenhum edital analisado encontrado para importar.", "info");
+      return;
+    }
+
+    const sourceList = historyOptions.length > 0 ? historyOptions.map(h => h.edital) : itemsToImport.map(i => i.analysis_data || i.analysis || i);
+    const newRows: DisputaRow[] = [];
+
+    sourceList.forEach((editalObj) => {
+      if (!editalObj) return;
+      const fields = extractEditalFields(editalObj);
+      
+      if (editalObj.itensEdital && editalObj.itensEdital.length > 1) {
+        editalObj.itensEdital.forEach((it: any, idx: number) => {
+          const itemVal = parseBRLNumber(it.valorEstimado || it.valorUnitarioEstimado || fields.valorEstimadoItem);
+          const row: DisputaRow = {
+            id: generateUUID(),
+            orgao: fields.orgao,
+            uasgUndCompradora: fields.uasgUndCompradora,
+            numeroLicitacao: fields.numeroLicitacao,
+            portal: fields.portal,
+            produtoItem: `[Item ${it.numero || idx + 1}] ${it.descricao || fields.produtoItem}`,
+            quantidade: Number(it.quantidade) || 1,
+            unidadeMedida: it.unidade || "Unidade",
+            valorEstimadoItem: itemVal,
+            nossoValorAlvo: Number((itemVal * 0.90).toFixed(2)),
+            valorMinimoPiso: Number((itemVal * 0.82).toFixed(2)),
+            dataHoraDisputa: fields.dataHoraDisputa,
+            status: "Agendada",
+            observacoes: fields.observacoes,
+            linkPNCP: fields.linkPNCP
+          };
+          newRows.push(row);
+        });
+      } else {
+        const row: DisputaRow = {
+          id: generateUUID(),
+          orgao: fields.orgao,
+          uasgUndCompradora: fields.uasgUndCompradora,
+          numeroLicitacao: fields.numeroLicitacao,
+          portal: fields.portal,
+          produtoItem: fields.produtoItem,
+          quantidade: fields.quantidade,
+          unidadeMedida: fields.unidadeMedida,
+          valorEstimadoItem: fields.valorEstimadoItem,
+          nossoValorAlvo: fields.nossoValorAlvo,
+          valorMinimoPiso: fields.valorMinimoPiso,
+          dataHoraDisputa: fields.dataHoraDisputa,
+          status: "Agendada",
+          observacoes: fields.observacoes,
+          linkPNCP: fields.linkPNCP
+        };
+        newRows.push(row);
+      }
+    });
+
+    if (newRows.length > 0) {
+      setDisputas(prev => [...newRows, ...prev]);
+      await Promise.all(newRows.map(r => saveDisputaToSupabase(r)));
+      confetti({ particleCount: 50, spread: 60 });
+      showToast(`${newRows.length} itens de editais importados e sincronizados com o Supabase!`);
+    } else {
+      showToast("Nenhum novo item encontrado para importar.", "info");
+    }
+  };
+
   // Export to CSV
   const handleExportCSV = () => {
     if (disputas.length === 0) {
-      alert("A planilha está vazia.");
+      showToast("A planilha está vazia.", "info");
       return;
     }
 
@@ -736,7 +909,47 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
           <div className="h-6 w-px bg-[#E5E7EB] dark:bg-[#27272A] hidden sm:block" />
 
-          {/* Action buttons */}
+          {/* Supabase Realtime live connection badge */}
+          <div 
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold border bg-white dark:bg-[#18181B] border-[#E5E7EB] dark:border-[#27272A] text-zinc-700 dark:text-zinc-300 shadow-2xs"
+            title={realtimeConnected ? "Supabase Realtime ativo: alterações, criações e exclusões sincronizam automaticamente em tempo real." : "Conectando ao Supabase Realtime..."}
+          >
+            <span className="relative flex h-2 w-2">
+              {realtimeConnected && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              )}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${realtimeConnected ? "bg-emerald-500" : "bg-amber-400"}`}></span>
+            </span>
+            <span className="text-[11px] font-medium tracking-tight">
+              {realtimeConnected ? "Sincronização Automática Ativa" : "Conectando..."}
+            </span>
+          </div>
+
+          {lastRealtimeEvent && (Date.now() - lastRealtimeEvent.time < 12000) && (
+            <div className="hidden lg:flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 px-2 py-1 rounded-lg shadow-2xs">
+              <Sparkles className="w-3 h-3 text-emerald-500" />
+              <span>{lastRealtimeEvent.type}: {lastRealtimeEvent.label.slice(0, 26)}</span>
+            </div>
+          )}
+
+          <button
+            onClick={handleImportFromAnalyzedEditais}
+            className="bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            title="Importar itens de todos os Editais Analisados para esta planilha"
+          >
+            <Layers className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+            <span>Importar dos Editais</span>
+          </button>
+
+          <button
+            onClick={() => setShowSqlSetupModal(true)}
+            className="bg-white dark:bg-[#18181B] hover:bg-orange-50 dark:hover:bg-orange-950/30 border border-[#D1D5DB] dark:border-[#27272A] hover:border-[#FF5A00]/40 text-[#374151] dark:text-zinc-200 font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            title="Ver/Copiar script SQL para criar tabelas no Supabase"
+          >
+            <Database className="w-3.5 h-3.5 text-[#FF5A00]" />
+            <span>Banco de Dados</span>
+          </button>
+
           <button
             onClick={handleCopyClipboard}
             className="bg-white dark:bg-[#18181B] hover:bg-gray-50 dark:hover:bg-zinc-800 border border-[#D1D5DB] dark:border-[#27272A] text-[#374151] dark:text-zinc-200 font-semibold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs"
@@ -753,16 +966,6 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           >
             <Download className="w-3.5 h-3.5" />
             <span>Exportar CSV</span>
-          </button>
-
-          <button
-            onClick={handleSyncAllToSupabase}
-            disabled={isSyncingSupabase}
-            className="bg-[#FFF0E5] dark:bg-[#2A170A] hover:bg-[#FFE5D4] dark:hover:bg-[#3D210E] border border-[#FFD6C2] dark:border-[#4A2410] text-[#FF5A00] font-bold px-3 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
-            title="Sincronizar todas as disputas com o banco de dados Supabase"
-          >
-            <Database className={`w-3.5 h-3.5 ${isSyncingSupabase ? "animate-spin" : ""}`} />
-            <span>{isSyncingSupabase ? "Sincronizando..." : "Salvar no Supabase"}</span>
           </button>
 
           <button
@@ -1328,18 +1531,18 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
       {/* Add / Edit Form Modal with History Pull & Attachment AI Extractions */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 animate-fade-in overflow-y-auto">
-          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-xl overflow-hidden my-auto">
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 animate-fade-in overflow-y-auto">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] flex flex-col shadow-2xl overflow-hidden my-auto">
             
             {/* Modal Header */}
-            <div className="p-4 sm:p-5 border-b border-[#E5E7EB] dark:border-[#27272A] flex items-center justify-between bg-[#F9FAFB] dark:bg-[#18181B] shrink-0">
-              <h3 className="text-base font-bold text-[#111827] dark:text-zinc-100 flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-[#FF5A00]" />
-                <span>{editingRow ? "Editar Registro da Disputa" : "Cadastrar Nova Disputa na Planilha"}</span>
+            <div className="p-3.5 sm:p-5 border-b border-[#E5E7EB] dark:border-[#27272A] flex items-center justify-between bg-[#F9FAFB] dark:bg-[#18181B] shrink-0">
+              <h3 className="text-sm sm:text-base font-bold text-[#111827] dark:text-zinc-100 flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-[#FF5A00] shrink-0" />
+                <span className="truncate">{editingRow ? "Editar Registro da Disputa" : "Cadastrar Nova Disputa na Planilha"}</span>
               </h3>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1 rounded-lg hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 transition cursor-pointer"
+                className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1.5 rounded-lg hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 transition cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1616,21 +1819,142 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </div>
 
             {/* Modal Footer (Always visible & fixed at bottom) */}
-            <div className="p-4 border-t border-[#E5E7EB] dark:border-[#27272A] bg-[#F9FAFB] dark:bg-[#18181B] shrink-0 flex items-center justify-end gap-3">
+            <div className="p-3.5 sm:p-4 border-t border-[#E5E7EB] dark:border-[#27272A] bg-[#F9FAFB] dark:bg-[#18181B] shrink-0 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3">
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-[#D1D5DB] dark:border-[#27272A] text-[#374151] dark:text-zinc-300 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 transition cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2 rounded-xl border border-[#D1D5DB] dark:border-[#27272A] text-[#374151] dark:text-zinc-300 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 transition cursor-pointer text-xs font-semibold text-center"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 form="disputa-form"
-                className="bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold px-5 py-2 rounded-xl text-xs transition cursor-pointer shadow-xs"
+                className="w-full sm:w-auto bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold px-5 py-2.5 rounded-xl text-xs transition cursor-pointer shadow-xs text-center flex items-center justify-center gap-1.5"
               >
                 Salvar na Planilha
               </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Row Deletion Confirmation Modal (Replaces blocked window.confirm) */}
+      {rowToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white dark:bg-[#18181B] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/50 rounded-xl text-rose-600 dark:text-rose-400 shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1 min-w-0">
+                <h3 className="text-base font-bold text-[#111827] dark:text-white leading-tight">
+                  Excluir Linha da Planilha?
+                </h3>
+                <p className="text-xs text-[#6B7280] dark:text-zinc-400">
+                  Esta ação removerá o registro selecionado da sua planilha de disputas.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-[#F9FAFB] dark:bg-[#121215] p-3.5 rounded-xl border border-[#E5E7EB] dark:border-[#27272A] text-xs space-y-1 text-[#374151] dark:text-zinc-300">
+              <p><strong className="text-[#111827] dark:text-white">Órgão:</strong> {rowToDelete.orgao || "Não informado"}</p>
+              <p><strong className="text-[#111827] dark:text-white">Item:</strong> {rowToDelete.produtoItem || "Sem descrição"}</p>
+              <p><strong className="text-[#111827] dark:text-white">Licitação:</strong> {rowToDelete.numeroLicitacao || "N/A"}</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setRowToDelete(null)}
+                className="px-4 py-2 bg-[#F3F4F6] dark:bg-zinc-800 hover:bg-[#E5E7EB] dark:hover:bg-zinc-700 text-[#374151] dark:text-zinc-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteRow}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Sim, Excluir</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Supabase Database SQL Setup Modal */}
+      {showSqlSetupModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white dark:bg-[#18181B] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-2xl w-full shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+            
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-[#E5E7EB] dark:border-[#27272A] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-orange-50 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-900/50 rounded-xl text-[#FF5A00]">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-[#111827] dark:text-white">
+                    Estrutura do Banco de Dados Supabase
+                  </h3>
+                  <p className="text-xs text-[#6B7280] dark:text-zinc-400">
+                    Script SQL completo para inicializar tabelas e permissões
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSqlSetupModal(false)}
+                className="p-1.5 rounded-lg text-[#9CA3AF] hover:text-[#111827] dark:hover:text-white hover:bg-gray-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-3">
+              <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-xl text-xs text-amber-900 dark:text-amber-300">
+                💡 <strong>Como usar:</strong> Copie o script SQL abaixo e execute na aba <strong>SQL Editor</strong> do painel Supabase do seu projeto para criar automaticamente as tabelas de <em>planilhas_disputas</em>, <em>editais_analisados</em>, <em>documentos</em> e outras.
+              </div>
+
+              <div className="relative">
+                <textarea
+                  readOnly
+                  value={getSupabaseFullSchemaSQL()}
+                  rows={14}
+                  className="w-full bg-[#0F172A] text-emerald-400 font-mono text-[11px] p-3.5 rounded-xl border border-slate-700 leading-relaxed focus:outline-none select-all"
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-[#E5E7EB] dark:border-[#27272A] bg-[#F9FAFB] dark:bg-[#121215] flex items-center justify-between gap-3">
+              <span className="text-xs text-[#6B7280] dark:text-zinc-400">
+                PostgreSQL • Supabase RLS Seguro
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSqlSetupModal(false)}
+                  className="px-4 py-2 bg-gray-200 dark:bg-zinc-800 hover:bg-gray-300 dark:hover:bg-zinc-700 text-[#374151] dark:text-zinc-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+                >
+                  Fechar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(getSupabaseFullSchemaSQL());
+                    setCopiedSql(true);
+                    setTimeout(() => setCopiedSql(false), 2500);
+                  }}
+                  className="px-4 py-2 bg-[#FF5A00] hover:bg-[#E65000] text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  {copiedSql ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedSql ? "Copiado com Sucesso!" : "Copiar Script SQL"}</span>
+                </button>
+              </div>
             </div>
 
           </div>

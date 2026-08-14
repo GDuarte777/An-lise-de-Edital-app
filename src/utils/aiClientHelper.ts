@@ -24,7 +24,11 @@ export function getActiveAiConfig() {
     const anthropicKey = (localStorage.getItem("ai_anthropic_key") || localStorage.getItem("anthropic_api_key") || localStorage.getItem("ANTHROPIC_API_KEY") || "").trim();
     const deepseekKey = (localStorage.getItem("ai_deepseek_key") || localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
 
-    if (geminiKey) return { provider: "gemini", apiKey: geminiKey, model: localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash" };
+    if (geminiKey) {
+      const stored = localStorage.getItem("ai_gemini_model");
+      const cleanModel = (stored === "gemini-3.6-flash" || !stored) ? "gemini-3.7-flash" : stored;
+      return { provider: "gemini", apiKey: geminiKey, model: cleanModel };
+    }
     if (openaiKey) return { provider: "openai", apiKey: openaiKey, model: localStorage.getItem("ai_openai_model") || "gpt-4o" };
     if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey, model: localStorage.getItem("ai_anthropic_model") || "claude-3-7-sonnet-20250219" };
     if (deepseekKey) return { provider: "deepseek", apiKey: deepseekKey, model: localStorage.getItem("ai_deepseek_model") || "deepseek-chat" };

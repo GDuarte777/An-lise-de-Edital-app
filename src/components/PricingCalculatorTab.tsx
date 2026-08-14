@@ -7,6 +7,12 @@ import {
 import { EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
 import { apiFetch } from "../utils/aiClientHelper";
+import { 
+  fetchSimulacoesFromSupabase, 
+  saveSimulacaoToSupabase, 
+  deleteSimulacaoFromSupabase, 
+  subscribeToSupabaseTable 
+} from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 
 interface PricingCalculatorTabProps {
@@ -172,7 +178,7 @@ export default function PricingCalculatorTab({ companyData, activeEdital }: Pric
     }
   });
 
-  // Lista de simulações salvas localmente
+  // Lista de simulações (Supabase com fallback Local e Realtime)
   const [simulations, setSimulations] = useState<PriceSimulation[]>(() => {
     try {
       const saved = localStorage.getItem("aip_pricing_simulations");
@@ -182,6 +188,41 @@ export default function PricingCalculatorTab({ companyData, activeEdital }: Pric
     }
   });
   const [showConfirmClearSimulations, setShowConfirmClearSimulations] = useState(false);
+
+  useEffect(() => {
+    async function loadSimulations() {
+      try {
+        const dbSims = await fetchSimulacoesFromSupabase();
+        if (dbSims && dbSims.length > 0) {
+          setSimulations(dbSims);
+          localStorage.setItem("aip_pricing_simulations", JSON.stringify(dbSims));
+          return;
+        }
+      } catch (e) {
+        console.warn("Falha ao buscar simulações do Supabase:", e);
+      }
+
+      try {
+        const saved = localStorage.getItem("aip_pricing_simulations");
+        if (saved) {
+          setSimulations(JSON.parse(saved));
+        }
+      } catch (e) {}
+    }
+    loadSimulations();
+
+    const unsubscribe = subscribeToSupabaseTable("simulacoes_precos", () => {
+      loadSimulations();
+    });
+
+    const handleFocus = () => loadSimulations();
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, []);
 
   // Active simulation forms fields
   const [selectedEditalId, setSelectedEditalId] = useState<string>("");
@@ -599,6 +640,7 @@ Retorne o JSON no seguinte formato:
       outrasDespesasTotais
     };
 
+    saveSimulacaoToSupabase(newSim).catch(e => console.warn("Erro ao salvar simulação no Supabase:", e));
     setSimulations(prev => [newSim, ...prev]);
     confetti({ particleCount: 80, spread: 50, origin: { y: 0.8 } });
   };
@@ -1224,6 +1266,7 @@ Status da Simulação: ${marginAnalysis.label}
                         </div>
                         <button
                           onClick={() => {
+                            deleteSimulacaoFromSupabase(sim.id).catch(e => console.warn("Erro ao deletar do Supabase:", e));
                             const updated = simulations.filter(s => s.id !== sim.id);
                             setSimulations(updated);
                             localStorage.setItem("aip_pricing_simulations", JSON.stringify(updated));
@@ -1283,47 +1326,47 @@ Status da Simulação: ${marginAnalysis.label}
 
       {/* MODAL: IMPORTAR COTAÇÃO DO FORNECEDOR COM IA */}
       {showQuoteModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-white border border-[#E5E7EB] rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-xl relative">
+        <div className="fixed inset-0 z-[9999] bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 md:p-6 animate-in fade-in duration-150 overflow-y-auto">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-xl w-full p-4 sm:p-6 space-y-4 sm:space-y-5 shadow-2xl relative my-auto max-h-[92vh] sm:max-h-[88vh] flex flex-col overflow-y-auto">
             
-            <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-4">
-              <div className="flex items-center gap-3">
-                <div className="bg-emerald-50 p-2.5 rounded-xl text-emerald-700">
-                  <UploadCloud className="w-6 h-6" />
+            <div className="flex items-center justify-between border-b border-[#F3F4F6] dark:border-[#27272A] pb-3.5 sm:pb-4 shrink-0">
+              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 pr-2">
+                <div className="bg-emerald-50 dark:bg-emerald-950/40 p-2 sm:p-2.5 rounded-xl text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
+                  <UploadCloud className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
-                <div>
-                  <h3 className="font-bold text-[#111827] text-base">Importar Cotação de Fornecedor com IA</h3>
-                  <p className="text-xs text-[#6B7280]">Cole o texto do orçamento, e-mail ou suba o arquivo para preenchimento automático</p>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-[#111827] dark:text-zinc-100 text-sm sm:text-base truncate">Importar Cotação de Fornecedor com IA</h3>
+                  <p className="text-[11px] sm:text-xs text-[#6B7280] dark:text-zinc-400 truncate">Cole o orçamento ou suba o arquivo para preenchimento automático</p>
                 </div>
               </div>
 
               <button
                 onClick={() => setShowQuoteModal(false)}
-                className="text-[#6B7280] hover:text-[#111827] p-1 rounded-lg hover:bg-[#F3F4F6] transition cursor-pointer"
+                className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1.5 rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 transition cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-4 flex-1">
               {/* File upload prompt */}
               <div>
-                <label className="block text-[11px] font-bold text-[#374151] uppercase tracking-wider mb-2 flex items-center justify-between font-mono">
+                <label className="block text-[11px] font-bold text-[#374151] dark:text-zinc-300 uppercase tracking-wider mb-2 flex items-center justify-between font-mono">
                   <span>Anexar Arquivo de Cotação (TXT, CSV, PDF)</span>
-                  {quoteFileName && <span className="text-emerald-700 font-mono text-[10px]">{quoteFileName}</span>}
+                  {quoteFileName && <span className="text-emerald-700 dark:text-emerald-400 font-mono text-[10px] truncate max-w-[150px]">{quoteFileName}</span>}
                 </label>
-                <div className="border-2 border-dashed border-[#D1D5DB] hover:border-emerald-500 bg-[#F9FAFB] hover:bg-emerald-50/50 rounded-xl p-4 text-center transition cursor-pointer relative">
+                <div className="border-2 border-dashed border-[#D1D5DB] dark:border-zinc-700 hover:border-emerald-500 dark:hover:border-emerald-500 bg-[#F9FAFB] dark:bg-[#18181B] hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 rounded-xl p-4 text-center transition cursor-pointer relative">
                   <input
                     type="file"
                     accept=".txt,.csv,.json,.pdf,.doc,.docx"
                     onChange={handleQuoteFileUpload}
                     className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                   />
-                  <Upload className="w-6 h-6 text-emerald-600 mx-auto mb-2" />
-                  <span className="text-xs text-[#374151] font-medium block">
+                  <Upload className="w-6 h-6 text-emerald-600 dark:text-emerald-400 mx-auto mb-2" />
+                  <span className="text-xs text-[#374151] dark:text-zinc-200 font-medium block">
                     {quoteFileName ? `Arquivo selecionado: ${quoteFileName}` : "Clique ou arraste a proposta do fornecedor aqui"}
                   </span>
-                  <span className="text-[10px] text-[#6B7280] mt-0.5 block">
+                  <span className="text-[10px] text-[#6B7280] dark:text-zinc-400 mt-0.5 block">
                     A IA vai ler o custo unitário, quantidade, frete e tributos
                   </span>
                 </div>
@@ -1331,30 +1374,30 @@ Status da Simulação: ${marginAnalysis.label}
 
               <div className="relative">
                 <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-[#E5E7EB]"></div>
+                  <div className="w-full border-t border-[#E5E7EB] dark:border-zinc-800"></div>
                 </div>
                 <div className="relative flex justify-center text-[10px] uppercase font-mono">
-                  <span className="bg-white px-2 text-[#6B7280]">ou cole a mensagem de texto</span>
+                  <span className="bg-white dark:bg-[#121212] px-2 text-[#6B7280] dark:text-zinc-400">ou cole a mensagem de texto</span>
                 </div>
               </div>
 
               {/* Text Area */}
               <div>
                 <textarea
-                  rows={6}
+                  rows={5}
                   value={quoteText}
                   onChange={(e) => setQuoteText(e.target.value)}
                   placeholder={`Exemplo de cotação do fornecedor:\n"Cotação Fornecedor TechLtda - Item: Cadeira B2B\nPreço unitário: R$ 145,00\nQuantidade: 50 unidades\nFrete total CIF para SP: R$ 380,00\nImposto IPI: 5%"`}
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl p-3.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition font-sans leading-relaxed"
+                  className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl p-3 sm:p-3.5 text-xs text-[#111827] dark:text-zinc-100 placeholder-[#9CA3AF] dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition font-sans leading-relaxed"
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#F3F4F6]">
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-3 border-t border-[#F3F4F6] dark:border-[#27272A] shrink-0">
               <button
                 type="button"
                 onClick={() => setShowQuoteModal(false)}
-                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-[#6B7280] hover:text-[#111827] hover:bg-[#F3F4F6] transition cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-semibold text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 transition cursor-pointer text-center"
               >
                 Cancelar
               </button>
@@ -1363,17 +1406,17 @@ Status da Simulação: ${marginAnalysis.label}
                 type="button"
                 onClick={handleParseSupplierQuote}
                 disabled={isParsingQuote || !quoteText.trim()}
-                className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs py-2.5 px-5 rounded-xl transition-all cursor-pointer flex items-center gap-2 shadow-xs disabled:opacity-50"
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs py-2.5 px-5 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-xs disabled:opacity-50 text-center"
               >
                 {isParsingQuote ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    Processando com IA...
+                    <span>Processando com IA...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4 text-amber-200" />
-                    Extrair e Preencher Calculadora
+                    <span>Extrair e Preencher Calculadora</span>
                   </>
                 )}
               </button>

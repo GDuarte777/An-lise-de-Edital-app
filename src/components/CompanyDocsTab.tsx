@@ -3,7 +3,8 @@ import { Certificate, EditalAnalysis, CompanyData } from "../types";
 import { 
   fetchCertificatesFromSupabase,
   saveCertificateToSupabase,
-  deleteCertificateFromSupabase
+  deleteCertificateFromSupabase,
+  subscribeToSupabaseTable
 } from "../utils/supabaseClient";
 import { 
   FileText, Plus, Calendar, AlertTriangle, CheckCircle, Trash2, Edit2, ShieldCheck, 
@@ -388,15 +389,13 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     loading: boolean;
   } | null>(null);
 
-  // Load from Supabase on mount
+  // Load from Supabase on mount and listen to realtime updates
   useEffect(() => {
     async function loadCerts() {
       try {
         const dbCerts = await fetchCertificatesFromSupabase();
         if (dbCerts && dbCerts.length > 0) {
           setCerts(prev => {
-            // Merge existing local state (which has all standard items and any custom items)
-            // with dbCerts loaded from Supabase
             const merged = prev.map(local => {
               const dbMatch = dbCerts.find(d => d.id === local.id);
               if (dbMatch) {
@@ -410,7 +409,6 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
               return local;
             });
 
-            // If there are custom certificates in dbCerts that aren't in the merged list, append them
             const existingIds = new Set(merged.map(c => c.id));
             dbCerts.forEach(db => {
               if (!existingIds.has(db.id)) {
@@ -430,6 +428,18 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       }
     }
     loadCerts();
+
+    const unsubscribe = subscribeToSupabaseTable("certidoes_fiscais", () => {
+      loadCerts();
+    });
+
+    const handleFocus = () => loadCerts();
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("focus", handleFocus);
+    };
   }, []);
 
   // Persistence
@@ -1861,19 +1871,19 @@ Retorne exclusivamente o JSON estruturado.
       </div>
 
       {confirmDialog && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-[9999] flex items-center justify-center p-4">
-          <div className="bg-white border border-[#E5E7EB] rounded-2xl max-w-sm w-full p-6 shadow-xl animate-in fade-in zoom-in-95 duration-200">
-            <h3 className="text-sm font-semibold text-[#111827] mb-2 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              {confirmDialog.title}
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 overflow-y-auto">
+          <div className="bg-white dark:bg-[#18181B] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-sm w-full p-5 sm:p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200 my-auto">
+            <h3 className="text-sm font-semibold text-[#111827] dark:text-zinc-100 mb-2 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>{confirmDialog.title}</span>
             </h3>
-            <p className="text-xs text-[#4B5563] mb-6 leading-relaxed">
+            <p className="text-xs text-[#4B5563] dark:text-zinc-300 mb-5 leading-relaxed">
               {confirmDialog.message}
             </p>
-            <div className="flex justify-end gap-3">
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3">
               <button
                 onClick={() => setConfirmDialog(null)}
-                className="px-3.5 py-2 text-xs font-semibold text-[#374151] hover:bg-[#F3F4F6] bg-white rounded-xl transition-all cursor-pointer border border-[#D1D5DB]"
+                className="w-full sm:w-auto px-4 py-2 text-xs font-semibold text-[#374151] dark:text-zinc-300 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/50 rounded-xl transition-all cursor-pointer border border-[#D1D5DB] dark:border-zinc-700 text-center"
               >
                 Cancelar
               </button>
@@ -1882,7 +1892,7 @@ Retorne exclusivamente o JSON estruturado.
                   confirmDialog.onConfirm();
                   setConfirmDialog(null);
                 }}
-                className="px-3.5 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl transition-all cursor-pointer shadow-xs"
+                className="w-full sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl transition-all cursor-pointer shadow-xs text-center"
               >
                 Confirmar
               </button>

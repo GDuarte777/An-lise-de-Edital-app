@@ -36,6 +36,33 @@ let cachedClient: SupabaseClient | null = null;
 let lastUrl = "";
 let lastKey = "";
 
+// Set to track tables that do not yet exist in the Supabase schema to avoid repeated 404 network warnings
+const missingTablesCache = new Set<string>();
+
+export function isTableMissing(tableName: string): boolean {
+  return missingTablesCache.has(tableName);
+}
+
+export function markTableMissing(tableName: string): void {
+  missingTablesCache.add(tableName);
+}
+
+export function isTableMissingError(error: any): boolean {
+  if (!error) return false;
+  const msg = (error.message || error.details || error.hint || String(error)).toLowerCase();
+  const code = String(error.code || "");
+  return (
+    msg.includes("schema cache") ||
+    msg.includes("could not find the table") ||
+    msg.includes("relation") && msg.includes("does not exist") ||
+    msg.includes("not found") ||
+    code === "PGRST205" ||
+    code === "42P01" ||
+    code === "PGRST116" ||
+    code === "404"
+  );
+}
+
 export function getSupabaseClient(): SupabaseClient | null {
   const config = getSupabaseConfig();
   if (!config.url || !config.anonKey) {
@@ -136,22 +163,52 @@ export async function syncEditalToSupabase(analysisData: any): Promise<{ success
 }
 
 // Sync documents like proposals/declarations
-export async function syncDocumentToSupabase(file: any): Promise<{ success: boolean; message: string }> {
+export async function syncDocumentToSupabase(
+  fileOrName: any, 
+  maybeType?: string, 
+  maybeContent?: string
+): Promise<{ success: boolean; message: string; id?: string }> {
   const client = getSupabaseClient();
   if (!client) return { success: false, message: "Supabase não configurado." };
 
   try {
     const user = await getActiveUser();
-    if (!user) return { success: false, message: "Usuário não autenticado." };
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    let docId = generateUUID();
+    let name = "Documento";
+    let type = "geral";
+    let path = "";
+    let content = "";
+    let url = "";
+    let timestamp = new Date().toISOString();
+
+    if (typeof fileOrName === "object" && fileOrName !== null) {
+      docId = ensureValidUuid(fileOrName.id);
+      name = fileOrName.name || fileOrName.title || "Documento";
+      type = fileOrName.type || "geral";
+      path = fileOrName.path || "";
+      content = fileOrName.content || fileOrName.conteudo || "";
+      url = fileOrName.url || "";
+      timestamp = fileOrName.timestamp || new Date().toISOString();
+    } else {
+      name = String(fileOrName || "Documento");
+      type = maybeType || "geral";
+      content = maybeContent || "";
+    }
 
     const record = {
-      id: file.id,
-      user_id: user.id,
-      name: file.name,
-      type: file.type,
-      path: file.path,
-      timestamp: file.timestamp,
-      url: file.url || "",
+      id: docId,
+      user_id: userId,
+      name,
+      title: name,
+      type,
+      path,
+      content,
+      conteudo_markdown: content,
+      timestamp,
+      url,
       updated_at: new Date().toISOString()
     };
 
@@ -164,7 +221,7 @@ export async function syncDocumentToSupabase(file: any): Promise<{ success: bool
       return { success: false, message: `Erro ao enviar: ${error.message}.` };
     }
 
-    return { success: true, message: "Documento sincronizado com o Supabase!" };
+    return { success: true, message: "Documento sincronizado com o Supabase!", id: docId };
   } catch (err: any) {
     return { success: false, message: err.message || "Falha técnica ao sincronizar documento." };
   }
@@ -247,17 +304,57 @@ export async function getActiveUser(): Promise<any | null> {
 
 // --- Dynamic CRUD helpers mapped to Supabase ---
 
+// Real-time table change subscription helper for live cross-device SaaS synchronization
+export function subscribeToSupabaseTable(
+  tableName: string, 
+  onDataChange: (payload: any) => void,
+  onStatusChange?: (status: "SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR") => void
+): () => void {
+  const client = getSupabaseClient();
+  if (!client) return () => {};
+
+  try {
+    const channelId = `realtime_${tableName}_${Math.random().toString(36).substring(2, 8)}`;
+    const channel = client
+      .channel(channelId)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: tableName },
+        (payload) => {
+          try {
+            onDataChange(payload);
+          } catch (e) {
+            console.warn(`[Supabase Realtime] Error handling event for ${tableName}:`, e);
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (onStatusChange) {
+          onStatusChange(status as any);
+        }
+      });
+
+    return () => {
+      try {
+        client.removeChannel(channel);
+      } catch (err) {
+        // ignore cleanup error
+      }
+    };
+  } catch (err) {
+    console.warn(`[Supabase Realtime] Could not subscribe to ${tableName}:`, err);
+    return () => {};
+  }
+}
+
 // 1. Editais Analisados (editais_analisados)
 export async function fetchEditaisFromSupabase(): Promise<any[]> {
   const client = getSupabaseClient();
   if (!client) return [];
   try {
-    const user = await getActiveUser();
-    if (!user) return [];
     const { data, error } = await client
       .from("editais_analisados")
       .select("*")
-      .eq("user_id", user.id)
       .order("updated_at", { ascending: false });
     if (error) {
       console.warn("fetchEditaisFromSupabase error:", error.message);
@@ -311,14 +408,27 @@ export async function deleteEditalFromSupabase(id: string): Promise<boolean> {
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    if (!user) return false;
-    const { error } = await client
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    await client
       .from("editais_analisados")
       .delete()
       .eq("id", id)
-      .eq("user_id", user.id);
-    return !error;
-  } catch {
+      .or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+
+    const { error } = await client
+      .from("editais_analisados")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      await client.from("analises_editais").delete().eq("id", id);
+      await client.from("editais").delete().eq("id", id);
+    }
+    return true;
+  } catch (err: any) {
+    console.warn("deleteEditalFromSupabase exception:", err?.message || err);
     return false;
   }
 }
@@ -395,14 +505,26 @@ export async function deleteCertificateFromSupabase(id: string): Promise<boolean
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    if (!user) return false;
-    const { error } = await client
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    await client
       .from("certidoes_fiscais")
       .delete()
       .eq("id", id)
-      .eq("user_id", user.id);
-    return !error;
-  } catch {
+      .or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+
+    const { error } = await client
+      .from("certidoes_fiscais")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      await client.from("empresa_documentos").delete().eq("id", id);
+    }
+    return true;
+  } catch (err: any) {
+    console.warn("deleteCertificateFromSupabase exception:", err?.message || err);
     return false;
   }
 }
@@ -468,14 +590,26 @@ export async function deleteCompetitorFromSupabase(id: string): Promise<boolean>
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    if (!user) return false;
-    const { error } = await client
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    await client
       .from("historico_concorrentes")
       .delete()
       .eq("id", id)
-      .eq("user_id", user.id);
-    return !error;
-  } catch {
+      .or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+
+    const { error } = await client
+      .from("historico_concorrentes")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      await client.from("concorrentes").delete().eq("id", id);
+    }
+    return true;
+  } catch (err: any) {
+    console.warn("deleteCompetitorFromSupabase exception:", err?.message || err);
     return false;
   }
 }
@@ -610,40 +744,51 @@ export async function fetchDocumentsFromSupabase(): Promise<any[]> {
   if (!client) return [];
   try {
     const user = await getActiveUser();
-    if (!user) return [];
-    const { data, error } = await client
-      .from("documentos_sincronizados")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("updated_at", { ascending: false });
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    let query = client.from("documentos_sincronizados").select("*");
+    if (user?.id && user.id !== guestId) {
+      query = query.or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+    }
+
+    const { data, error } = await query.order("updated_at", { ascending: false });
     if (error) return [];
     return (data || []).map(item => ({
       id: item.id,
-      name: item.name,
-      type: item.type,
-      path: item.path,
-      timestamp: item.timestamp,
-      url: item.url
+      name: item.name || item.title || item.nome_documento || "",
+      title: item.title || item.name || item.nome_documento || "",
+      type: item.type || item.tipo || "",
+      path: item.path || "",
+      timestamp: item.timestamp || item.created_at || new Date().toISOString(),
+      created_at: item.created_at || item.timestamp,
+      url: item.url || "",
+      content: item.content || item.conteudo || item.conteudo_markdown || ""
     }));
   } catch {
     return [];
   }
 }
 
+export const fetchDocumentosFromSupabase = fetchDocumentsFromSupabase;
+
 export async function saveDocumentToSupabase(item: any): Promise<{ success: boolean; message: string }> {
   const client = getSupabaseClient();
   if (!client) return { success: false, message: "Supabase não configurado." };
   try {
     const user = await getActiveUser();
-    if (!user) return { success: false, message: "Usuário não autenticado." };
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
     
     const record = {
-      id: item.id,
-      user_id: user.id,
-      name: item.name,
-      type: item.type,
-      path: item.path,
-      timestamp: item.timestamp,
+      id: ensureValidUuid(item.id),
+      user_id: userId,
+      name: item.name || item.title || "Documento",
+      title: item.title || item.name || "Documento",
+      type: item.type || "geral",
+      path: item.path || "",
+      content: item.content || item.conteudo || "",
+      timestamp: item.timestamp || new Date().toISOString(),
       url: item.url || "",
       updated_at: new Date().toISOString()
     };
@@ -665,14 +810,27 @@ export async function deleteDocumentFromSupabase(id: string): Promise<boolean> {
   if (!client) return false;
   try {
     const user = await getActiveUser();
-    if (!user) return false;
-    const { error } = await client
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    await client
       .from("documentos_sincronizados")
       .delete()
       .eq("id", id)
-      .eq("user_id", user.id);
-    return !error;
-  } catch {
+      .or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+
+    const { error } = await client
+      .from("documentos_sincronizados")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      console.warn("deleteDocumentFromSupabase error:", error.message || error);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn("deleteDocumentFromSupabase exception:", err?.message || err);
     return false;
   }
 }
@@ -698,11 +856,10 @@ export function ensureValidUuid(idStr: string | undefined): string {
 // 6. Planilhas de Disputas (planilhas_disputas)
 export async function fetchDisputasFromSupabase(): Promise<any[]> {
   const client = getSupabaseClient();
-  if (!client) return [];
+  if (!client || isTableMissing("planilhas_disputas")) return [];
   try {
     const user = await getActiveUser();
     const guestId = getGuestUserId();
-    const userId = user?.id || guestId;
 
     let query = client.from("planilhas_disputas").select("*");
     if (user?.id && user.id !== guestId) {
@@ -711,8 +868,15 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
 
     const { data, error } = await query.order("updated_at", { ascending: false });
     if (error) {
-      console.warn("fetchDisputasFromSupabase filtered query error, retrying all:", error.message);
+      if (isTableMissingError(error)) {
+        markTableMissing("planilhas_disputas");
+        return [];
+      }
       const fallback = await client.from("planilhas_disputas").select("*").order("updated_at", { ascending: false });
+      if (fallback.error && isTableMissingError(fallback.error)) {
+        markTableMissing("planilhas_disputas");
+        return [];
+      }
       if (fallback.data && Array.isArray(fallback.data)) {
         return fallback.data.map(mapDisputaFromDb);
       }
@@ -720,12 +884,14 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
     }
     return (data || []).map(mapDisputaFromDb);
   } catch (err: any) {
-    console.warn("fetchDisputasFromSupabase error:", err?.message || err);
+    if (isTableMissingError(err)) {
+      markTableMissing("planilhas_disputas");
+    }
     return [];
   }
 }
 
-function mapDisputaFromDb(item: any) {
+export function mapDisputaFromDb(item: any) {
   return {
     id: item.id,
     orgao: item.orgao || item.orgao_comprador || "",
@@ -748,6 +914,10 @@ function mapDisputaFromDb(item: any) {
 export async function saveDisputaToSupabase(item: any): Promise<{ success: boolean; message: string }> {
   const client = getSupabaseClient();
   if (!client) return { success: false, message: "Supabase não configurado." };
+  if (isTableMissing("planilhas_disputas")) {
+    return { success: false, message: "Tabela planilhas_disputas não existe no Supabase (utilizando armazenamento local seguro)." };
+  }
+
   try {
     const user = await getActiveUser();
     const guestId = getGuestUserId();
@@ -789,9 +959,14 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
       .from("planilhas_disputas")
       .upsert([record], { onConflict: "id" });
 
+    // Check if table missing
+    if (error && isTableMissingError(error)) {
+      markTableMissing("planilhas_disputas");
+      return { success: false, message: "Tabela planilhas_disputas não criada no banco." };
+    }
+
     // Attempt 2: Retry without link_pncp if column missing in DB schema
     if (error && (error.message.includes("link_pncp") || error.message.includes("column"))) {
-      console.warn("Supabase planilhas_disputas missing 'link_pncp' column. Retrying without link_pncp...");
       delete record.link_pncp;
       const res = await client.from("planilhas_disputas").upsert([record], { onConflict: "id" });
       error = res.error;
@@ -805,7 +980,6 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
       error.message.includes("violates") ||
       error.code === "23503"
     )) {
-      console.warn("Supabase planilhas_disputas FK constraint on user_id. Retrying without user_id...");
       delete record.user_id;
       const res = await client.from("planilhas_disputas").upsert([record], { onConflict: "id" });
       error = res.error;
@@ -813,7 +987,6 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
 
     // Attempt 4: Insert / update fallback
     if (error && (error.message.includes("onConflict") || error.code === "42703")) {
-      console.warn("Retrying with simple insert / update fallback...");
       const insertRes = await client.from("planilhas_disputas").insert([record]);
       if (insertRes.error) {
         const updateRes = await client.from("planilhas_disputas").update(record).eq("id", recordId);
@@ -824,19 +997,23 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
     }
 
     if (error) {
-      console.warn("saveDisputaToSupabase DB warning:", error.message);
+      if (isTableMissingError(error)) {
+        markTableMissing("planilhas_disputas");
+      }
       return { success: false, message: error.message };
     }
     return { success: true, message: "Disputa salva com sucesso no Supabase!" };
   } catch (err: any) {
-    console.warn("saveDisputaToSupabase error:", err?.message || err);
-    return { success: false, message: err.message };
+    if (isTableMissingError(err)) {
+      markTableMissing("planilhas_disputas");
+    }
+    return { success: false, message: err?.message || "Erro de conexão" };
   }
 }
 
 export async function deleteDisputaFromSupabase(id: string): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  if (!client || isTableMissing("planilhas_disputas")) return false;
   try {
     const user = await getActiveUser();
     const guestId = getGuestUserId();
@@ -849,6 +1026,10 @@ export async function deleteDisputaFromSupabase(id: string): Promise<boolean> {
       .or(`user_id.eq.${userId},user_id.eq.${guestId}`);
 
     if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("planilhas_disputas");
+        return false;
+      }
       // Fallback: delete by id alone
       await client.from("planilhas_disputas").delete().eq("id", id);
     }
@@ -856,6 +1037,432 @@ export async function deleteDisputaFromSupabase(id: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// 7. Simulações de Preços (simulacoes_precos)
+export async function fetchSimulacoesFromSupabase(): Promise<any[]> {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    let query = client.from("simulacoes_precos").select("*");
+    if (user?.id && user.id !== guestId) {
+      query = query.or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+    }
+
+    const { data, error } = await query.order("updated_at", { ascending: false });
+    if (error) return [];
+    return (data || []).map(item => ({
+      id: item.id,
+      title: item.title || item.titulo || "Simulação",
+      date: item.date || item.data || new Date().toISOString(),
+      editalTitle: item.edital_title || item.editalTitle || "",
+      itemDesc: item.item_desc || item.itemDesc || "",
+      quantity: Number(item.quantity) || 1,
+      custoProdutoUnitario: Number(item.custo_produto_unitario) || 0,
+      freteUnitario: Number(item.frete_unitario) || 0,
+      impostosPercent: Number(item.impostos_percent) || 0,
+      margemLucroPercent: Number(item.margem_lucro_percent) || 0,
+      custoOperacionalPercent: Number(item.custo_operacional_percent) || 0,
+      precoMinimoUnitario: Number(item.preco_minimo_unitario) || 0,
+      precoIdealUnitario: Number(item.preco_ideal_unitario) || 0,
+      precoEstimadoEditalUnitario: Number(item.preco_estimado_edital_unitario) || 0,
+      faturamentoTotalIdeal: Number(item.faturamento_total_ideal) || 0,
+      lucroLiquidoTotal: Number(item.lucro_liquido_total) || 0,
+      custosTotais: Number(item.custos_totais) || 0,
+      impostosTotais: Number(item.impostos_totais) || 0,
+      outrasDespesasTotais: Number(item.outras_despesas_totais) || 0
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function saveSimulacaoToSupabase(sim: any): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    const record = {
+      id: ensureValidUuid(sim.id),
+      user_id: userId,
+      title: sim.title || "Simulação",
+      date: sim.date || new Date().toISOString(),
+      edital_title: sim.editalTitle || "",
+      item_desc: sim.itemDesc || "",
+      quantity: sim.quantity || 1,
+      custo_produto_unitario: sim.custoProdutoUnitario || 0,
+      frete_unitario: sim.freteUnitario || 0,
+      impostos_percent: sim.impostosPercent || 0,
+      margem_lucro_percent: sim.margemLucroPercent || 0,
+      custo_operacional_percent: sim.custoOperacionalPercent || 0,
+      preco_minimo_unitario: sim.precoMinimoUnitario || 0,
+      preco_ideal_unitario: sim.precoIdealUnitario || 0,
+      preco_estimado_edital_unitario: sim.precoEstimadoEditalUnitario || 0,
+      faturamento_total_ideal: sim.faturamentoTotalIdeal || 0,
+      lucro_liquido_total: sim.lucroLiquidoTotal || 0,
+      custos_totais: sim.custosTotais || 0,
+      impostos_totais: sim.impostosTotais || 0,
+      outras_despesas_totais: sim.outrasDespesasTotais || 0,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("simulacoes_precos")
+      .upsert([record], { onConflict: "id" });
+
+    if (error) throw error;
+    return { success: true, message: "Simulação salva com sucesso no Supabase!" };
+  } catch (err: any) {
+    console.warn("saveSimulacaoToSupabase error:", err?.message || err);
+    return { success: false, message: err.message };
+  }
+}
+
+export async function deleteSimulacaoFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    await client
+      .from("simulacoes_precos")
+      .delete()
+      .eq("id", id)
+      .or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+
+    await client.from("simulacoes_precos").delete().eq("id", id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 8. Comparador de Produtos (comparador_produtos)
+export async function fetchComparadorProdutosFromSupabase(): Promise<any[]> {
+  const client = getSupabaseClient();
+  if (!client) return [];
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    let query = client.from("comparador_produtos").select("*");
+    if (user?.id && user.id !== guestId) {
+      query = query.or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
+    }
+
+    const { data, error } = await query.order("updated_at", { ascending: false });
+    if (error) return [];
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveComparadorProdutoToSupabase(item: any): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    const record = {
+      id: generateUUID(),
+      user_id: userId,
+      edital_id: item.edital_id || "",
+      especificacoes_exigidas: item.especificacoes_exigidas || "",
+      candidatos: item.candidatos || [],
+      dados_comparacao: item.dados_comparacao || {},
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("comparador_produtos")
+      .upsert([record]);
+
+    if (error) throw error;
+    return { success: true, message: "Comparação salva no Supabase!" };
+  } catch (err: any) {
+    console.warn("saveComparadorProdutoToSupabase error:", err?.message || err);
+    return { success: false, message: err.message };
+  }
+}
+
+// 9. Configurações do LanceBot (lancebot_config)
+export async function fetchLanceBotConfigFromSupabase(): Promise<any | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    const { data, error } = await client
+      .from("lancebot_config")
+      .select("*")
+      .or(`user_id.eq.${userId},user_id.eq.${guestId}`)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveLanceBotConfigToSupabase(config: any): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    const record = {
+      user_id: userId,
+      ...config,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("lancebot_config")
+      .upsert([record], { onConflict: "user_id" });
+
+    if (error) throw error;
+    return { success: true, message: "Configuração do LanceBot salva no Supabase!" };
+  } catch (err: any) {
+    return { success: false, message: err.message };
+  }
+}
+
+// Full PostgreSQL SQL Migration script to create all required tables in Supabase with 1-click
+export function getSupabaseFullSchemaSQL(): string {
+  return `-- ==============================================================================
+-- HORASIS - ESTRUTURA COMPLETA DO BANCO DE DADOS SUPABASE (PostgreSQL)
+-- Cole e execute este script no "SQL Editor" do seu painel Supabase
+-- ==============================================================================
+
+-- 1. Habilitar extensões necessárias
+create extension if not exists "uuid-ossp";
+
+-- 2. Tabela de Planilhas de Disputas
+create table if not exists public.planilhas_disputas (
+  id uuid primary key default uuid_generate_v4(),
+  user_id text not null,
+  orgao text not null default '',
+  uasg_und_compradora text default '',
+  numero_licitacao text default '',
+  portal text default 'Compras.gov.br',
+  produto_item text not null default '',
+  quantidade numeric default 1,
+  unidade_medida text default 'Unidade',
+  valor_estimado_item numeric default 0,
+  nosso_valor_alvo numeric default 0,
+  valor_minimo_piso numeric default 0,
+  data_hora_disputa text default '',
+  status text default 'Agendada',
+  observacoes text default '',
+  link_pncp text default '',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 3. Tabela de Editais Analisados
+create table if not exists public.editais_analisados (
+  id text primary key,
+  user_id text not null,
+  title text not null default '',
+  date text not null default '',
+  analysis jsonb not null default '{}'::jsonb,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 4. Tabela de Documentos Sincronizados (Propostas, Declarações)
+create table if not exists public.documentos_sincronizados (
+  id text primary key,
+  user_id text not null,
+  name text not null default '',
+  type text default '',
+  content text default '',
+  metadata jsonb default '{}'::jsonb,
+  created_at text default '',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 5. Tabela de Certidões Fiscais
+create table if not exists public.certidoes_fiscais (
+  id text primary key,
+  user_id text not null,
+  name text not null default '',
+  type text default '',
+  status text default 'Regular',
+  expiration_date text default '',
+  file_url text default '',
+  metadata jsonb default '{}'::jsonb,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 6. Tabela de Concorrentes Auditados
+create table if not exists public.historico_concorrentes (
+  id text primary key,
+  user_id text not null,
+  name text not null default '',
+  cnpj text default '',
+  win_rate numeric default 0,
+  total_bids numeric default 0,
+  notes text default '',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 7. Tabela de Sessões de Chat com IA
+create table if not exists public.sessoes_chat (
+  id text primary key,
+  user_id text not null,
+  title text not null default 'Chat Principal',
+  selected_edital_id text default '',
+  messages jsonb default '[]'::jsonb,
+  created_at text default '',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 8. Tabela de Configurações de IA do Usuário (Chaves de API)
+create table if not exists public.configuracoes_usuario (
+  user_id text primary key,
+  active_provider text not null default 'gemini',
+  gemini_key text default '',
+  gemini_model text default 'gemini-3.7-flash',
+  openai_key text default '',
+  openai_model text default 'gpt-4o',
+  anthropic_key text default '',
+  anthropic_model text default 'claude-3-7-sonnet-20250219',
+  deepseek_key text default '',
+  deepseek_model text default 'deepseek-chat',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 9. Tabela de Dados da Empresa Licitante
+create table if not exists public.dados_empresa (
+  user_id text primary key,
+  razon_social text default '',
+  cnpj text default '',
+  address text default '',
+  phone text default '',
+  email text default '',
+  representative_name text default '',
+  representative_cpf text default '',
+  bank_details text default '',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 10. Tabela de Simulações de Preços
+create table if not exists public.simulacoes_precos (
+  id uuid primary key default uuid_generate_v4(),
+  user_id text not null,
+  title text not null default 'Simulação',
+  date text not null default '',
+  edital_title text default '',
+  item_desc text default '',
+  quantity numeric default 1,
+  custo_produto_unitario numeric default 0,
+  frete_unitario numeric default 0,
+  impostos_percent numeric default 0,
+  margem_lucro_percent numeric default 0,
+  custo_operacional_percent numeric default 0,
+  preco_minimo_unitario numeric default 0,
+  preco_ideal_unitario numeric default 0,
+  preco_estimado_edital_unitario numeric default 0,
+  faturamento_total_ideal numeric default 0,
+  lucro_liquido_total numeric default 0,
+  custos_totais numeric default 0,
+  impostos_totais numeric default 0,
+  outras_despesas_totais numeric default 0,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 11. Tabela de Comparador de Produtos
+create table if not exists public.comparador_produtos (
+  id uuid primary key default uuid_generate_v4(),
+  user_id text not null,
+  edital_id text default '',
+  especificacoes_exigidas text default '',
+  candidatos jsonb default '[]'::jsonb,
+  dados_comparacao jsonb default '{}'::jsonb,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 12. Tabela de Configurações do LanceBot
+create table if not exists public.lancebot_config (
+  user_id text primary key,
+  pregao_id text default '',
+  item_num text default '',
+  valor_inicial numeric default 0,
+  valor_limite_minimo numeric default 0,
+  tipo_decremento text default 'percent',
+  valor_decremento numeric default 0.5,
+  intervalo_ms numeric default 15000,
+  estrategia text default 'conservadora',
+  modo_real boolean default false,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 13. Habilitar RLS e Políticas Permissivas para Aplicação e Usuários
+alter table public.planilhas_disputas enable row level security;
+alter table public.editais_analisados enable row level security;
+alter table public.documentos_sincronizados enable row level security;
+alter table public.certidoes_fiscais enable row level security;
+alter table public.historico_concorrentes enable row level security;
+alter table public.sessoes_chat enable row level security;
+alter table public.configuracoes_usuario enable row level security;
+alter table public.dados_empresa enable row level security;
+alter table public.simulacoes_precos enable row level security;
+alter table public.comparador_produtos enable row level security;
+alter table public.lancebot_config enable row level security;
+
+-- Políticas de Acesso
+drop policy if exists "Permitir tudo planilhas_disputas" on public.planilhas_disputas;
+create policy "Permitir tudo planilhas_disputas" on public.planilhas_disputas for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo editais_analisados" on public.editais_analisados;
+create policy "Permitir tudo editais_analisados" on public.editais_analisados for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo documentos_sincronizados" on public.documentos_sincronizados;
+create policy "Permitir tudo documentos_sincronizados" on public.documentos_sincronizados for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo certidoes_fiscais" on public.certidoes_fiscais;
+create policy "Permitir tudo certidoes_fiscais" on public.certidoes_fiscais for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo historico_concorrentes" on public.historico_concorrentes;
+create policy "Permitir tudo historico_concorrentes" on public.historico_concorrentes for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo sessoes_chat" on public.sessoes_chat;
+create policy "Permitir tudo sessoes_chat" on public.sessoes_chat for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo configuracoes_usuario" on public.configuracoes_usuario;
+create policy "Permitir tudo configuracoes_usuario" on public.configuracoes_usuario for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo dados_empresa" on public.dados_empresa;
+create policy "Permitir tudo dados_empresa" on public.dados_empresa for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo simulacoes_precos" on public.simulacoes_precos;
+create policy "Permitir tudo simulacoes_precos" on public.simulacoes_precos for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo comparador_produtos" on public.comparador_produtos;
+create policy "Permitir tudo comparador_produtos" on public.comparador_produtos for all using (true) with check (true);
+
+drop policy if exists "Permitir tudo lancebot_config" on public.lancebot_config;
+create policy "Permitir tudo lancebot_config" on public.lancebot_config for all using (true) with check (true);
+`;
 }
 
 // SaaS User Sign Up using Supabase Auth
@@ -955,7 +1562,7 @@ export async function signOutWithSupabase(): Promise<void> {
 export async function callSupabaseGeminiEdgeFunction(
   prompt: string, 
   systemInstruction?: string, 
-  model = "gemini-3.6-flash", 
+  model = "gemini-3.7-flash", 
   jsonMode = false
 ): Promise<string> {
   const config = getSupabaseConfig();
@@ -1038,7 +1645,7 @@ export async function saveUserConfigToSupabase(config: {
       user_id: user.id,
       active_provider: config.activeProvider,
       gemini_key: config.geminiKey || "",
-      gemini_model: config.geminiModel || "gemini-3.6-flash",
+      gemini_model: (config.geminiModel === "gemini-3.6-flash" || !config.geminiModel) ? "gemini-3.7-flash" : config.geminiModel,
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",

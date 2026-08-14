@@ -5,6 +5,11 @@ import {
 } from "lucide-react";
 import { EditalAnalysis } from "../types";
 import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
+import { 
+  fetchComparadorProdutosFromSupabase, 
+  saveComparadorProdutoToSupabase, 
+  subscribeToSupabaseTable 
+} from "../utils/supabaseClient";
 
 interface ProductComparatorTabProps {
   activeEdital: EditalAnalysis | null;
@@ -53,8 +58,36 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
   // Error messaging
   const [generalError, setGeneralError] = useState<string>("");
 
-  // Load edital history & set initial active edital
+  // Load edital history & saved comparisons from Supabase
   useEffect(() => {
+    async function loadComparisons() {
+      try {
+        const dbComps = await fetchComparadorProdutosFromSupabase();
+        if (dbComps && dbComps.length > 0) {
+          const latest = dbComps[0];
+          if (latest.dados_comparacao?.results) {
+            setResults(latest.dados_comparacao.results);
+            if (latest.dados_comparacao.results.length > 0) {
+              setExpandedResults({ [latest.dados_comparacao.results[0].originalName]: true });
+            }
+          }
+          if (latest.especificacoes_exigidas && !requiredSpecs) {
+            setRequiredSpecs(latest.especificacoes_exigidas);
+          }
+          if (latest.candidatos && latest.candidatos.length > 0 && candidateModels.length === 0) {
+            setCandidateModels(latest.candidatos);
+          }
+        }
+      } catch (e) {
+        console.warn("Falha ao carregar comparações do Supabase:", e);
+      }
+    }
+    loadComparisons();
+
+    const unsubscribe = subscribeToSupabaseTable("comparador_produtos", () => {
+      loadComparisons();
+    });
+
     const saved = localStorage.getItem("aip_edital_history");
     if (saved) {
       try {
@@ -64,6 +97,10 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
         console.error("Erro ao carregar histórico de editais:", e);
       }
     }
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // Sync with active or selected edital
@@ -140,12 +177,21 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
       }
 
       const body = await response.json();
-      setResults(body.results || []);
+      const resList = body.results || [];
+      setResults(resList);
 
       // Auto expand first result
-      if (body.results && body.results.length > 0) {
-        setExpandedResults({ [body.results[0].originalName]: true });
+      if (resList.length > 0) {
+        setExpandedResults({ [resList[0].originalName]: true });
       }
+
+      // Save to Supabase in real-time
+      saveComparadorProdutoToSupabase({
+        edital_id: selectedEditalId || "manual",
+        especificacoes_exigidas: requiredSpecs,
+        candidatos: candidateModels,
+        dados_comparacao: { results: resList }
+      }).catch(e => console.warn("Erro ao salvar comparador no Supabase:", e));
     } catch (err: any) {
       setGeneralError(err.message || "Erro de rede ou esgotamento na IA. Tente novamente.");
     } finally {

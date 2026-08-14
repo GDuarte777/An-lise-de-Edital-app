@@ -9,6 +9,11 @@ import {
 } from "recharts";
 import { EditalAnalysis } from "../types";
 import confetti from "canvas-confetti";
+import { 
+  fetchLanceBotConfigFromSupabase, 
+  saveLanceBotConfigToSupabase, 
+  subscribeToSupabaseTable 
+} from "../utils/supabaseClient";
 
 interface LanceBotTabProps {
   activeEdital: EditalAnalysis | null;
@@ -55,13 +60,62 @@ export default function LanceBotTab({ activeEdital }: LanceBotTabProps) {
   const [valorDecremento, setValorDecremento] = useState(() => Number(localStorage.getItem("aip_bot_valorDecremento")) || 15.00);
   const [intervaloMs, setIntervaloMs] = useState(15000); // Default to 15 seconds as requested by the user
 
-  // Save form fields to localStorage
-  useEffect(() => { localStorage.setItem("aip_bot_pregaoId", pregaoId); }, [pregaoId]);
-  useEffect(() => { localStorage.setItem("aip_bot_itemNum", itemNum); }, [itemNum]);
-  useEffect(() => { localStorage.setItem("aip_bot_valorInicial", String(valorInicial)); }, [valorInicial]);
-  useEffect(() => { localStorage.setItem("aip_bot_valorLimiteMinimo", String(valorLimiteMinimo)); }, [valorLimiteMinimo]);
-  useEffect(() => { localStorage.setItem("aip_bot_tipoDecremento", tipoDecremento); }, [tipoDecremento]);
-  useEffect(() => { localStorage.setItem("aip_bot_valorDecremento", String(valorDecremento)); }, [valorDecremento]);
+  // Load config from Supabase & subscribe to realtime
+  useEffect(() => {
+    async function loadBotConfig() {
+      try {
+        const config = await fetchLanceBotConfigFromSupabase();
+        if (config) {
+          if (config.pregao_id) setPregaoId(config.pregao_id);
+          if (config.item_num) setItemNum(config.item_num);
+          if (config.valor_inicial) setValorInicial(config.valor_inicial);
+          if (config.valor_limite_minimo) setValorLimiteMinimo(config.valor_limite_minimo);
+          if (config.tipo_decremento) setTipoDecremento(config.tipo_decremento);
+          if (config.valor_decremento) setValorDecremento(config.valor_decremento);
+          if (config.intervalo_ms) setIntervaloMs(config.intervalo_ms);
+          if (config.estrategia) setBiddingStrategy(config.estrategia);
+          if (config.modo_real !== undefined) setIsRealMode(config.modo_real);
+        }
+      } catch (e) {
+        console.warn("Falha ao buscar config do bot do Supabase:", e);
+      }
+    }
+    loadBotConfig();
+
+    const unsubscribe = subscribeToSupabaseTable("lancebot_config", () => {
+      loadBotConfig();
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Save form fields to localStorage & Supabase
+  useEffect(() => { 
+    localStorage.setItem("aip_bot_pregaoId", pregaoId); 
+    saveLanceBotConfigToSupabase({ pregao_id: pregaoId }).catch(() => {});
+  }, [pregaoId]);
+  useEffect(() => { 
+    localStorage.setItem("aip_bot_itemNum", itemNum); 
+    saveLanceBotConfigToSupabase({ item_num: itemNum }).catch(() => {});
+  }, [itemNum]);
+  useEffect(() => { 
+    localStorage.setItem("aip_bot_valorInicial", String(valorInicial)); 
+    saveLanceBotConfigToSupabase({ valor_inicial: valorInicial }).catch(() => {});
+  }, [valorInicial]);
+  useEffect(() => { 
+    localStorage.setItem("aip_bot_valorLimiteMinimo", String(valorLimiteMinimo)); 
+    saveLanceBotConfigToSupabase({ valor_limite_minimo: valorLimiteMinimo }).catch(() => {});
+  }, [valorLimiteMinimo]);
+  useEffect(() => { 
+    localStorage.setItem("aip_bot_tipoDecremento", tipoDecremento); 
+    saveLanceBotConfigToSupabase({ tipo_decremento: tipoDecremento }).catch(() => {});
+  }, [tipoDecremento]);
+  useEffect(() => { 
+    localStorage.setItem("aip_bot_valorDecremento", String(valorDecremento)); 
+    saveLanceBotConfigToSupabase({ valor_decremento: valorDecremento }).catch(() => {});
+  }, [valorDecremento]);
 
   // Active status & Mode configuration
   const [isBotOn, setIsBotOn] = useState(false);

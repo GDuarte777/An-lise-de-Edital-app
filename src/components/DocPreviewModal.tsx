@@ -408,117 +408,117 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 font-sans animate-fade-in select-none">
-      <div id="preview-modal" className="bg-white border border-[#E5E7EB] rounded-2xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden select-text">
+    <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-2 sm:p-4 md:p-6 font-sans animate-fade-in select-none overflow-y-auto">
+      <div id="preview-modal" className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl w-full max-w-5xl h-[92vh] sm:h-[88vh] flex flex-col shadow-2xl overflow-hidden select-text my-auto">
         
         {/* Header */}
-        <div className="bg-white text-[#111827] p-4 flex items-center justify-between border-b border-[#F3F4F6] shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="bg-[#FF5A00]/10 text-[#FF5A00] border border-[#FF5A00]/20 p-2 rounded-lg">
+        <div className="bg-white dark:bg-[#18181B] text-[#111827] dark:text-zinc-100 p-3.5 sm:p-4 flex items-center justify-between border-b border-[#F3F4F6] dark:border-[#27272A] shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0 pr-2">
+            <div className="bg-[#FF5A00]/10 text-[#FF5A00] border border-[#FF5A00]/20 p-2 rounded-xl shrink-0">
               <FileText className="w-5 h-5 animate-pulse" />
             </div>
-            <div>
-              <h3 className="font-semibold text-sm md:text-base leading-snug text-[#111827]">{title}</h3>
-              <p className="text-[10px] text-[#6B7280] font-medium">Minuta sugerida do documento legal</p>
+            <div className="min-w-0">
+              <h3 className="font-bold text-xs sm:text-base leading-snug text-[#111827] dark:text-zinc-100 truncate">{title}</h3>
+              <p className="text-[10px] text-[#6B7280] dark:text-zinc-400 font-medium truncate">Minuta sugerida do documento oficial</p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="text-[#6B7280] hover:text-[#111827] p-1.5 hover:bg-[#F3F4F6] rounded-lg transition-colors cursor-pointer"
+            className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1.5 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Toolbar menu */}
-        <div className="bg-[#F9FAFB] border-b border-[#E5E7EB] p-3 flex flex-wrap items-center justify-between gap-3 shrink-0 text-[#374151] select-none">
-          <div className="flex items-center gap-2">
+        <div className="bg-[#F9FAFB] dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-2 shrink-0 text-[#374151] select-none">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             
             <button
               onClick={() => setIsEditing(!isEditing)}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                 isEditing 
                   ? "bg-[#FF5A00] border-[#FF5A00] text-white shadow-xs" 
-                  : "bg-white border-[#D1D5DB] hover:bg-[#F3F4F6] text-[#374151]"
+                  : "bg-white dark:bg-[#27272A] border-[#D1D5DB] dark:border-[#3F3F46] hover:bg-[#F3F4F6] dark:hover:bg-zinc-700 text-[#374151] dark:text-zinc-200"
               }`}
             >
               {isEditing ? (
                 <>
                   <Eye className="w-3.5 h-3.5" />
-                  Visualizar Impressão
+                  <span>Visualizar</span>
                 </>
               ) : (
                 <>
                   <Code className="w-3.5 h-3.5" />
-                  Editar Código Markdown
+                  <span>Editar Markdown</span>
                 </>
               )}
             </button>
 
             <button
               onClick={handlePrint}
-              className="px-3 py-1.5 bg-white hover:bg-[#F3F4F6] border border-[#D1D5DB] rounded-lg text-xs font-semibold text-[#374151] flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 bg-white dark:bg-[#27272A] hover:bg-[#F3F4F6] dark:hover:bg-zinc-700 border border-[#D1D5DB] dark:border-[#3F3F46] rounded-lg text-xs font-semibold text-[#374151] dark:text-zinc-200 flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              Imprimir / PDF
+              <span>Imprimir / PDF</span>
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             
             {/* Real or Simulated Google Sync */}
             <button
               onClick={handleGoogleDriveSync}
               disabled={isSyncing}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
+              className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
                 syncDone 
-                  ? "bg-emerald-50 border border-emerald-200 text-emerald-800" 
+                  ? "bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300" 
                   : "bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white shadow-xs"
               }`}
             >
               {isSyncing ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  Sincronizando...
+                  <span>Sincronizando...</span>
                 </>
               ) : syncDone ? (
                 <>
                   <CheckCircle className="w-3.5 h-3.5" />
-                  Salvo no Google Drive!
+                  <span>Salvo no Drive!</span>
                 </>
               ) : (
                 <>
                   <Save className="w-3.5 h-3.5" />
-                  Salvar no Google Drive
+                  <span>Google Drive</span>
                 </>
               )}
             </button>
 
             <button
               onClick={handleDownloadHtml}
-              className="px-3 py-1.5 bg-[#FF5A00]/10 hover:bg-[#FF5A00]/20 border border-[#FF5A00]/20 rounded-lg text-xs font-semibold text-[#FF5A00] flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 bg-[#FF5A00]/10 hover:bg-[#FF5A00]/20 border border-[#FF5A00]/20 rounded-lg text-xs font-semibold text-[#FF5A00] flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Baixar proposta formatada como arquivo HTML para abrir e imprimir no navegador"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
-              Baixar HTML (Navegador)
+              <span>HTML</span>
             </button>
 
             <button
               onClick={handleDownload}
-              className="px-3 py-1.5 bg-white hover:bg-[#F3F4F6] border border-[#D1D5DB] rounded-lg text-xs font-medium text-[#374151] flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 bg-white dark:bg-[#27272A] hover:bg-[#F3F4F6] dark:hover:bg-zinc-700 border border-[#D1D5DB] dark:border-[#3F3F46] rounded-lg text-xs font-medium text-[#374151] dark:text-zinc-200 flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Baixar código fonte em Markdown"
             >
               <HardDriveDownload className="w-3.5 h-3.5" />
-              Baixar .md (Markdown)
+              <span>.md</span>
             </button>
           </div>
         </div>
 
         {/* Content Viewer pane */}
-        <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-[#F3F4F6]">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8 bg-[#F3F4F6] dark:bg-[#09090B]">
           <div 
-            className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-8 md:p-14 shadow-xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
+            className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-4 sm:p-8 md:p-14 shadow-xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
             style={{ backgroundColor: "#ffffff", color: "#0f172a" }}
           >
             {isEditing ? (

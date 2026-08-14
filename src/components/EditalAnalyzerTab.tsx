@@ -16,7 +16,10 @@ import {
   callSupabaseGeminiEdgeFunction,
   fetchEditaisFromSupabase,
   saveEditalToSupabase,
-  deleteEditalFromSupabase
+  deleteEditalFromSupabase,
+  subscribeToSupabaseTable,
+  saveDisputaToSupabase,
+  generateUUID
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer } from "../utils/aiClientHelper";
@@ -803,7 +806,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   // Sub-tabs for edital analysis view
   const [analysisActiveTab, setAnalysisActiveTab] = useState<"report" | "struc" | "checklist">("report");
 
-  // Histórico de Editais (Supabase com fallback Local)
+  // Histórico de Editais (Supabase com fallback Local e Realtime)
   const [history, setHistory] = useState<any[]>([]);
   const [showConfirmClearHistory, setShowConfirmClearHistory] = useState(false);
 
@@ -832,6 +835,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     }
     loadHistory();
 
+    // Subscribe to real-time events on editais_analisados
+    const unsubscribe = subscribeToSupabaseTable("editais_analisados", () => {
+      loadHistory();
+    });
+
     const handleExternalText = () => {
       const extText = localStorage.getItem("aip_auto_analyze_text");
       if (extText) {
@@ -847,12 +855,16 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     };
 
+    const handleWindowFocus = () => loadHistory();
+    window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("aip_trigger_external_text", handleExternalText);
     
     // Check on mount as well
     handleExternalText();
 
     return () => {
+      unsubscribe();
+      window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("aip_trigger_external_text", handleExternalText);
     };
   }, []);
@@ -1016,6 +1028,36 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
         saveEditalToSupabase(newHistoryItem).catch((e) => console.warn("Erro ao salvar edital no Supabase:", e));
 
+        // Auto-save to planilhas_disputas in Supabase in real-time
+        try {
+          const iden: any = analysisResult.identificacaoCertame || {};
+          const fin: any = analysisResult.viabilidadeFinanceira || {};
+          const rawVal = fin.valorEstimado || fin.valorEstimadoTotal || 0;
+          const numVal = typeof rawVal === "number" ? rawVal : (parseFloat(String(rawVal).replace(/[^0-9,.]/g, "").replace(",", ".")) || 0);
+          const disputaRow = {
+            id: generateUUID(),
+            orgao: iden.orgaoComprador || (analysisResult.descricaoProduto ? analysisResult.descricaoProduto.slice(0, 50) : "Órgão do Edital"),
+            uasgUndCompradora: iden.codigoUASG || iden.identificacaoNumerica || "UASG 000000",
+            numeroLicitacao: iden.numeroLicitacao || iden.identificacaoNumerica || "PE 2026",
+            portal: iden.portalEletronico || "Compras.gov.br",
+            produtoItem: analysisResult.descricaoProduto || "Objeto da Licitação",
+            quantidade: analysisResult.itensEdital?.[0]?.quantidade || 1,
+            unidadeMedida: analysisResult.itensEdital?.[0]?.unidade || "Unidade",
+            valorEstimadoItem: numVal,
+            nossoValorAlvo: numVal > 0 ? Number((numVal * 0.90).toFixed(2)) : 0,
+            valorMinimoPiso: numVal > 0 ? Number((numVal * 0.82).toFixed(2)) : 0,
+            dataHoraDisputa: iden.dataHoraSessao || new Date().toLocaleDateString("pt-BR") + " 09:00",
+            status: "Agendada" as const,
+            observacoes: `Gerado automaticamente da análise do edital.`,
+            linkPNCP: iden.linkPNCP || ""
+          };
+          saveDisputaToSupabase(disputaRow).then(() => {
+            window.dispatchEvent(new Event("aip_sync_disputas"));
+          }).catch(() => {});
+        } catch (e) {
+          console.warn("Could not auto-add disputa row:", e);
+        }
+
         setHistory(prev => {
           const updated = [newHistoryItem, ...prev];
           localStorage.setItem("aip_edital_history", JSON.stringify(updated));
@@ -1027,6 +1069,13 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
         // Auto-sync log results dynamically to Google Sheets/Drive simulation!
         syncAnalysisToGoogleSheets(`Análise Edital - ${analysisResult.descricaoProduto.slice(0, 30)}`, analysisResult);
+
+        setTimeout(() => {
+          const section = document.getElementById("analysis-results-section");
+          if (section) {
+            section.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }, 150);
       } else {
         alert("Não foi possível processar a análise com formato estruturado.");
       }
@@ -2386,30 +2435,30 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
       {/* PROPOSAL BUILDER MODAL */}
       {showProposalModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white border border-[#E5E7EB] rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 dark:bg-black/80 backdrop-blur-sm overflow-y-auto animate-fade-in">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl w-full max-w-4xl max-h-[92vh] sm:max-h-[88vh] overflow-hidden shadow-2xl flex flex-col my-auto">
             
             {/* Modal Header */}
-            <div className="p-5 border-b border-[#E5E7EB] flex items-center justify-between bg-[#F9FAFB] shrink-0">
-              <div className="flex items-center gap-2.5">
-                <div className="bg-[#FFF0E5] text-[#FF5A00] p-2 rounded-lg border border-[#FFD6C2]">
+            <div className="p-4 sm:p-5 border-b border-[#E5E7EB] dark:border-[#27272A] flex items-center justify-between bg-[#F9FAFB] dark:bg-[#18181B] shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                <div className="bg-[#FFF0E5] dark:bg-[#2A170A] text-[#FF5A00] p-2 rounded-xl border border-[#FFD6C2] dark:border-[#4A2410] shrink-0">
                   <Edit3 className="w-5 h-5" />
                 </div>
-                <div>
-                  <h3 className="font-bold text-[#111827] text-base">Configurar Valores e Dados da Proposta</h3>
-                  <p className="text-[#6B7280] text-xs">Preencha os valores solicitados pelo edital. O modelo PDF se adaptará automaticamente.</p>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-[#111827] dark:text-zinc-100 text-sm sm:text-base truncate">Configurar Valores e Dados da Proposta</h3>
+                  <p className="text-[#6B7280] dark:text-zinc-400 text-[11px] sm:text-xs truncate">Preencha os valores solicitados pelo edital. O modelo PDF se adaptará automaticamente.</p>
                 </div>
               </div>
               <button 
                 onClick={() => setShowProposalModal(false)}
-                className="text-[#6B7280] hover:text-[#111827] p-1 rounded-lg transition-colors bg-white border border-[#E5E7EB] cursor-pointer"
+                className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1.5 rounded-lg transition-colors bg-white dark:bg-zinc-800 border border-[#E5E7EB] dark:border-zinc-700 cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-6 overflow-y-auto flex-1 font-sans text-xs">
+            <div className="p-4 sm:p-6 space-y-5 sm:space-y-6 overflow-y-auto flex-1 font-sans text-xs">
               
               {/* File Title and Header Info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2649,28 +2698,28 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             </div>
 
             {/* Modal Footer */}
-            <div className="p-5 border-t border-[#E5E7EB] flex items-center justify-end gap-3 bg-[#F9FAFB] shrink-0">
+            <div className="p-3.5 sm:p-5 border-t border-[#E5E7EB] dark:border-[#27272A] flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 bg-[#F9FAFB] dark:bg-[#18181B] shrink-0">
               <button
                 type="button"
                 onClick={() => setShowProposalModal(false)}
-                className="px-4 py-2 border border-[#D1D5DB] text-[#374151] rounded-lg font-semibold hover:bg-white hover:text-[#111827] transition-all cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2 border border-[#D1D5DB] dark:border-[#27272A] text-[#374151] dark:text-zinc-300 rounded-xl font-semibold hover:bg-white dark:hover:bg-zinc-800 hover:text-[#111827] dark:hover:text-white transition-all cursor-pointer text-xs text-center"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={handleGenerateProposal}
-                className="px-6 py-2 bg-[#FF5A00] hover:bg-[#E65000] text-white rounded-lg font-semibold shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                className="w-full sm:w-auto px-6 py-2.5 bg-[#FF5A00] hover:bg-[#E65000] text-white rounded-xl font-semibold shadow-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer text-xs text-center"
               >
                 {generatingDoc === "proposal" ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Gerando Proposta...
+                    <span>Gerando Proposta...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4 text-[#FFD6C2]" />
-                    Gerar Proposta Oficial PDF
+                    <span>Gerar Proposta Oficial PDF</span>
                   </>
                 )}
               </button>
@@ -2682,30 +2731,30 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
       {/* Modal Popup de Alerta de Tamanho de Arquivo Excedido (> 60MB) */}
       {fileSizeErrorModal && fileSizeErrorModal.show && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white border border-rose-200 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5 overflow-hidden text-left">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 dark:bg-black/80 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <div className="bg-white dark:bg-[#18181B] border border-rose-200 dark:border-rose-900/50 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl relative space-y-4 sm:space-y-5 overflow-hidden text-left my-auto">
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-rose-500" />
             
             <div className="flex items-start gap-3.5">
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-600 shrink-0">
-                <AlertTriangle className="w-7 h-7" />
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 rounded-xl text-rose-600 dark:text-rose-400 shrink-0">
+                <AlertTriangle className="w-6 h-6 sm:w-7 sm:h-7" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-lg font-bold text-[#111827] leading-tight">
+                <h3 className="text-base sm:text-lg font-bold text-[#111827] dark:text-zinc-100 leading-tight">
                   Arquivo Maior que 60 MB
                 </h3>
-                <p className="text-xs text-rose-600 font-medium">
+                <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">
                   Tamanho limite por anexo: <span className="underline font-bold">60 MB</span>
                 </p>
               </div>
             </div>
 
-            <div className="bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl p-4 text-xs space-y-3 text-[#374151]">
+            <div className="bg-[#F9FAFB] dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-xl p-3.5 sm:p-4 text-xs space-y-3 text-[#374151] dark:text-zinc-300">
               <p className="leading-relaxed">
-                O arquivo <strong className="text-[#111827]">"{fileSizeErrorModal.fileName}"</strong> possui <strong className="text-rose-600 font-semibold">{fileSizeErrorModal.fileSizeMb} MB</strong> e excede o limite máximo permitido.
+                O arquivo <strong className="text-[#111827] dark:text-white">"{fileSizeErrorModal.fileName}"</strong> possui <strong className="text-rose-600 font-semibold">{fileSizeErrorModal.fileSizeMb} MB</strong> e excede o limite máximo permitido.
               </p>
-              <div className="space-y-1.5 text-[#6B7280] border-t border-[#E5E7EB] pt-2.5">
-                <p className="font-semibold text-[#111827]">💡 Como proceder:</p>
+              <div className="space-y-1.5 text-[#6B7280] dark:text-zinc-400 border-t border-[#E5E7EB] dark:border-[#27272A] pt-2.5">
+                <p className="font-semibold text-[#111827] dark:text-zinc-200">💡 Como proceder:</p>
                 <ul className="list-disc list-inside space-y-1 pl-1 text-[11px]">
                   <li>Comprima ou divida o PDF em arquivos menores (&lt; 60 MB);</li>
                   <li>Ou copie o texto do edital e cole no campo de texto livre ao lado.</li>
@@ -2717,10 +2766,10 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               <button
                 type="button"
                 onClick={() => setFileSizeErrorModal(null)}
-                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-semibold shadow-xs transition-all flex items-center gap-2 cursor-pointer text-xs"
+                className="w-full sm:w-auto px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-semibold shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer text-xs"
               >
                 <Check className="w-4 h-4" />
-                Entendido
+                <span>Entendido</span>
               </button>
             </div>
           </div>

@@ -2,7 +2,7 @@ import { initializeApp, getApps } from "firebase/app";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from "firebase/auth";
 import firebaseConfig from "../../firebase-applet-config.json";
 import { SyncItem } from "../types";
-import { syncDocumentToSupabase } from "./supabaseClient";
+import { syncDocumentToSupabase, deleteDocumentFromSupabase } from "./supabaseClient";
 
 // Initialize Firebase only if not already initialized
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
@@ -133,6 +133,14 @@ export function addSyncedItem(name: string, type: "document" | "sheet" | "propos
   });
 
   return newItem;
+}
+
+export async function deleteSyncedItem(id: string): Promise<boolean> {
+  const items = getSyncedItems();
+  const updated = items.filter(item => item.id !== id);
+  saveSyncedItems(updated);
+  window.dispatchEvent(new CustomEvent("gdrive-sync-updated"));
+  return await deleteDocumentFromSupabase(id);
 }
 
 /**

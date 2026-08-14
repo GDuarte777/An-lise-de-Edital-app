@@ -59,6 +59,11 @@ import {
 import { CompanyData, EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
 import { apiFetch } from "../utils/aiClientHelper";
+import { 
+  syncDocumentToSupabase, 
+  fetchDocumentosFromSupabase, 
+  subscribeToSupabaseTable 
+} from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 
 interface CreateDocTabProps {
@@ -522,14 +527,38 @@ export default function CreateDocTab({
 
   // Load saved drafts and analyzed editais on mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("aip_created_docs_drafts");
-      if (saved) {
-        setDraftsList(JSON.parse(saved));
+    async function loadDraftsFromSupabase() {
+      try {
+        const dbDocs = await fetchDocumentosFromSupabase();
+        if (dbDocs && dbDocs.length > 0) {
+          const formatted = dbDocs.map((d: any) => ({
+            id: d.id,
+            title: d.title || d.nome_documento || "Documento",
+            date: d.created_at ? new Date(d.created_at).toLocaleString("pt-BR") : new Date().toLocaleString("pt-BR"),
+            content: d.content || d.conteudo_markdown || ""
+          }));
+          setDraftsList(formatted);
+          localStorage.setItem("aip_created_docs_drafts", JSON.stringify(formatted));
+          return;
+        }
+      } catch (e) {
+        console.warn("Falha ao buscar documentos do Supabase:", e);
       }
-    } catch {
-      // ignore
+
+      try {
+        const saved = localStorage.getItem("aip_created_docs_drafts");
+        if (saved) {
+          setDraftsList(JSON.parse(saved));
+        }
+      } catch {
+        // ignore
+      }
     }
+    loadDraftsFromSupabase();
+
+    const unsubscribe = subscribeToSupabaseTable("documentos_sincronizados", () => {
+      loadDraftsFromSupabase();
+    });
 
     try {
       const list: EditalAnalysis[] = [];
@@ -568,6 +597,10 @@ export default function CreateDocTab({
         setEditalSourceMode("new");
       }
     }
+
+    return () => {
+      unsubscribe();
+    };
   }, [activeEdital]);
 
   // Handle uploading file for a new edital
@@ -597,6 +630,12 @@ export default function CreateDocTab({
     const updated = [newDraft, ...draftsList.filter(d => d.title !== docTitle)].slice(0, 30);
     setDraftsList(updated);
     localStorage.setItem("aip_created_docs_drafts", JSON.stringify(updated));
+
+    syncDocumentToSupabase(
+      docTitle || "Documento Sem Título",
+      selectedTemplate.category === "propostas" ? "proposal" : "declaration",
+      documentContent
+    ).catch(e => console.warn("Erro ao salvar rascunho no Supabase:", e));
 
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 2000);
@@ -1030,20 +1069,22 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 
       {/* TEMPLATE SWITCHER MODAL / POPUP */}
       {showTemplateModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white border border-[#E5E7EB] rounded-2xl max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 animate-fade-in overflow-y-auto">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-3xl w-full max-h-[92vh] sm:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden my-auto">
             {/* Modal Header */}
-            <div className="p-4 border-b border-[#F3F4F6] flex items-center justify-between bg-white">
-              <div className="flex items-center gap-2">
-                <Layers className="w-5 h-5 text-[#FF5A00]" />
-                <div>
-                  <h3 className="font-bold text-[#111827] text-sm">Selecione o Modelo de Documento</h3>
-                  <p className="text-[#6B7280] text-xs">Escolha o modelo base para carregar no papel timbrado</p>
+            <div className="p-3.5 sm:p-4 border-b border-[#F3F4F6] dark:border-[#27272A] flex items-center justify-between bg-white dark:bg-[#18181B] shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                <div className="bg-[#FFF0E5] dark:bg-[#2A170A] p-2 rounded-xl border border-[#FFD6C2] dark:border-[#4A2410] shrink-0">
+                  <Layers className="w-5 h-5 text-[#FF5A00]" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-[#111827] dark:text-zinc-100 text-sm sm:text-base truncate">Selecione o Modelo de Documento</h3>
+                  <p className="text-[#6B7280] dark:text-zinc-400 text-[11px] sm:text-xs truncate">Escolha o modelo base para carregar no papel timbrado</p>
                 </div>
               </div>
               <button
                 onClick={() => setShowTemplateModal(false)}
-                className="p-1.5 text-[#6B7280] hover:text-[#111827] hover:bg-[#F3F4F6] rounded-lg transition-colors cursor-pointer"
+                className="p-1.5 text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1457,52 +1498,52 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 
       {/* FULLSCREEN GOOGLE DOCS CANVAS MODAL */}
       {isFullscreenDocs && (
-        <div className="fixed inset-0 z-50 bg-[#F3F4F6] flex flex-col animate-fade-in overflow-hidden">
+        <div className="fixed inset-0 z-[9999] bg-[#F3F4F6] dark:bg-[#121212] flex flex-col animate-fade-in overflow-hidden">
           
           {/* Top Bar */}
-          <div className="bg-white border-b border-[#E5E7EB] px-6 py-3 flex items-center justify-between shrink-0 shadow-2xs">
-            <div className="flex items-center gap-3">
-              <div className="bg-[#FF5A00] p-2 rounded-lg text-white">
+          <div className="bg-white dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] px-4 sm:px-6 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-2xs">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="bg-[#FF5A00] p-2 rounded-xl text-white shrink-0">
                 <FileEdit className="w-5 h-5" />
               </div>
-              <div>
+              <div className="min-w-0">
                 <input
                   type="text"
                   value={docTitle}
                   onChange={(e) => setDocTitle(e.target.value)}
-                  className="bg-transparent text-[#111827] font-bold text-base focus:outline-none focus:border-b-2 focus:border-[#FF5A00]"
+                  className="bg-transparent text-[#111827] dark:text-zinc-100 font-bold text-sm sm:text-base focus:outline-none focus:border-b-2 focus:border-[#FF5A00] truncate max-w-xs sm:max-w-md"
                 />
-                <p className="text-[#6B7280] text-[10px]">Modo Edição Página Inteira (Estúdio Google Docs)</p>
+                <p className="text-[#6B7280] dark:text-zinc-400 text-[10px] truncate">Modo Edição Página Inteira (Estúdio Google Docs)</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 onClick={handleDownloadPdf}
-                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                className="px-2.5 sm:px-3 py-1.5 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
               >
-                <Printer className="w-4 h-4 text-rose-600" />
+                <Printer className="w-4 h-4 text-rose-600 dark:text-rose-400" />
                 <span>PDF</span>
               </button>
 
               <button
                 onClick={handleDownloadWord}
-                className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                className="px-2.5 sm:px-3 py-1.5 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
               >
-                <FileText className="w-4 h-4 text-blue-600" />
+                <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                 <span>Word</span>
               </button>
 
               <button
                 onClick={handleSaveDraft}
-                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+                className="px-3 sm:px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
               >
                 Salvar
               </button>
 
               <button
                 onClick={() => setIsFullscreenDocs(false)}
-                className="p-2 text-[#6B7280] hover:text-[#111827] bg-[#F3F4F6] hover:bg-[#E5E7EB] rounded-xl transition-colors cursor-pointer"
+                className="p-1.5 sm:p-2 text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white bg-[#F3F4F6] dark:bg-zinc-800 hover:bg-[#E5E7EB] dark:hover:bg-zinc-700 rounded-xl transition-colors cursor-pointer"
                 title="Sair da Tela Cheia"
               >
                 <Minimize2 className="w-5 h-5" />
@@ -1511,48 +1552,48 @@ REGRAS RÍGIDAS DE GERAÇÃO:
           </div>
 
           {/* Toolbar */}
-          <div className="bg-[#F9FAFB] border-b border-[#E5E7EB] px-6 py-2 flex items-center gap-3 text-xs shrink-0 overflow-x-auto text-[#374151]">
-            <button onClick={() => handleInsertVariable("**Texto**")} className="p-1.5 hover:bg-[#E5E7EB] rounded font-bold text-[#111827]">
+          <div className="bg-[#F9FAFB] dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] px-4 sm:px-6 py-2 flex items-center gap-2 sm:gap-3 text-xs shrink-0 overflow-x-auto text-[#374151] dark:text-zinc-300">
+            <button onClick={() => handleInsertVariable("**Texto**")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded font-bold text-[#111827] dark:text-white">
               <Bold className="w-4 h-4" />
             </button>
-            <button onClick={() => handleInsertVariable("*Texto*")} className="p-1.5 hover:bg-[#E5E7EB] rounded italic text-[#111827]">
+            <button onClick={() => handleInsertVariable("*Texto*")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded italic text-[#111827] dark:text-white">
               <Italic className="w-4 h-4" />
             </button>
-            <div className="w-px h-4 bg-[#E5E7EB]"></div>
-            <button onClick={() => handleInsertVariable("\n# Título\n")} className="p-1.5 hover:bg-[#E5E7EB] rounded text-[#111827]">
+            <div className="w-px h-4 bg-[#E5E7EB] dark:bg-[#27272A]"></div>
+            <button onClick={() => handleInsertVariable("\n# Título\n")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded text-[#111827] dark:text-white">
               <Heading1 className="w-4 h-4" />
             </button>
-            <button onClick={() => handleInsertVariable("\n## Subtítulo\n")} className="p-1.5 hover:bg-[#E5E7EB] rounded text-[#111827]">
+            <button onClick={() => handleInsertVariable("\n## Subtítulo\n")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded text-[#111827] dark:text-white">
               <Heading2 className="w-4 h-4" />
             </button>
-            <div className="w-px h-4 bg-[#E5E7EB]"></div>
-            <button onClick={handleInsertTable} className="p-1.5 hover:bg-[#E5E7EB] rounded text-[#111827]">
+            <div className="w-px h-4 bg-[#E5E7EB] dark:bg-[#27272A]"></div>
+            <button onClick={handleInsertTable} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded text-[#111827] dark:text-white">
               <Table className="w-4 h-4" />
             </button>
           </div>
 
           {/* Fullscreen A4 Paper View */}
-          <div className="flex-1 bg-[#E5E7EB] overflow-y-auto p-8 flex justify-center">
+          <div className="flex-1 bg-[#E5E7EB] dark:bg-[#09090B] overflow-y-auto p-3 sm:p-6 md:p-8 flex justify-center">
             <div 
-              className="official-a4-paper bg-white text-slate-900 shadow-2xl rounded-sm w-full max-w-[210mm] min-h-[297mm] p-12 md:p-16 font-sans relative border border-slate-200 flex flex-col justify-between"
+              className="official-a4-paper bg-white text-slate-900 shadow-2xl rounded-sm w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-12 md:p-16 font-sans relative border border-slate-200 flex flex-col justify-between"
               style={{ backgroundColor: "#ffffff", color: "#0f172a" }}
             >
               
               {/* Header */}
-              <div className="border-b-2 border-[#FF5A00] pb-4 mb-6 flex items-center justify-between gap-4">
+              <div className="border-b-2 border-[#FF5A00] pb-4 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
                 <div className="flex items-center gap-3">
                   <div className="bg-[#FF5A00] text-white p-2.5 rounded-xl">
                     <Building2 className="w-6 h-6" />
                   </div>
                   <div>
-                    <h2 className="font-extrabold text-[#111827] text-base uppercase">
+                    <h2 className="font-extrabold text-[#111827] text-sm sm:text-base uppercase">
                       {companyData.razonSocial || "SUA EMPRESA LTDA"}
                     </h2>
                     <p className="text-[#FF5A00] font-bold text-xs">CNPJ: {companyData.cnpj || "00.000.000/0001-00"}</p>
                   </div>
                 </div>
 
-                <div className="text-right text-[10px] text-slate-500 font-medium">
+                <div className="text-left sm:text-right text-[10px] text-slate-500 font-medium">
                   <p>{companyData.address || "Endereço da Empresa"}</p>
                   <p>Tel: {companyData.phone || "(11) 99999-0000"} | E-mail: {companyData.email || "contato@empresa.com.br"}</p>
                 </div>
@@ -1577,30 +1618,30 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 
       {/* SAVED DRAFTS MODAL */}
       {showDraftsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-white border border-[#E5E7EB] rounded-2xl w-full max-w-xl p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-3">
-              <h3 className="font-bold text-[#111827] text-base">Rascunhos Salvos</h3>
-              <button onClick={() => setShowDraftsModal(false)} className="text-[#6B7280] hover:text-[#111827] p-1 hover:bg-[#F3F4F6] rounded-lg transition-colors">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 dark:bg-black/80 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl w-full max-w-xl p-4 sm:p-6 space-y-4 shadow-2xl my-auto">
+            <div className="flex items-center justify-between border-b border-[#F3F4F6] dark:border-[#27272A] pb-3">
+              <h3 className="font-bold text-[#111827] dark:text-zinc-100 text-sm sm:text-base">Rascunhos Salvos</h3>
+              <button onClick={() => setShowDraftsModal(false)} className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {draftsList.length === 0 ? (
-              <p className="text-[#6B7280] text-xs text-center py-8">Nenhum rascunho salvo ainda.</p>
+              <p className="text-[#6B7280] dark:text-zinc-400 text-xs text-center py-8">Nenhum rascunho salvo ainda.</p>
             ) : (
               <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                 {draftsList.map(draft => (
                   <div
                     key={draft.id}
-                    className="p-3 bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl flex items-center justify-between gap-3 hover:bg-[#F3F4F6] transition-colors"
+                    className="p-3 bg-[#F9FAFB] dark:bg-[#18181B] border border-[#E5E7EB] dark:border-[#27272A] rounded-xl flex items-center justify-between gap-3 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800/80 transition-colors"
                   >
-                    <div>
-                      <h4 className="font-bold text-[#111827] text-xs">{draft.title}</h4>
-                      <p className="text-[10px] text-[#6B7280]">{draft.date}</p>
+                    <div className="min-w-0">
+                      <h4 className="font-bold text-[#111827] dark:text-zinc-100 text-xs truncate">{draft.title}</h4>
+                      <p className="text-[10px] text-[#6B7280] dark:text-zinc-400">{draft.date}</p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
                         onClick={() => {
                           setDocTitle(draft.title);
@@ -1618,7 +1659,7 @@ REGRAS RÍGIDAS DE GERAÇÃO:
                           setDraftsList(updated);
                           localStorage.setItem("aip_created_docs_drafts", JSON.stringify(updated));
                         }}
-                        className="p-1 text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
+                        className="p-1 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { 
   fetchCompetitorsFromSupabase,
   saveCompetitorToSupabase,
-  deleteCompetitorFromSupabase
+  deleteCompetitorFromSupabase,
+  subscribeToSupabaseTable
 } from "../utils/supabaseClient";
 import { 
   FileText, CheckCircle, AlertTriangle, Trash2, Loader2, Play, Sparkles, 
@@ -95,6 +96,18 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
       }
     }
     loadCompetitorHistory();
+
+    const unsubscribe = subscribeToSupabaseTable("historico_concorrentes", () => {
+      loadCompetitorHistory();
+    });
+
+    const handleFocus = () => loadCompetitorHistory();
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener("focus", handleFocus);
+    };
   }, []);
 
   // Initialize correct source based on editalHistory availability

@@ -201,7 +201,7 @@ export default function App() {
         await saveUserConfigToSupabase({
           activeProvider: newProvider,
           geminiKey: currentConfig?.gemini_key || localStorage.getItem("ai_gemini_key") || "",
-          geminiModel: currentConfig?.gemini_model || localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash",
+          geminiModel: (currentConfig?.gemini_model === "gemini-3.6-flash" ? "gemini-3.7-flash" : currentConfig?.gemini_model) || (localStorage.getItem("ai_gemini_model") === "gemini-3.6-flash" ? "gemini-3.7-flash" : localStorage.getItem("ai_gemini_model")) || "gemini-3.7-flash",
           openaiKey: currentConfig?.openai_key || localStorage.getItem("ai_openai_key") || "",
           openaiModel: currentConfig?.openai_model || localStorage.getItem("ai_openai_model") || "gpt-4o",
           anthropicKey: currentConfig?.anthropic_key || localStorage.getItem("ai_anthropic_key") || "",
@@ -918,18 +918,18 @@ export default function App() {
 
       {/* Supabase SaaS Authentication & Account Switcher Modal */}
       {supabaseModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-fade-in">
-          <div className="w-full max-w-md bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xl relative">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 dark:bg-black/80 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <div className="w-full max-w-md bg-white dark:bg-[#121212] border border-gray-200 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-2xl relative my-auto max-h-[92vh] sm:max-h-[88vh] flex flex-col">
             
             {/* Header */}
-            <div className="p-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-[#FFF0E5] text-[#FF5A00] rounded-lg border border-[#FF5A00]/20">
+            <div className="p-4 sm:p-5 border-b border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-[#18181B] flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                <div className="p-2 bg-[#FFF0E5] dark:bg-[#2A170A] text-[#FF5A00] rounded-xl border border-[#FF5A00]/20 shrink-0">
                   <Users className="w-4 h-4" />
                 </div>
-                <div>
-                  <h3 className="font-bold text-[#1C1C1E] text-sm">Portal de Clientes SaaS</h3>
-                  <p className="text-[10px] text-[#595959] font-medium">Supabase Auth Multi-tenant</p>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-[#1C1C1E] dark:text-zinc-100 text-sm truncate">Portal de Clientes SaaS</h3>
+                  <p className="text-[10px] text-[#595959] dark:text-zinc-400 font-medium truncate">Supabase Auth Multi-tenant</p>
                 </div>
               </div>
               <button
@@ -937,24 +937,24 @@ export default function App() {
                   setSupabaseModalOpen(false);
                   setAuthMessage(null);
                 }}
-                className="p-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-[#595959] hover:text-[#1C1C1E] transition-colors cursor-pointer"
+                className="p-1.5 rounded-lg bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 text-[#595959] dark:text-zinc-400 hover:text-[#1C1C1E] dark:hover:text-white transition-colors cursor-pointer shrink-0"
               >
-                <X className="w-4.5 h-4.5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Body */}
-            <div className="p-6 space-y-5">
+            <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
               
               {!supabaseConnected ? (
                 // Supabase not configured warning
                 <div className="space-y-4 text-center py-4">
-                  <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto border border-amber-200">
+                  <div className="w-12 h-12 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center mx-auto border border-amber-200 dark:border-amber-800">
                     <CloudLightning className="w-6 h-6 animate-pulse" />
                   </div>
                   <div className="space-y-2">
-                    <h4 className="font-bold text-[#1C1C1E] text-sm">Credenciais não configuradas</h4>
-                    <p className="text-[#595959] text-xs leading-relaxed max-w-sm mx-auto">
+                    <h4 className="font-bold text-[#1C1C1E] dark:text-zinc-100 text-sm">Credenciais não configuradas</h4>
+                    <p className="text-[#595959] dark:text-zinc-400 text-xs leading-relaxed max-w-sm mx-auto">
                       Para usar a Autenticação SaaS real e isolar dados de múltiplos usuários, configure sua <strong>URL</strong> e <strong>Anon Key</strong> do Supabase primeiro.
                     </p>
                   </div>
@@ -963,32 +963,32 @@ export default function App() {
                       setSupabaseModalOpen(false);
                       setActiveTab("aiConfig");
                     }}
-                    className="px-4 py-2 bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold rounded-lg text-xs transition-colors cursor-pointer shadow-sm"
+                    className="px-4 py-2 bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-sm"
                   >
                     Configurar Provedores de IA
                   </button>
                 </div>
               ) : supabaseUser ? (
                 // Active User Session panel
-                <div className="space-y-5">
-                  <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl space-y-3">
+                <div className="space-y-4 sm:space-y-5">
+                  <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 p-3.5 sm:p-4 rounded-xl space-y-3">
                     <div className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="font-bold text-emerald-800 text-xs">Sessão Ativa no Supabase</span>
+                      <span className="font-bold text-emerald-800 dark:text-emerald-300 text-xs">Sessão Ativa no Supabase</span>
                     </div>
                     
-                    <div className="space-y-1.5 font-mono text-[11px] text-[#1C1C1E]">
-                      <div className="flex justify-between border-b border-emerald-200/60 pb-1 text-[#595959]">
+                    <div className="space-y-1.5 font-mono text-[11px] text-[#1C1C1E] dark:text-zinc-200">
+                      <div className="flex justify-between border-b border-emerald-200/60 dark:border-emerald-800/40 pb-1 text-[#595959] dark:text-zinc-400">
                         <span>Usuário</span>
-                        <span className="font-bold text-[#1C1C1E]">{supabaseUser.email}</span>
+                        <span className="font-bold text-[#1C1C1E] dark:text-zinc-100 truncate max-w-[200px]">{supabaseUser.email}</span>
                       </div>
-                      <div className="flex justify-between border-b border-emerald-200/60 pb-1 text-[#595959]">
+                      <div className="flex justify-between border-b border-emerald-200/60 dark:border-emerald-800/40 pb-1 text-[#595959] dark:text-zinc-400">
                         <span>UUID</span>
-                        <span className="font-bold text-[#595959] truncate max-w-[180px]" title={supabaseUser.id}>
+                        <span className="font-bold text-[#595959] dark:text-zinc-400 truncate max-w-[180px]" title={supabaseUser.id}>
                           {supabaseUser.id}
                         </span>
                       </div>
-                      <div className="flex justify-between text-[#595959]">
+                      <div className="flex justify-between text-[#595959] dark:text-zinc-400">
                         <span>Plano Escolhido</span>
                         <span className="font-bold text-[#FF5A00]">{saasPlan}</span>
                       </div>
@@ -997,7 +997,7 @@ export default function App() {
 
                   {/* Plan Switcher */}
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-[#595959] uppercase tracking-wider block">Escolha o Plano SaaS da Conta</label>
+                    <label className="text-[10px] font-bold text-[#595959] dark:text-zinc-400 uppercase tracking-wider block">Escolha o Plano SaaS da Conta</label>
                     <div className="grid grid-cols-3 gap-2">
                       {["Free", "Pro", "Enterprise"].map((plan) => {
                         const isActive = saasPlan === plan;
@@ -1005,10 +1005,10 @@ export default function App() {
                           <button
                             key={plan}
                             onClick={() => handleChangePlan(plan)}
-                            className={`py-2 px-1.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
+                            className={`py-2 px-1.5 rounded-xl text-[10px] font-bold border transition-all cursor-pointer ${
                               isActive 
-                                ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00]" 
-                                : "bg-white border-gray-200 text-[#595959] hover:text-[#1C1C1E] hover:bg-gray-50"
+                                ? "bg-[#FFF0E5] dark:bg-[#2A170A] border-[#FF5A00] text-[#FF5A00]" 
+                                : "bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-700 text-[#595959] dark:text-zinc-400 hover:text-[#1C1C1E] dark:hover:text-white hover:bg-gray-50 dark:hover:bg-zinc-700/80"
                             }`}
                           >
                             {plan === "Free" ? "Gratuito" : plan === "Pro" ? "SaaS Pro" : "Enterprise"}
@@ -1016,15 +1016,15 @@ export default function App() {
                         );
                       })}
                     </div>
-                    <p className="text-[10px] text-[#595959] leading-normal">
+                    <p className="text-[10px] text-[#595959] dark:text-zinc-400 leading-normal">
                       Ao trocar de plano, os limites e volume de análises são recalculados para este e-mail.
                     </p>
                   </div>
 
-                  <div className="border-t border-gray-200 pt-4 flex flex-col gap-2">
+                  <div className="border-t border-gray-200 dark:border-zinc-800 pt-3 sm:pt-4 flex flex-col gap-2">
                     <button
                       onClick={handleSaaSSignOut}
-                      className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      className="w-full py-2.5 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
                     >
                       <LogOut className="w-3.5 h-3.5" />
                       Encerrar Sessão (Sign Out)
@@ -1037,9 +1037,9 @@ export default function App() {
                         setAuthMode("signin");
                         setAuthMessage(null);
                       }}
-                      className="w-full py-2.5 bg-white hover:bg-gray-50 text-[#1C1C1E] border border-gray-300 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      className="w-full py-2.5 bg-white dark:bg-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-700 text-[#1C1C1E] dark:text-zinc-100 border border-gray-300 dark:border-zinc-700 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
                     >
-                      <Users className="w-3.5 h-3.5 text-[#595959]" />
+                      <Users className="w-3.5 h-3.5 text-[#595959] dark:text-zinc-400" />
                       Entrar com Outro Usuário
                     </button>
                   </div>
@@ -1048,17 +1048,17 @@ export default function App() {
                 // Authentication Form (Login / Register)
                 <form onSubmit={handleSaaSAuthAction} className="space-y-4">
                   {/* Selector */}
-                  <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                  <div className="flex bg-gray-100 dark:bg-zinc-800 p-1 rounded-xl border border-gray-200 dark:border-zinc-700">
                     <button
                       type="button"
                       onClick={() => {
                         setAuthMode("signin");
                         setAuthMessage(null);
                       }}
-                      className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all ${
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
                         authMode === "signin"
-                          ? "bg-white text-[#1C1C1E] shadow-sm"
-                          : "text-[#595959] hover:text-[#1C1C1E]"
+                          ? "bg-white dark:bg-zinc-700 text-[#1C1C1E] dark:text-white shadow-xs"
+                          : "text-[#595959] dark:text-zinc-400 hover:text-[#1C1C1E] dark:hover:text-white"
                       }`}
                     >
                       Acessar Conta
@@ -1069,10 +1069,10 @@ export default function App() {
                         setAuthMode("signup");
                         setAuthMessage(null);
                       }}
-                      className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all ${
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
                         authMode === "signup"
-                          ? "bg-white text-[#1C1C1E] shadow-sm"
-                          : "text-[#595959] hover:text-[#1C1C1E]"
+                          ? "bg-white dark:bg-zinc-700 text-[#1C1C1E] dark:text-white shadow-xs"
+                          : "text-[#595959] dark:text-zinc-400 hover:text-[#1C1C1E] dark:hover:text-white"
                       }`}
                     >
                       Criar Nova Conta
@@ -1081,34 +1081,34 @@ export default function App() {
 
                   <div className="space-y-3">
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-[#595959] uppercase tracking-wider block">Endereço de E-mail</label>
+                      <label className="text-[10px] font-bold text-[#595959] dark:text-zinc-400 uppercase tracking-wider block">Endereço de E-mail</label>
                       <input
                         type="email"
                         required
                         placeholder="seu-email@exemplo.com"
                         value={authEmail}
                         onChange={(e) => setAuthEmail(e.target.value)}
-                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-xs text-[#1C1C1E] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00] focus:border-transparent font-medium"
+                        className="w-full bg-white dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-xl p-2.5 text-xs text-[#1C1C1E] dark:text-zinc-100 placeholder:text-[#9CA3AF] dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00] focus:border-transparent font-medium"
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-[#595959] uppercase tracking-wider block">Senha Secreta</label>
+                      <label className="text-[10px] font-bold text-[#595959] dark:text-zinc-400 uppercase tracking-wider block">Senha Secreta</label>
                       <input
                         type="password"
                         required
                         placeholder="••••••••"
                         value={authPassword}
                         onChange={(e) => setAuthPassword(e.target.value)}
-                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-xs text-[#1C1C1E] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00] focus:border-transparent font-mono"
+                        className="w-full bg-white dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-xl p-2.5 text-xs text-[#1C1C1E] dark:text-zinc-100 placeholder:text-[#9CA3AF] dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00] focus:border-transparent font-mono"
                       />
                     </div>
                   </div>
 
                   {authMessage && (
-                    <div className={`p-3 rounded-lg text-[11px] leading-relaxed border ${
+                    <div className={`p-3 rounded-xl text-[11px] leading-relaxed border ${
                       authMessage.success
-                        ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                        : "bg-rose-50 border-rose-200 text-rose-800"
+                        ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300"
+                        : "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-300"
                     }`}>
                       {authMessage.message}
                     </div>
@@ -1117,29 +1117,29 @@ export default function App() {
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="w-full py-2.5 bg-[#FF5A00] hover:bg-[#E65000] disabled:opacity-50 text-white font-bold rounded-lg text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                    className="w-full py-2.5 bg-[#FF5A00] hover:bg-[#E65000] disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
                   >
                     {authLoading ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Autenticando...
+                        <span>Autenticando...</span>
                       </>
                     ) : authMode === "signup" ? (
                       <>
                         <Users className="w-3.5 h-3.5" />
-                        Criar Conta SaaS
+                        <span>Criar Conta SaaS</span>
                       </>
                     ) : (
                       <>
                         <LogIn className="w-3.5 h-3.5" />
-                        Entrar na Plataforma
+                        <span>Entrar na Plataforma</span>
                       </>
                     )}
                   </button>
                 </form>
               )}
 
-              <div className="text-[10px] text-[#595959] bg-gray-50 p-3 rounded-lg border border-gray-200 leading-relaxed">
+              <div className="text-[10px] text-[#595959] dark:text-zinc-400 bg-gray-50 dark:bg-zinc-900 p-3 rounded-xl border border-gray-200 dark:border-zinc-800 leading-relaxed">
                 ℹ️ <strong>Isolamento Multi-tenant:</strong> Ao logar com e-mails diferentes, o Supabase Auth atribui IDs únicos (UUIDs) para cada usuário. Suas análises e documentos são segregados automaticamente, permitindo simular perfeitamente um SaaS em produção!
               </div>
 

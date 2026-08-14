@@ -16,7 +16,8 @@ import {
   saveChatSessionToSupabase,
   deleteChatSessionFromSupabase,
   clearAllChatSessionsInSupabase,
-  fetchEditaisFromSupabase
+  fetchEditaisFromSupabase,
+  subscribeToSupabaseTable
 } from "../utils/supabaseClient";
 
 interface FloatingAiChatProps {
@@ -465,6 +466,7 @@ PARECER E ESTRATÉGIA:
   // Resizing configuration & state
   const DEFAULT_WIDTH = 860;
   const DEFAULT_HEIGHT = 580;
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState(false);
   const [width, setWidth] = useState(() => {
     const saved = localStorage.getItem("aip_chat_width");
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
@@ -578,6 +580,14 @@ PARECER E ESTRATÉGIA:
       }
     }
     loadChatSessions();
+
+    const unsubscribe = subscribeToSupabaseTable("chat_sessions", () => {
+      loadChatSessions();
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // Sync sessions with localStorage, Supabase and update scroll
@@ -694,9 +704,7 @@ PARECER E ESTRATÉGIA:
   };
 
   const handleClearAllChats = async () => {
-    if (!window.confirm("Tem certeza que deseja APAGAR DEFINITIVAMENTE todas as conversas do histórico e banco de dados?")) {
-      return;
-    }
+    setShowClearConfirmModal(false);
 
     // 1. Adiciona todas as sessões existentes na blacklist permanente de exclusão
     const currentIds = sessions.map(s => s.id);
@@ -1205,7 +1213,7 @@ PARECER E ESTRATÉGIA:
               </div>
 
               <button
-                onClick={handleClearAllChats}
+                onClick={() => setShowClearConfirmModal(true)}
                 className="w-full py-1.5 px-2 bg-rose-50 dark:bg-red-500/5 hover:bg-rose-100 dark:hover:bg-red-500/15 text-rose-700 dark:text-red-400 hover:text-rose-800 dark:hover:text-red-300 border border-rose-200 dark:border-red-500/15 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
                 title="Apagar todas as conversas do histórico"
               >
@@ -1850,29 +1858,29 @@ PARECER E ESTRATÉGIA:
 
       {/* SYSTEM DOCUMENTS SELECTOR MODAL */}
       {showSystemDocSelector && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-zinc-950/85 backdrop-blur-md animate-fade-in select-text">
-          <div className="bg-[#0e0e12] border border-white/10 rounded-2xl w-full max-w-lg h-auto max-h-[80vh] flex flex-col shadow-2xl overflow-hidden select-text">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/75 backdrop-blur-sm animate-fade-in select-text overflow-y-auto">
+          <div className="bg-[#0e0e12] border border-white/10 rounded-2xl w-full max-w-lg max-h-[92vh] sm:max-h-[82vh] flex flex-col shadow-2xl overflow-hidden select-text my-auto">
             
             {/* Header */}
-            <div className="bg-[#08080a] p-4 border-b border-white/5 flex items-center justify-between select-none">
-              <div className="flex items-center gap-2">
-                <FolderOpen className="w-5 h-5 text-emerald-400" />
-                <div className="text-left">
-                  <h4 className="text-sm font-semibold text-white">Documentos do Sistema</h4>
-                  <p className="text-[10px] text-slate-400">Selecione um arquivo já presente na plataforma para anexar ao chat</p>
+            <div className="bg-[#08080a] p-3.5 sm:p-4 border-b border-white/5 flex items-center justify-between select-none shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                <FolderOpen className="w-5 h-5 text-emerald-400 shrink-0" />
+                <div className="text-left min-w-0">
+                  <h4 className="text-sm font-semibold text-white truncate">Documentos do Sistema</h4>
+                  <p className="text-[10px] text-slate-400 truncate">Selecione um arquivo já presente na plataforma para anexar ao chat</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowSystemDocSelector(false)}
-                className="text-slate-400 hover:text-white p-1.5 hover:bg-white/10 rounded-lg cursor-pointer"
+                className="text-slate-400 hover:text-white p-1.5 hover:bg-white/10 rounded-lg cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Content List */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 select-text">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 select-text">
               
               {/* 1. Editais section */}
               <div className="space-y-2 select-text">
@@ -1895,7 +1903,7 @@ PARECER E ESTRATÉGIA:
                               <p className="text-xs font-medium text-slate-300 truncate">{title}</p>
                               <p className="text-[9px] text-slate-500 truncate">{organ}</p>
                             </div>
-                            <span className="bg-white/10 text-slate-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/10">Anexar</span>
+                            <span className="bg-white/10 text-slate-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/10 shrink-0">Anexar</span>
                           </button>
                         );
                       })}
@@ -1922,13 +1930,13 @@ PARECER E ESTRATÉGIA:
                           <p className="text-xs font-medium text-slate-300 truncate">{cert.name}</p>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span className={`w-1.5 h-1.5 rounded-full ${cert.status === "valid" ? "bg-emerald-400" : cert.status === "expiring_soon" ? "bg-yellow-400 animate-pulse" : "bg-rose-400"}`} />
-                            <p className="text-[9px] text-slate-500">
+                            <p className="text-[9px] text-slate-500 truncate">
                               {cert.status === "valid" ? "Válida" : cert.status === "expiring_soon" ? "Próxima ao Vencimento" : "Vencida/Pendente"}
                               {cert.expirationDate ? ` • Vencimento: ${cert.expirationDate}` : ""}
                             </p>
                           </div>
                         </div>
-                        <span className="bg-white/10 text-slate-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/10">Anexar</span>
+                        <span className="bg-white/10 text-slate-300 text-[8px] uppercase font-bold px-1.5 py-0.5 rounded-md border border-white/10 shrink-0">Anexar</span>
                       </button>
                     ))
                   ) : (
@@ -1940,11 +1948,11 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Footer */}
-            <div className="bg-[#08080a] p-3 border-t border-white/5 flex justify-end select-none">
+            <div className="bg-[#08080a] p-3 border-t border-white/5 flex justify-end select-none shrink-0">
               <button
                 type="button"
                 onClick={() => setShowSystemDocSelector(false)}
-                className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer"
+                className="w-full sm:w-auto bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-medium transition-all cursor-pointer text-center"
               >
                 Cancelar
               </button>
@@ -1955,20 +1963,20 @@ PARECER E ESTRATÉGIA:
 
       {/* FULLSCREEN DOCUMENT PREVIEW MODAL */}
       {previewDocContent && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-zinc-950/90 backdrop-blur-md overflow-y-auto select-text">
-          <div className="bg-[#0e0e12] border border-white/10 rounded-2xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up select-text">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/80 backdrop-blur-md overflow-y-auto select-text">
+          <div className="bg-[#0e0e12] border border-white/10 rounded-2xl w-full max-w-4xl h-[92vh] sm:h-[88vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up select-text my-auto">
             
             {/* Modal Header */}
-            <div className="bg-[#08080a] p-4 border-b border-white/5 flex items-center justify-between select-none">
-              <div className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-emerald-400" />
-                <div className="text-left">
-                  <h4 className="text-sm font-semibold text-white">Visualizador de Documento Oficial</h4>
-                  <p className="text-[10px] text-slate-400">{previewDocTitle}</p>
+            <div className="bg-[#08080a] p-3.5 sm:p-4 border-b border-white/5 flex items-center justify-between select-none shrink-0 gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <FileText className="w-5 h-5 text-emerald-400 shrink-0" />
+                <div className="text-left min-w-0">
+                  <h4 className="text-sm font-semibold text-white truncate">Visualizador de Documento Oficial</h4>
+                  <p className="text-[10px] text-slate-400 truncate">{previewDocTitle}</p>
                 </div>
               </div>
               
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {/* Print button */}
                 <button
                   type="button"
@@ -2048,7 +2056,7 @@ PARECER E ESTRATÉGIA:
                   className="bg-emerald-600 hover:bg-emerald-500 border border-emerald-500/30 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
                 >
                   <Printer className="w-4 h-4" />
-                  <span>Imprimir</span>
+                  <span className="hidden sm:inline">Imprimir</span>
                 </button>
 
                 <button
@@ -2057,7 +2065,7 @@ PARECER E ESTRATÉGIA:
                     setPreviewDocTitle(null);
                     setPreviewDocContent(null);
                   }}
-                  className="text-slate-400 hover:text-white p-2 hover:bg-white/10 rounded-lg cursor-pointer"
+                  className="text-slate-400 hover:text-white p-1.5 hover:bg-white/10 rounded-lg cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -2065,8 +2073,8 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Document Sheet Canvas */}
-            <div className="flex-1 overflow-y-auto p-8 bg-zinc-950 flex justify-center select-text">
-              <div className="w-full max-w-2xl bg-white text-slate-900 shadow-xl rounded-xl p-8 sm:p-12 border border-slate-200 select-text overflow-y-auto font-sans text-xs md:text-sm text-left">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-zinc-950 flex justify-center select-text">
+              <div className="w-full max-w-2xl bg-white text-slate-900 shadow-xl rounded-xl p-6 sm:p-12 border border-slate-200 select-text overflow-y-auto font-sans text-xs md:text-sm text-left">
                 <ReactMarkdown
                   components={{
                     p: ({node, ...props}) => <p className="mb-4 leading-relaxed font-sans text-slate-800 text-justify" {...props} />,
@@ -2096,14 +2104,14 @@ PARECER E ESTRATÉGIA:
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-zinc-950 p-4 border-t border-zinc-800 flex justify-end gap-2 select-none">
+            <div className="bg-zinc-950 p-3 sm:p-4 border-t border-zinc-800 flex justify-end gap-2 select-none shrink-0">
               <button
                 type="button"
                 onClick={() => {
                   setPreviewDocTitle(null);
                   setPreviewDocContent(null);
                 }}
-                className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="w-full sm:w-auto bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-slate-300 hover:text-white px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer text-center"
               >
                 Fechar Visualizador
               </button>
@@ -2114,21 +2122,21 @@ PARECER E ESTRATÉGIA:
 
       {/* Modal Popup de Alerta de Cota/Limite Atingido */}
       {chatLimitModal && chatLimitModal.show && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-zinc-950/85 backdrop-blur-md animate-fade-in">
-          <div className="bg-zinc-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-6 shadow-2xl relative space-y-5 overflow-hidden text-left">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/80 backdrop-blur-md animate-fade-in overflow-y-auto">
+          <div className="bg-zinc-900 border border-amber-500/40 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl relative space-y-4 sm:space-y-5 overflow-hidden text-left my-auto">
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 via-rose-500 to-emerald-500" />
             
             <div className="flex items-start gap-3.5">
               <div className="p-3 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-400 shrink-0">
-                <AlertTriangle className="w-7 h-7" />
+                <AlertTriangle className="w-6 h-6 sm:w-7 sm:h-7" />
               </div>
-              <div className="space-y-1">
-                <h3 className="text-lg font-bold text-white leading-tight">
+              <div className="space-y-1 min-w-0">
+                <h3 className="text-base sm:text-lg font-bold text-white leading-tight">
                   {chatLimitModal.reason === "chat_count" 
                     ? "Limite de 20 Chats Atingido" 
                     : "Limite de Mensagens Atingido"}
                 </h3>
-                <p className="text-xs text-amber-300 font-medium">
+                <p className="text-xs text-amber-300 font-medium truncate">
                   {chatLimitModal.reason === "chat_count"
                     ? `Cota máxima da conta: ${chatLimitModal.currentCount}/${chatLimitModal.maxCount} chats`
                     : `Cota máxima do canal: ${chatLimitModal.currentCount}/${chatLimitModal.maxCount} mensagens`}
@@ -2136,7 +2144,7 @@ PARECER E ESTRATÉGIA:
               </div>
             </div>
 
-            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-xs space-y-3 text-slate-300">
+            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 sm:p-4 text-xs space-y-3 text-slate-300">
               {chatLimitModal.reason === "chat_count" ? (
                 <>
                   <p className="leading-relaxed">
@@ -2171,10 +2179,53 @@ PARECER E ESTRATÉGIA:
               <button
                 type="button"
                 onClick={() => setChatLimitModal(null)}
-                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-semibold shadow-lg shadow-amber-600/20 transition-all flex items-center gap-2 cursor-pointer border border-amber-400/30 text-xs"
+                className="w-full sm:w-auto px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-semibold shadow-lg shadow-amber-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer border border-amber-400/30 text-xs text-center"
               >
                 <Check className="w-4 h-4" />
-                Entendido
+                <span>Entendido</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal to Clear All Chats (Replaces blocked window.confirm) */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-red-500/30 rounded-2xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-xl text-red-400 shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1 min-w-0">
+                <h3 className="text-base font-bold text-white leading-tight">
+                  Limpar Todo o Histórico?
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Esta ação é irreversível e excluirá todas as conversas salvas.
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 bg-zinc-950 p-3 rounded-xl border border-zinc-800 leading-relaxed">
+              Tem certeza que deseja apagar definitivamente todas as conversas do histórico e do banco de dados? Um novo chat principal limpo será iniciado.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirmModal(false)}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleClearAllChats}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-red-600/30 transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Sim, Apagar Tudo</span>
               </button>
             </div>
           </div>
