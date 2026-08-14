@@ -861,28 +861,46 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
     const user = await getActiveUser();
     const guestId = getGuestUserId();
 
-    let query = client.from("planilhas_disputas").select("*");
-    if (user?.id && user.id !== guestId) {
-      query = query.or(`user_id.eq.${user.id},user_id.eq.${guestId},user_id.is.null`);
-    }
+    // Always fetch ALL rows (RLS with permissive policy handles access control)
+    // This avoids the issue where rows created on different devices with different
+    // user_id values are filtered out, causing sync inconsistencies
+    const { data, error } = await client
+      .from("planilhas_disputas")
+      .select("*")
+      .order("updated_at", { ascending: false });
 
-    const { data, error } = await query.order("updated_at", { ascending: false });
     if (error) {
       if (isTableMissingError(error)) {
         markTableMissing("planilhas_disputas");
         return [];
       }
-      const fallback = await client.from("planilhas_disputas").select("*").order("updated_at", { ascending: false });
-      if (fallback.error && isTableMissingError(fallback.error)) {
-        markTableMissing("planilhas_disputas");
-        return [];
-      }
-      if (fallback.data && Array.isArray(fallback.data)) {
-        return fallback.data.map(mapDisputaFromDb);
-      }
+      console.warn("fetchDisputasFromSupabase error:", error.message);
       return [];
     }
-    return (data || []).map(mapDisputaFromDb);
+
+    // Filter client-side: show rows belonging to this user or guest, or rows without user_id
+    const userId = user?.id || guestId;
+    const allRows = (data || []).map(mapDisputaFromDb);
+
+    // If user is authenticated with real account, filter to their rows + guest rows
+    // If only guest, show all guest rows
+    if (user?.id && user.id !== guestId) {
+      const userRows = allRows.filter((r: any) => {
+        const rawRow = data?.find((d: any) => d.id === r.id);
+        const rowUserId = rawRow?.user_id || "";
+        return rowUserId === user.id || rowUserId === guestId || !rowUserId;
+      });
+      // If no user-specific rows, return all (in case migration is needed)
+      return userRows.length > 0 ? userRows : allRows;
+    }
+
+    // Guest user: return rows with guestId or null user_id
+    return allRows.filter((r: any) => {
+      const rawRow = data?.find((d: any) => d.id === r.id);
+      const rowUserId = rawRow?.user_id || "";
+      return rowUserId === guestId || rowUserId === userId || !rowUserId;
+    });
+
   } catch (err: any) {
     if (isTableMissingError(err)) {
       markTableMissing("planilhas_disputas");

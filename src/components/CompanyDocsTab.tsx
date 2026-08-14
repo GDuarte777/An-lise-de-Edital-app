@@ -394,33 +394,32 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     async function loadCerts() {
       try {
         const dbCerts = await fetchCertificatesFromSupabase();
-        if (dbCerts && dbCerts.length > 0) {
+        if (dbCerts && Array.isArray(dbCerts)) {
           setCerts(prev => {
-            const merged = prev.map(local => {
-              const dbMatch = dbCerts.find(d => d.id === local.id);
-              if (dbMatch) {
-                return {
-                  ...local,
-                  ...dbMatch,
-                  fileUploaded: dbMatch.fileUploaded === false ? false : !!dbMatch.fileUploaded,
-                  status: dbMatch.expirationDate ? evaluateStatus(dbMatch.expirationDate) : local.status
-                };
-              }
-              return local;
-            });
+            // Build a map of DB certs for quick lookup
+            const dbMap = new Map(dbCerts.map(d => [d.id, d]));
 
-            const existingIds = new Set(merged.map(c => c.id));
-            dbCerts.forEach(db => {
-              if (!existingIds.has(db.id)) {
-                merged.push({
-                  ...db,
-                  fileUploaded: !!db.fileUploaded,
-                  status: db.expirationDate ? evaluateStatus(db.expirationDate) : "valid"
-                });
+            // Reupload local certs that are NOT in DB (created offline)
+            prev.forEach(local => {
+              if (!dbMap.has(local.id)) {
+                saveCertificateToSupabase(local).catch(() => {});
               }
             });
 
-            return merged;
+            // Build final list: DB rows as source of truth, preserving local file data if present
+            const prevMap = new Map(prev.map(c => [c.id, c]));
+            const finalCerts = dbCerts.map(db => {
+              const local = prevMap.get(db.id);
+              return {
+                ...db,
+                // Preserve local file reference if the db doesn't have it
+                fileUploaded: db.fileUploaded !== undefined ? !!db.fileUploaded : !!local?.fileUploaded,
+                fileName: db.fileName || local?.fileName || "",
+                status: db.expirationDate ? evaluateStatus(db.expirationDate) : (db.status || "valid")
+              };
+            });
+
+            return finalCerts;
           });
         }
       } catch (e) {

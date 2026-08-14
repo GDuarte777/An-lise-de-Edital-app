@@ -581,7 +581,7 @@ PARECER E ESTRATÉGIA:
     }
     loadChatSessions();
 
-    const unsubscribe = subscribeToSupabaseTable("chat_sessions", () => {
+    const unsubscribe = subscribeToSupabaseTable("sessoes_chat", () => {
       loadChatSessions();
     });
 

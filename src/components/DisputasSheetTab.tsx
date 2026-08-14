@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { 
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles, 
   CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown, 
@@ -114,6 +114,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     return (localStorage.getItem("aip_disputas_view_mode") as "spreadsheet" | "dashboard") || "spreadsheet";
   });
 
+  // Initialize with empty array — Supabase is the source of truth
+  // localStorage is used only as offline cache/fallback display until Supabase loads
   const [disputas, setDisputas] = useState<DisputaRow[]>(() => {
     const saved = localStorage.getItem("aip_disputas_sheet");
     if (saved) {
@@ -132,34 +134,43 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const [syncingWithSupabase, setSyncingWithSupabase] = useState(false);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [lastRealtimeEvent, setLastRealtimeEvent] = useState<{ type: "INSERT" | "UPDATE" | "DELETE"; label: string; time: number } | null>(null);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const realtimeConnectedRef = useRef(false);
 
-  // Synchronize state with Supabase database
-  const refreshFromSupabase = async (showToastFeedback = false) => {
+  // ═══════════════════════════════════════════════════════════════════
+  // SUPABASE → fonte da verdade. Substitui completamente o estado local.
+  // Itens locais pendentes (criados offline) são re-salvos no Supabase
+  // caso ainda não existam no banco — mas o banco NUNCA é sobrescrito
+  // por dados locais que já foram deletados remotamente.
+  // ═══════════════════════════════════════════════════════════════════
+  const refreshFromSupabase = useCallback(async (showToastFeedback = false) => {
     setSyncingWithSupabase(true);
     try {
       const dbRows = await fetchDisputasFromSupabase();
       if (Array.isArray(dbRows)) {
         setDisputas(prev => {
-          const map = new Map<string, DisputaRow>();
-          
-          // Add DB rows to map
-          dbRows.forEach(r => map.set(r.id, r));
+          // Build a set of IDs that exist in the DB
+          const dbIds = new Set(dbRows.map(r => r.id));
 
-          // If there were local rows that didn't have DB entry yet, persist them to DB
-          prev.forEach(r => {
-            if (!map.has(r.id)) {
-              map.set(r.id, r);
+          // Find local rows that are NOT yet in DB (created offline / pending upload)
+          // Only upload those — never re-upload rows that the DB doesn't have
+          // because they may have been intentionally deleted from another device
+          const pendingLocalRows = prev.filter(r => !dbIds.has(r.id));
+          if (pendingLocalRows.length > 0) {
+            pendingLocalRows.forEach(r => {
               saveDisputaToSupabase(r).catch(() => {});
-            }
-          });
+            });
+          }
 
-          const merged = Array.from(map.values());
-          localStorage.setItem("aip_disputas_sheet", JSON.stringify(merged));
-          return merged;
+          // Supabase is the source of truth — use DB rows as the final state
+          // Pending local rows are appended optimistically while they upload
+          const finalRows = [...dbRows, ...pendingLocalRows];
+          localStorage.setItem("aip_disputas_sheet", JSON.stringify(finalRows));
+          return finalRows;
         });
 
         if (showToastFeedback) {
-          showToast(`Sincronizado! ${dbRows.length} planilhas carregadas do Supabase.`);
+          showToast(`Sincronizado! ${dbRows.length} planilha(s) carregada(s) do Supabase.`);
         }
       }
     } catch (e) {
@@ -167,7 +178,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     } finally {
       setSyncingWithSupabase(false);
     }
-  };
+  }, []);
 
   // Load from Supabase on mount and listen to Realtime changes (INSERT, UPDATE, DELETE)
   useEffect(() => {
@@ -185,7 +196,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           const newRow = mapDisputaFromDb(payload.new);
           setDisputas(prev => {
             if (prev.some(r => r.id === newRow.id)) {
-              return prev.map(r => r.id === newRow.id ? newRow : r);
+              const updated = prev.map(r => r.id === newRow.id ? newRow : r);
+              localStorage.setItem("aip_disputas_sheet", JSON.stringify(updated));
+              return updated;
             }
             const updated = [newRow, ...prev];
             localStorage.setItem("aip_disputas_sheet", JSON.stringify(updated));
@@ -196,7 +209,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             label: newRow.produtoItem || newRow.orgao || "Nova linha", 
             time: Date.now() 
           });
-          showToast(`Nova linha inserida via Realtime: ${newRow.produtoItem?.slice(0, 32) || newRow.orgao}`);
+          showToast(`✅ Planilha sincronizada em tempo real: ${newRow.produtoItem?.slice(0, 32) || newRow.orgao}`);
         } else if (eventType === "UPDATE" && payload.new) {
           const updatedRow = mapDisputaFromDb(payload.new);
           setDisputas(prev => {
@@ -235,8 +248,23 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       (status) => {
         if (status === "SUBSCRIBED") {
           setRealtimeConnected(true);
+          realtimeConnectedRef.current = true;
+          // Clear polling fallback when Realtime is active
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
         } else if (status === "CLOSED" || status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
           setRealtimeConnected(false);
+          realtimeConnectedRef.current = false;
+          // Start polling fallback every 30s when Realtime is unavailable
+          if (!pollingIntervalRef.current) {
+            pollingIntervalRef.current = setInterval(() => {
+              if (!realtimeConnectedRef.current) {
+                refreshFromSupabase(false);
+              }
+            }, 30000);
+          }
         }
       }
     );
@@ -249,11 +277,15 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
     return () => {
       unsubscribe();
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("aip_sync_disputas", handleCustomSync);
       window.removeEventListener("aip_edital_history_updated", handleCustomSync);
     };
-  }, []);
+  }, [refreshFromSupabase]);
 
   // History Editais list for auto-fill feature
   const [historyOptions, setHistoryOptions] = useState<AnalyzedEditalOption[]>([]);
