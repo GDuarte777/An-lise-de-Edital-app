@@ -22,7 +22,7 @@ import {
   generateUUID
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError } from "../utils/aiClientHelper";
 
 function cleanMarkdownText(text: string | undefined): string {
   if (!text) return "";
@@ -977,7 +977,19 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       return;
     }
 
+    // 🔑 Validate API key BEFORE sending to avoid long waits on misconfiguration
+    const aiConfig = getActiveAiConfig();
+    const keyError = validateApiKeyFormat(aiConfig.apiKey, aiConfig.provider);
+    if (keyError) {
+      alert(keyError);
+      return;
+    }
+
     setLoading(true);
+    // AbortController for 120s timeout
+    const abortCtrl = new AbortController();
+    const timeoutId = setTimeout(() => abortCtrl.abort(), 120_000);
+
     try {
       let data: any;
 
@@ -987,6 +999,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
       const response = await apiFetch("/api/analyze-edital", {
         method: "POST",
+        signal: abortCtrl.signal,
         body: {
           textInput: textInput,
           attachments: preparedAttachments
@@ -995,7 +1008,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || errData.message || "Erro na resposta do servidor.");
+        throw new Error(errData.error || errData.message || `Erro na resposta do servidor (${response.status}).`);
       }
 
       data = await response.json();
@@ -1006,6 +1019,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           : "Edital em Texto";
         const analysisResult: EditalAnalysis = {
           ...data.analysis,
+          // Ensure all required arrays are never undefined
+          pontosPositivos: Array.isArray(data.analysis.pontosPositivos) ? data.analysis.pontosPositivos : [],
+          pontosAlerta: Array.isArray(data.analysis.pontosAlerta) ? data.analysis.pontosAlerta : [],
+          documentosExigidos: Array.isArray(data.analysis.documentosExigidos) ? data.analysis.documentosExigidos : [],
+          itensEdital: Array.isArray(data.analysis.itensEdital) ? data.analysis.itensEdital : [],
           rawText: textInput || fileNamesSummary
         };
         
@@ -1032,13 +1050,24 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         try {
           const iden: any = analysisResult.identificacaoCertame || {};
           const fin: any = analysisResult.viabilidadeFinanceira || {};
-          const rawVal = fin.valorEstimado || fin.valorEstimadoTotal || 0;
-          const numVal = typeof rawVal === "number" ? rawVal : (parseFloat(String(rawVal).replace(/[^0-9,.]/g, "").replace(",", ".")) || 0);
+          const rawValStr = String(fin.valorEstimado || fin.valorEstimadoTotal || "");
+          
+          // Extract the GLOBAL/TOTAL value (prefer the largest R$ value found)
+          const allPrices = rawValStr.match(/([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/g) || [];
+          const parsedPrices = allPrices.map(p =>
+            parseFloat(p.replace(/\./g, "").replace(",", "."))
+          ).filter(v => !isNaN(v) && v > 0);
+          
+          // Use the largest found value as the global estimated value
+          const numVal = parsedPrices.length > 0
+            ? Math.max(...parsedPrices)
+            : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
+
           const disputaRow = {
             id: generateUUID(),
             orgao: iden.orgaoComprador || (analysisResult.descricaoProduto ? analysisResult.descricaoProduto.slice(0, 50) : "Órgão do Edital"),
-            uasgUndCompradora: iden.codigoUASG || iden.identificacaoNumerica || "UASG 000000",
-            numeroLicitacao: iden.numeroLicitacao || iden.identificacaoNumerica || "PE 2026",
+            uasgUndCompradora: iden.codigoUASG || iden.uasg || iden.identificacaoNumerica || "",
+            numeroLicitacao: iden.numeroLicitacao || iden.identificacaoNumerica || "",
             portal: iden.portalEletronico || "Compras.gov.br",
             produtoItem: analysisResult.descricaoProduto || "Objeto da Licitação",
             quantidade: analysisResult.itensEdital?.[0]?.quantidade || 1,
@@ -1049,7 +1078,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             dataHoraDisputa: iden.dataHoraSessao || new Date().toLocaleDateString("pt-BR") + " 09:00",
             status: "Agendada" as const,
             observacoes: `Gerado automaticamente da análise do edital.`,
-            linkPNCP: iden.linkPNCP || ""
+            linkPNCP: iden.linkPNCP || analysisResult.linkPNCP || ""
           };
           saveDisputaToSupabase(disputaRow).then(() => {
             window.dispatchEvent(new Event("aip_sync_disputas"));
@@ -1068,7 +1097,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         window.dispatchEvent(new CustomEvent("aip_edital_analyzed", { detail: newHistoryItem }));
 
         // Auto-sync log results dynamically to Google Sheets/Drive simulation!
-        syncAnalysisToGoogleSheets(`Análise Edital - ${analysisResult.descricaoProduto.slice(0, 30)}`, analysisResult);
+        syncAnalysisToGoogleSheets(`Análise Edital - ${(analysisResult.descricaoProduto || "").slice(0, 30)}`, analysisResult);
 
         setTimeout(() => {
           const section = document.getElementById("analysis-results-section");
@@ -1077,12 +1106,17 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           }
         }, 150);
       } else {
-        alert("Não foi possível processar a análise com formato estruturado.");
+        alert("A IA não retornou dados estruturados. Tente novamente ou verifique se o texto do edital está legível.");
       }
     } catch (e: any) {
-      console.error(e);
-      alert(e?.message || "Houve um problema ao processar a análise do edital com o Gemini. Tente novamente.");
+      if (e?.name === "AbortError" || e?.message?.includes("aborted")) {
+        alert("⏱️ A análise excedeu 120 segundos. O arquivo pode ser muito grande ou a IA está sobrecarregada. Tente novamente com um texto menor ou aguarde alguns instantes.");
+      } else {
+        alert(formatAiError(e));
+      }
+      console.error("[handleAnalyze] Error:", e);
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };

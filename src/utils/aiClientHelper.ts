@@ -38,6 +38,61 @@ export function getActiveAiConfig() {
   return { provider, apiKey, model };
 }
 
+/**
+ * Validates if an API key has the correct format for the given provider.
+ * Returns null if valid, or an error message string if invalid.
+ */
+export function validateApiKeyFormat(apiKey: string, provider: string): string | null {
+  const key = (apiKey || "").trim();
+  if (!key || key.length < 10) {
+    return `Chave de API não configurada. Acesse "IA & Modelos" no menu de Configurações e insira sua chave de API do ${provider === "gemini" ? "Google AI Studio" : provider}.`;
+  }
+
+  if (provider === "gemini" && !key.startsWith("AIza")) {
+    return `A chave do Gemini parece inválida — ela deve começar com "AIza". Verifique a chave em "IA & Modelos".`;
+  }
+  if (provider === "openai" && !key.startsWith("sk-")) {
+    return `A chave do OpenAI parece inválida — ela deve começar com "sk-". Verifique a chave em "IA & Modelos".`;
+  }
+  if (provider === "anthropic" && !key.startsWith("sk-ant-")) {
+    return `A chave do Anthropic (Claude) parece inválida — ela deve começar com "sk-ant-". Verifique a chave em "IA & Modelos".`;
+  }
+
+  return null; // key looks valid
+}
+
+/**
+ * Returns a user-friendly error message for AI errors.
+ */
+export function formatAiError(error: any): string {
+  const msg = (error?.message || String(error || "")).toLowerCase();
+
+  if (msg.includes("401") || msg.includes("403") || msg.includes("api_key_invalid") ||
+      msg.includes("permission_denied") || msg.includes("unauthenticated") ||
+      msg.includes("invalid api key") || msg.includes("api key not valid")) {
+    return "❌ Chave de API inválida ou sem permissão. Acesse \"IA & Modelos\" e verifique/atualize sua chave.";
+  }
+  if (msg.includes("429") || msg.includes("quota") || msg.includes("resource_exhausted") ||
+      msg.includes("rate limit") || msg.includes("insufficient balance")) {
+    return "⚠️ Limite de requisições atingido (cota excedida). Aguarde alguns instantes e tente novamente, ou troque o modelo em \"IA & Modelos\".";
+  }
+  if (msg.includes("503") || msg.includes("unavailable") || msg.includes("overloaded") ||
+      msg.includes("high demand")) {
+    return "⚠️ O serviço de IA está sobrecarregado no momento. Aguarde alguns segundos e tente novamente.";
+  }
+  if (msg.includes("network") || msg.includes("failed to fetch") || msg.includes("econnrefused") ||
+      msg.includes("enotfound") || msg.includes("timeout") || msg.includes("aborted")) {
+    return "🌐 Sem conexão com o servidor. Verifique sua internet e se o servidor está online.";
+  }
+  if (msg.includes("nenhuma chave") || msg.includes("não configurada") || msg.includes("not configured")) {
+    return "⚙️ Nenhuma chave de API configurada. Acesse \"IA & Modelos\" e insira sua chave.";
+  }
+
+  // Return the original message if it's already friendly (starts with ❌/⚠️/etc)
+  const original = error?.message || String(error || "Erro desconhecido.");
+  return original.length < 300 ? original : "Erro ao processar a solicitação. Tente novamente.";
+}
+
 // Get the current Supabase session JWT (used to authenticate server-side AI calls)
 export async function getSupabaseToken(): Promise<string> {
   try {

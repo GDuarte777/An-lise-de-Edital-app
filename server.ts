@@ -2250,6 +2250,14 @@ A sua análise e o relatório markdown GERADOS DEVEM FOCAR EXCLUSIVAMENTE nos it
 Você é um Analista de Licitações Públicas sênior, inteligente, moderno e altamente focado em estratégia de mercado e mitigação de riscos.
 Sua missão é ler o edital/termo de referência anexado e gerar uma análise executiva completa no campo "reportMarkdown".
 
+⚠️ REGRAS CRÍTICAS E INVIOLAVEIS:
+1. NUNCA retorne campos vazios, nulos ou ausentes. Se um dado não estiver no edital, use o valor padrão: "Não especificado no edital".
+2. SEMPRE retorne um JSON válido, completo, sem truncar. Todos os campos marcados como required DEVEM estar presentes.
+3. O campo "itensEdital" DEVE conter pelo menos 1 item. Se o edital não listar itens separados, crie 1 item com a descrição do objeto principal.
+4. O campo "documentosExigidos" DEVE conter pelo menos as certidões básicas (Receita Federal, FGTS, CNDT, Estadual, Municipal).
+5. "pontosPositivos" e "pontosAlerta" DEVEM ter pelo menos 3 itens cada.
+6. Nunca use valores literáteis como "undefined", "null", "N/A", "n/a" — use a descrição real ou "Não especificado no edital".
+
 O campo "reportMarkdown" DEVE SEGUIR RIGOROSAMENTE E EXATAMENTE ESTE MODELO DE RESPOSTA FORMATADO EM MARKDOWN (substituindo os colchetes com os dados reais do edital):
 
 Aqui está a **análise executiva e completa** da **[INSERIR MODALIDADE E NÚMERO/ANO DO PROCESSO (ÓRGÃO/COMPRADOR)]** que está selecionada no seu perfil:
@@ -2310,6 +2318,7 @@ Aqui está a **análise executiva e completa** da **[INSERIR MODALIDADE E NÚMER
 
 Adote um tom corporativo, extremamente profissional, objetivo e scannable.
 Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos individuais estão mencionados no edital e preencha a lista "itensEdital" no JSON, além de preencher todos os demais campos estruturados do JSON solicitados.
+RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, use "Não especificado no edital".
 `;
 
       contentParts.push({
@@ -2450,24 +2459,60 @@ Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos 
       }
 
       // Sanitize and guarantee all required fields for frontend UI
-      if (!Array.isArray(parsedData.pontosPositivos)) parsedData.pontosPositivos = [];
-      if (!Array.isArray(parsedData.pontosAlerta)) parsedData.pontosAlerta = [];
-      if (!Array.isArray(parsedData.documentosExigidos)) parsedData.documentosExigidos = [];
-      if (!Array.isArray(parsedData.itensEdital)) parsedData.itensEdital = [];
+      if (!Array.isArray(parsedData.pontosPositivos) || parsedData.pontosPositivos.length === 0) {
+        parsedData.pontosPositivos = ["Processo licitório formalizado conforme a Lei 14.133/21.", "Presença de especificações técnicas no Termo de Referência.", "Licitação aberta a empresas de pequeno porte (ME/EPP)."];
+      } else {
+        parsedData.pontosPositivos = parsedData.pontosPositivos.filter((v: any) => typeof v === "string" && v.trim() && v.trim() !== "null" && v.trim() !== "undefined");
+      }
+      if (!Array.isArray(parsedData.pontosAlerta) || parsedData.pontosAlerta.length === 0) {
+        parsedData.pontosAlerta = ["Verifique os prazos de validade das certidões negativas antes da data do certame.", "Atente-se às exigências de capacidade técnica e atestados.", "Confirme prazo de entrega e penalidades por atraso no Termo de Referência."];
+      } else {
+        parsedData.pontosAlerta = parsedData.pontosAlerta.filter((v: any) => typeof v === "string" && v.trim() && v.trim() !== "null" && v.trim() !== "undefined");
+      }
+      if (!Array.isArray(parsedData.documentosExigidos) || parsedData.documentosExigidos.length === 0) {
+        parsedData.documentosExigidos = ["Certidão Conjunta de Tributos Federais e Dívida Ativa da União (SRF/PGFN)", "Certidão de Regularidade do FGTS (CRF/CEF)", "Certidão Negativa de Débitos Trabalhistas (CNDT)", "Certidão Negativa de Débitos Estaduais (SEFAZ)", "Certidão Negativa de Débitos Municipais", "Contrato Social Consolidado ou Estatuto Social"];
+      } else {
+        parsedData.documentosExigidos = parsedData.documentosExigidos.filter((v: any) => typeof v === "string" && v.trim() && v.trim() !== "null" && v.trim() !== "undefined");
+      }
+      if (!Array.isArray(parsedData.itensEdital) || parsedData.itensEdital.length === 0) {
+        parsedData.itensEdital = [];
+      } else {
+        // Sanitize each item: ensure required fields present
+        parsedData.itensEdital = parsedData.itensEdital
+          .filter((it: any) => it && typeof it === "object")
+          .map((it: any, idx: number) => ({
+            numero: Number(it.numero) || idx + 1,
+            descricao: (it.descricao || it.descrição || parsedData.descricaoProduto || "Item da Licitação").toString().trim(),
+            quantidade: Number(it.quantidade) || 1,
+            unidade: (it.unidade || "Unidade").toString().trim(),
+            valorEstimado: it.valorEstimado ? it.valorEstimado.toString().trim() : "Não especificado"
+          }))
+          .slice(0, 100); // safety limit
+      }
       
       if (!parsedData.identificacaoCertame || typeof parsedData.identificacaoCertame !== "object") {
         parsedData.identificacaoCertame = {
           orgaoComprador: "Órgão Licitante",
           modalidade: "Pregão Eletrônico",
-          identificacaoNumerica: "Edital / Processo Licitatório",
+          identificacaoNumerica: "Edital / Processo Licitório",
           dataHoraSessao: "A definir em edital"
         };
+      } else {
+        // Sanitize nested fields
+        const ic = parsedData.identificacaoCertame;
+        ic.orgaoComprador = ic.orgaoComprador && ic.orgaoComprador !== "null" ? ic.orgaoComprador : "Órgão Licitante";
+        ic.modalidade = ic.modalidade && ic.modalidade !== "null" ? ic.modalidade : "Pregão Eletrônico";
+        ic.identificacaoNumerica = ic.identificacaoNumerica && ic.identificacaoNumerica !== "null" ? ic.identificacaoNumerica : "Não especificado";
+        ic.dataHoraSessao = ic.dataHoraSessao && ic.dataHoraSessao !== "null" ? ic.dataHoraSessao : "A definir em edital";
       }
       if (!parsedData.especificacoesTecnicas || typeof parsedData.especificacoesTecnicas !== "object") {
         parsedData.especificacoesTecnicas = {
           exigenciasFisicas: [],
           pegadinhasOcultas: []
         };
+      } else {
+        if (!Array.isArray(parsedData.especificacoesTecnicas.exigenciasFisicas)) parsedData.especificacoesTecnicas.exigenciasFisicas = [];
+        if (!Array.isArray(parsedData.especificacoesTecnicas.pegadinhasOcultas)) parsedData.especificacoesTecnicas.pegadinhasOcultas = [];
       }
       if (!parsedData.burocraciaBarreiras || typeof parsedData.burocraciaBarreiras !== "object") {
         parsedData.burocraciaBarreiras = {
@@ -2476,6 +2521,12 @@ Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos 
           exigenciaGarantia: "Não especificado",
           consorcioSubcontratacao: "Não especificado"
         };
+      } else {
+        const bb = parsedData.burocraciaBarreiras;
+        bb.exigeAmostra = bb.exigeAmostra && bb.exigeAmostra !== "null" ? bb.exigeAmostra : "Não especificado";
+        bb.exigeCartaSolidariedade = bb.exigeCartaSolidariedade && bb.exigeCartaSolidariedade !== "null" ? bb.exigeCartaSolidariedade : "Não especificado";
+        bb.exigenciaGarantia = bb.exigenciaGarantia && bb.exigenciaGarantia !== "null" ? bb.exigenciaGarantia : "Não especificado";
+        bb.consorcioSubcontratacao = bb.consorcioSubcontratacao && bb.consorcioSubcontratacao !== "null" ? bb.consorcioSubcontratacao : "Não especificado";
       }
       if (!parsedData.logisticaCronograma || typeof parsedData.logisticaCronograma !== "object") {
         parsedData.logisticaCronograma = {
@@ -2484,6 +2535,12 @@ Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos 
           enderecoEntrega: "Conforme edital",
           prazoGarantia: "12 meses"
         };
+      } else {
+        const lc = parsedData.logisticaCronograma;
+        lc.prazoEntregaReal = lc.prazoEntregaReal && lc.prazoEntregaReal !== "null" ? lc.prazoEntregaReal : (parsedData.prazoEntrega || "Conforme edital");
+        lc.classificacaoPrazo = lc.classificacaoPrazo && lc.classificacaoPrazo !== "null" ? lc.classificacaoPrazo : "Aceitável";
+        lc.enderecoEntrega = lc.enderecoEntrega && lc.enderecoEntrega !== "null" ? lc.enderecoEntrega : "Conforme edital";
+        lc.prazoGarantia = lc.prazoGarantia && lc.prazoGarantia !== "null" ? lc.prazoGarantia : "12 meses";
       }
       if (!parsedData.viabilidadeFinanceira || typeof parsedData.viabilidadeFinanceira !== "object") {
         parsedData.viabilidadeFinanceira = {
@@ -2491,6 +2548,11 @@ Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos 
           distorcoesPreco: "Sem distorções aparentes",
           prazoPagamento: parsedData.prazoPagamento || "30 dias"
         };
+      } else {
+        const vf = parsedData.viabilidadeFinanceira;
+        vf.valorEstimado = vf.valorEstimado && vf.valorEstimado !== "null" ? vf.valorEstimado : "Conforme edital";
+        vf.distorcoesPreco = vf.distorcoesPreco && vf.distorcoesPreco !== "null" ? vf.distorcoesPreco : "Não especificado";
+        vf.prazoPagamento = vf.prazoPagamento && vf.prazoPagamento !== "null" ? vf.prazoPagamento : (parsedData.prazoPagamento || "30 dias");
       }
       if (!parsedData.parecerFinal || typeof parsedData.parecerFinal !== "object") {
         parsedData.parecerFinal = {
@@ -2498,6 +2560,11 @@ Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos 
           grauRisco: "Médio",
           estrategiaLances: "Acompanhar a disputa de lances com base na planilha de custos."
         };
+      } else {
+        const pf = parsedData.parecerFinal;
+        pf.veredito = pf.veredito && pf.veredito !== "null" ? pf.veredito : "Vale a pena participar!";
+        pf.grauRisco = pf.grauRisco && pf.grauRisco !== "null" ? pf.grauRisco : "Médio";
+        pf.estrategiaLances = pf.estrategiaLances && pf.estrategiaLances !== "null" ? pf.estrategiaLances : "Acompanhar a disputa de lances com base na planilha de custos.";
       }
 
       // Preserve or extract direct PNCP URL or PNCP control number / ID contratação PNCP if present in input text

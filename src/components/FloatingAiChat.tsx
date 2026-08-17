@@ -8,7 +8,7 @@ import {
   ChevronDown, Search, AlertTriangle, Maximize2, Minimize2, Square
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, formatAiError } from "../utils/aiClientHelper";
 import { addSyncedItem } from "../utils/googleSync";
 import { 
   callSupabaseGeminiEdgeFunction,
@@ -849,6 +849,8 @@ PARECER E ESTRATÉGIA:
       abortControllerRef.current.abort();
     }
     abortControllerRef.current = new AbortController();
+    // Set 60s timeout for chat responses
+    const chatTimeoutId = setTimeout(() => abortControllerRef.current?.abort(), 60_000);
 
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
@@ -949,16 +951,29 @@ PARECER E ESTRATÉGIA:
         localStorage.setItem("aip_chat_has_unread", "true");
       }
     } catch (error: any) {
+      clearTimeout(chatTimeoutId);
       if (error?.name === "AbortError" || error?.message?.includes("aborted")) {
-        console.log("Geração de resposta cancelada pelo usuário.");
+        // Only show timeout message if it was NOT user-initiated (user abort sets abortControllerRef.current to null first)
+        if (!abortControllerRef.current || abortControllerRef.current.signal.aborted) {
+          const timeoutMsg: ChatMessage = {
+            id: `msg-err-${Date.now()}`,
+            role: "assistant",
+            content: "⏱️ A resposta demorou mais de 60 segundos. O servidor pode estar sobrecarregado. Por favor, tente novamente em alguns instantes.",
+            timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+          };
+          setSessions(prev => prev.map(s => {
+            if (s.id === activeSessionId) return { ...s, messages: [...updatedMessages, timeoutMsg] };
+            return s;
+          }));
+        }
         return;
       }
       console.error("Erro no chat:", error);
-      const errorText = error?.message || String(error);
+      const friendlyError = formatAiError(error);
       const errMessage: ChatMessage = {
         id: `msg-err-${Date.now()}`,
         role: "assistant",
-        content: `Desculpe, ocorreu uma breve instabilidade de rede. Por favor, envie sua mensagem novamente em alguns instantes.`,
+        content: friendlyError,
         timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
       };
 
@@ -974,6 +989,7 @@ PARECER E ESTRATÉGIA:
         localStorage.setItem("aip_chat_has_unread", "true");
       }
     } finally {
+      clearTimeout(chatTimeoutId);
       setLoading(false);
     }
   };
