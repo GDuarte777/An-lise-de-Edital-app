@@ -58,7 +58,7 @@ import {
 } from "lucide-react";
 import { CompanyData, EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
-import { apiFetch } from "../utils/aiClientHelper";
+import { apiFetch, validateApiKeyFormat, formatAiError, getActiveAiConfig } from "../utils/aiClientHelper";
 import { 
   syncDocumentToSupabase, 
   fetchDocumentosFromSupabase, 
@@ -727,7 +727,7 @@ REGRAS RÍGIDAS DE GERAÇÃO:
       }
     } catch (err: any) {
       console.error("Erro na geração com o Agente IA:", err);
-      alert("Não foi possível gerar o documento com o Agente IA no momento. Verifique sua conexão e tente novamente.");
+      alert(formatAiError(err));
     } finally {
       setIsGenerating(false);
       setAiAssistPrompt("");

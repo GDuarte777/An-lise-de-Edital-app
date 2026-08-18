@@ -615,6 +615,8 @@ export async function deleteCompetitorFromSupabase(id: string): Promise<boolean>
 }
 
 // 4. Sessões de Chat (sessoes_chat)
+const MAX_CHAT_SESSIONS_IN_DB = 20;
+
 export async function fetchChatSessionsFromSupabase(): Promise<any[] | null> {
   const client = getSupabaseClient();
   if (!client) return null;
@@ -630,7 +632,21 @@ export async function fetchChatSessionsFromSupabase(): Promise<any[] | null> {
       console.warn("fetchChatSessionsFromSupabase error:", error.message);
       return null;
     }
-    return (data || []).map(item => ({
+    const allSessions = data || [];
+
+    // Auto-purge excess sessions to prevent runaway accumulation (e.g. from past infinite loops)
+    if (allSessions.length > MAX_CHAT_SESSIONS_IN_DB) {
+      console.warn(`[Chat] Found ${allSessions.length} sessions in DB (limit: ${MAX_CHAT_SESSIONS_IN_DB}). Purging excess...`);
+      const toDelete = allSessions.slice(MAX_CHAT_SESSIONS_IN_DB);
+      for (const s of toDelete) {
+        client.from("sessoes_chat").delete().eq("id", s.id).eq("user_id", user.id)
+          .then(() => {})
+          .catch(() => {});
+      }
+    }
+
+    const limited = allSessions.slice(0, MAX_CHAT_SESSIONS_IN_DB);
+    return limited.map(item => ({
       id: item.id,
       title: item.title,
       selectedEditalId: item.selected_edital_id,

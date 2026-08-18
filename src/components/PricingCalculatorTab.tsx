@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
-import { apiFetch } from "../utils/aiClientHelper";
+import { apiFetch, formatAiError } from "../utils/aiClientHelper";
 import { 
   fetchSimulacoesFromSupabase, 
   saveSimulacaoToSupabase, 
@@ -405,8 +405,9 @@ Responda em formato JSON:
       if (parsed) {
         setAiStrategyResult(parsed);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro na análise estratégica IA:", err);
+      // Silent: just log — UI shows nothing if strategy fails (non-critical)
     } finally {
       setIsAnalyzingStrategy(false);
     }
@@ -476,9 +477,9 @@ Retorne o JSON no seguinte formato:
       } else {
         alert("Não foi possível extrair números estruturados desta cotação. Tente ajustar o texto.");
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Erro ao importar cotação:", e);
-      alert("Ocorreu um erro ao processar a cotação com a IA.");
+      alert(formatAiError(e));
     } finally {
       setIsParsingQuote(false);
     }

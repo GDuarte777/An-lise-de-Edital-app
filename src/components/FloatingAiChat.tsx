@@ -528,8 +528,12 @@ PARECER E ESTRATÉGIA:
   };
 
   const [isLoadedFromDb, setIsLoadedFromDb] = useState(false);
+  // Ref to track the previous sessions for change detection (prevents unnecessary Supabase writes)
+  const prevSessionsRef = useRef<string>("");
+  // Debounce timer for Supabase sync
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load from Supabase on mount
+  // Load from Supabase ONCE on mount — NO Realtime subscription to avoid infinite loop
   useEffect(() => {
     async function loadChatSessions() {
       try {
@@ -537,7 +541,7 @@ PARECER E ESTRATÉGIA:
         const deletedIds = getDeletedSessionIds();
 
         if (dbSessions !== null) {
-          // Re-trigger deletion on Supabase if any deleted session returned from DB query
+          // Clean up already-deleted sessions from Supabase silently
           const dbDeleted = dbSessions.filter(s => s && s.id && deletedIds.includes(s.id));
           for (const s of dbDeleted) {
             deleteChatSessionFromSupabase(s.id).catch(() => {});
@@ -546,31 +550,23 @@ PARECER E ESTRATÉGIA:
           const validDbSessions = dbSessions.filter(s => s && s.id && !deletedIds.includes(s.id));
 
           if (validDbSessions.length > 0) {
-            setSessions(validDbSessions);
-            setActiveSessionId(validDbSessions[0].id);
-            localStorage.setItem("aip_chat_sessions", JSON.stringify(validDbSessions));
+            // Limit to MAX_CHATS_PER_USER to prevent runaway accumulation
+            const limitedSessions = validDbSessions.slice(0, MAX_CHATS_PER_USER);
+            // If DB had more than limit, delete the extras from Supabase
+            if (validDbSessions.length > MAX_CHATS_PER_USER) {
+              validDbSessions.slice(MAX_CHATS_PER_USER).forEach(s => {
+                deleteChatSessionFromSupabase(s.id).catch(() => {});
+              });
+            }
+            setSessions(limitedSessions);
+            setActiveSessionId(limitedSessions[0].id);
+            localStorage.setItem("aip_chat_sessions", JSON.stringify(limitedSessions));
+            // Seed the prev ref so the sync effect doesn't immediately re-sync
+            prevSessionsRef.current = JSON.stringify(limitedSessions);
           } else {
-            // Se no Supabase a lista de conversas estiver vazia ou com chats deletados,
-            // limpa o localStorage e define o chat padrão com novo ID único
-            const newDefaultId = `chat-${Date.now()}`;
-            const defaultS: ChatSession = {
-              id: newDefaultId,
-              title: "Chat Principal",
-              selectedEditalId: "",
-              messages: [
-                {
-                  id: `msg-init-${Date.now()}`,
-                  role: "assistant",
-                  content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
-                  timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-                }
-              ],
-              createdAt: new Date().toLocaleString("pt-BR")
-            };
-            setSessions([defaultS]);
-            setActiveSessionId(newDefaultId);
-            localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
-            saveChatSessionToSupabase(defaultS).catch(() => {});
+            // DB is empty or all sessions are deleted — use existing local state, DO NOT create a new one here
+            // (local state is already initialised from localStorage in useState)
+            prevSessionsRef.current = JSON.stringify(sessions);
           }
         }
       } catch (e) {
@@ -580,35 +576,40 @@ PARECER E ESTRATÉGIA:
       }
     }
     loadChatSessions();
+    // ⚠️ IMPORTANT: NO Realtime subscription here — subscribing to sessoes_chat caused an
+    // infinite loop: save → Realtime event → loadChatSessions → save → event → ...
+    // Sessions are synced to Supabase via the debounced effect below instead.
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const unsubscribe = subscribeToSupabaseTable("sessoes_chat", () => {
-      loadChatSessions();
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
-  // Sync sessions with localStorage, Supabase and update scroll
+  // Sync sessions with localStorage + Supabase (debounced, only on real changes)
   useEffect(() => {
-    // IMPORTANTE: Só sincroniza com Supabase APÓS ter carregado do banco de dados na inicialização
     if (!isLoadedFromDb) return;
 
     const deletedIds = getDeletedSessionIds();
     const validSessions = sessions.filter(s => s && s.id && !deletedIds.includes(s.id));
 
+    // Always sync localStorage immediately
     localStorage.setItem("aip_chat_sessions", JSON.stringify(validSessions));
-    
-    // Sync to Supabase in background
-    validSessions.forEach(session => {
-      saveChatSessionToSupabase(session).catch(e => console.warn("Erro de sincronismo de chat no Supabase:", e));
-    });
 
+    // Scroll to bottom
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [sessions, activeSessionId, isOpen, isLoadedFromDb]);
+
+    // Debounced Supabase sync — only write when sessions actually changed
+    const serialized = JSON.stringify(validSessions);
+    if (serialized === prevSessionsRef.current) return; // no real change, skip Supabase write
+    prevSessionsRef.current = serialized;
+
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => {
+      validSessions.forEach(session => {
+        saveChatSessionToSupabase(session).catch(e =>
+          console.warn("[Chat Sync] Erro ao salvar sessão no Supabase:", e)
+        );
+      });
+    }, 800); // 800ms debounce prevents cascading writes
+  }, [sessions, isLoadedFromDb]); // ⚠️ isOpen and activeSessionId intentionally removed to prevent spurious syncs
 
   const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
 

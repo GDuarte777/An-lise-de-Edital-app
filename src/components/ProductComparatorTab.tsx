@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronUp, FileText, List, Eye, Info, RefreshCw, Layers, Gauge, ExternalLink
 } from "lucide-react";
 import { EditalAnalysis } from "../types";
-import { getActiveAiConfig, apiFetch } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, formatAiError } from "../utils/aiClientHelper";
 import { 
   fetchComparadorProdutosFromSupabase, 
   saveComparadorProdutoToSupabase, 
@@ -193,7 +193,7 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
         dados_comparacao: { results: resList }
       }).catch(e => console.warn("Erro ao salvar comparador no Supabase:", e));
     } catch (err: any) {
-      setGeneralError(err.message || "Erro de rede ou esgotamento na IA. Tente novamente.");
+      setGeneralError(formatAiError(err));
     } finally {
       setLoading(false);
     }

@@ -12,7 +12,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError } from "../utils/aiClientHelper";
 import { CompetitorAnalysis, CompetitorHistoryItem, EditalAnalysis } from "../types";
 
 interface CompetitorAnalyzerTabProps {
@@ -231,14 +231,23 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
       return;
     }
 
+    // Validate API key before sending
+    const aiConfig = getActiveAiConfig();
+    const keyError = validateApiKeyFormat(aiConfig.apiKey, aiConfig.provider);
+    if (keyError) { alert(keyError); return; }
+
     setLoading(true);
+    // 60s timeout
+    const abortCtrl = new AbortController();
+    const timeoutId = setTimeout(() => abortCtrl.abort(), 60_000);
     try {
       const preparedFiles = await prepareAttachmentsForServer(competitorFiles);
 
       const response = await apiFetch("/api/analyze-competitor", {
         method: "POST",
+        signal: abortCtrl.signal,
         body: {
-          competitorName: competitorName, // Can be empty, AI extracts it
+          competitorName: competitorName,
           competitorDocumentText,
           files: preparedFiles,
           editalText: editalTextToAnalyze,
@@ -279,12 +288,17 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
           return updated;
         });
       } else {
-        alert("Erro ao receber análise estruturada.");
+        alert("A IA não retornou dados estruturados. Tente novamente.");
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Falha na auditoria automática. Utilizando simulação local inteligente...");
+      if (e?.name === "AbortError" || e?.message?.includes("aborted")) {
+        alert("⏱️ Análise excedeu 60 segundos. Tente novamente.");
+      } else {
+        alert(formatAiError(e));
+      }
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };

@@ -12,7 +12,7 @@ import {
   FileUp, Loader2, GripVertical, SlidersHorizontal, Sparkles
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentForServer } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentForServer, formatAiError } from "../utils/aiClientHelper";
 
 // Dynamic real-time date extraction for comparative analysis (timezone-safe)
 const getLocalTodayStr = (): string => {
@@ -623,7 +623,8 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
           }
         } catch (err: any) {
           console.error(err);
-          triggerAlert("Erro na análise da IA. O arquivo foi anexado com sucesso para preenchimento manual.");
+          const errMsg = formatAiError(err);
+          triggerAlert(`Erro na análise da IA: ${errMsg}\n\nO arquivo foi salvo com sucesso — preencha os dados manualmente.`);
           // Fallback: mark as uploaded but allow user to specify a date manually by editing
           const targetCert = certs.find(c => c.id === certId);
           const fallbackCert = {

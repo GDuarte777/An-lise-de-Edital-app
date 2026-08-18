@@ -5,7 +5,7 @@ import {
   Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, EditalAnalysis } from "../types";
-import { apiFetch, prepareAttachmentForServer } from "../utils/aiClientHelper";
+import { apiFetch, prepareAttachmentForServer, formatAiError } from "../utils/aiClientHelper";
 import { 
   fetchDisputasFromSupabase, 
   saveDisputaToSupabase, 
@@ -500,8 +500,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           } else {
             fallbackExtract(file.name);
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error("Erro na extração do anexo:", err);
+          showToast(formatAiError(err));
           fallbackExtract(file.name);
         } finally {
           setIsExtractingFile(false);
