@@ -1,4 +1,6 @@
-import { Bot, Monitor, ShieldCheck, Zap, AlertTriangle } from "lucide-react";
+import { Bot, Monitor, ShieldCheck, Zap, AlertTriangle, Download, ExternalLink } from "lucide-react";
+
+const URL_RELEASES = "https://github.com/GDuarte777/An-lise-de-Edital-app/releases";
 
 /**
  * O robô de lances deixou de rodar no navegador e na nuvem: agora é um aplicativo que
@@ -63,10 +65,29 @@ export default function LanceBotTab({ activeEdital }: { activeEdital?: any }) {
         </p>
       )}
 
-      <div className="text-xs text-[#6B7280] leading-relaxed">
-        Código-fonte e instruções de build em <code className="bg-[#F3F4F6] px-1.5 py-0.5 rounded">desktop/</code>{" "}
-        no repositório. Para gerar o instalador do Windows:{" "}
-        <code className="bg-[#F3F4F6] px-1.5 py-0.5 rounded">npm run dist:win</code>.
+      <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Download className="w-4 h-4 text-[#FF5A00]" />
+          <span className="text-xs font-bold text-[#111827] uppercase tracking-wide">Baixar o aplicativo</span>
+        </div>
+        <p className="text-xs text-[#6B7280] leading-relaxed">
+          O instalador do Windows é publicado na página de Releases do repositório. Baixe o arquivo{" "}
+          <code className="bg-[#F3F4F6] px-1.5 py-0.5 rounded">.exe</code> mais recente e execute.
+        </p>
+        <a
+          href={URL_RELEASES}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 bg-[#FF5A00] text-white text-xs font-bold px-4 py-2 rounded-lg hover:bg-[#E85100] transition-colors w-fit"
+        >
+          Abrir página de downloads
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
+        <p className="text-[11px] text-[#9CA3AF] leading-relaxed">
+          Se ainda não houver nenhuma versão publicada, o instalador precisa ser gerado uma vez: na aba Actions do
+          repositório, execute o fluxo <span className="font-medium">Build LanceBot Desktop</span>. Alternativa
+          para desenvolvedores: <code className="bg-[#F3F4F6] px-1 py-0.5 rounded">cd desktop &amp;&amp; npm install &amp;&amp; npm run dev</code>.
+        </p>
       </div>
     </div>
   );

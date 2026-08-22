@@ -1,0 +1,74 @@
+name: Build LanceBot Desktop
+
+# Gera o instalador do Windows e publica como Release, para que o operador possa
+# baixar um .exe em vez de compilar o projeto na própria máquina.
+#
+# Dispara de duas formas:
+#  - manualmente, pela aba Actions (botão "Run workflow");
+#  - ao publicar uma tag no formato lancebot-v* (ex.: lancebot-v0.1.0).
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "lancebot-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificar tipos
+        run: npm run lint
+
+      - name: Rodar testes da guarda de margem
+        run: npm test
+
+      - name: Compilar aplicativo
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Gerar instalador
+        run: npx electron-builder --win --publish never
+        env:
+          # Credenciais da plataforma embutidas no build; configure em
+          # Settings > Secrets and variables > Actions.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Publicar artefato do build
+        uses: actions/upload-artifact@v4
+        with:
+          name: lancebot-windows
+          path: desktop/release/*.exe
+          if-no-files-found: error
+
+      - name: Anexar à Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*.exe
+          body: |
+            Instalador do HORASIS LanceBot para Windows.
+
+            O envio de lances reais depende de calibrar a integração com o portal;
+            até lá o aplicativo opera em modo simulação e no Modo Captura.
