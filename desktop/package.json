@@ -15,7 +15,7 @@
     "test": "tsx src/main/engine/strategy.test.ts"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.108.2"
+    "@supabase/auth-js": "^2.112.3"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
@@ -37,9 +37,13 @@
     "directories": {
       "output": "release"
     },
-    "files": ["out/**/*"],
+    "files": [
+      "out/**/*"
+    ],
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "artifactName": "HORASIS-LanceBot-Setup.exe",
     "nsis": {
