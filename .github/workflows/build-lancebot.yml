@@ -54,13 +54,23 @@ jobs:
           path: desktop/release/*.exe
           if-no-files-found: error
 
-      - name: Anexar à Release
-        if: startsWith(github.ref, 'refs/tags/')
+      # Publica sempre numa Release de tag fixa, para que o botão de download do painel
+      # aponte a uma URL estável (releases/latest/download/HORASIS-LanceBot-Setup.exe)
+      # que dispara o download direto, sem passar por tela intermediária.
+      - name: Publicar Release
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop/release/*.exe
+          tag_name: lancebot-latest
+          name: HORASIS LanceBot — instalador Windows
+          make_latest: true
+          files: desktop/release/HORASIS-LanceBot-Setup.exe
           body: |
             Instalador do HORASIS LanceBot para Windows.
 
+            Download direto:
+            https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Setup.exe
+
             O envio de lances reais depende de calibrar a integração com o portal;
             até lá o aplicativo opera em modo simulação e no Modo Captura.
+
+            Build: ${{ github.sha }}
