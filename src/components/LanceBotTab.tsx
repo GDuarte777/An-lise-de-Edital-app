@@ -84,9 +84,10 @@ export default function LanceBotTab({ activeEdital }: { activeEdital?: any }) {
           <ExternalLink className="w-3.5 h-3.5" />
         </a>
         <p className="text-[11px] text-[#9CA3AF] leading-relaxed">
-          Se ainda não houver nenhuma versão publicada, o instalador precisa ser gerado uma vez: na aba Actions do
-          repositório, execute o fluxo <span className="font-medium">Build LanceBot Desktop</span>. Alternativa
-          para desenvolvedores: <code className="bg-[#F3F4F6] px-1 py-0.5 rounded">cd desktop &amp;&amp; npm install &amp;&amp; npm run dev</code>.
+          Se ainda não houver nenhuma versão publicada, gere o instalador executando o fluxo{" "}
+          <span className="font-medium">Build LanceBot Desktop</span> na aba Actions do repositório — não é
+          preciso configurar nada antes. Alternativa para desenvolvedores:{" "}
+          <code className="bg-[#F3F4F6] px-1 py-0.5 rounded">cd desktop &amp;&amp; npm install &amp;&amp; npm run dev</code>.
         </p>
       </div>
     </div>
