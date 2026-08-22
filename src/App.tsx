@@ -205,7 +205,7 @@ export default function App() {
           openaiKey: currentConfig?.openai_key || localStorage.getItem("ai_openai_key") || "",
           openaiModel: currentConfig?.openai_model || localStorage.getItem("ai_openai_model") || "gpt-4o",
           anthropicKey: currentConfig?.anthropic_key || localStorage.getItem("ai_anthropic_key") || "",
-          anthropicModel: currentConfig?.anthropic_model || localStorage.getItem("ai_anthropic_model") || "claude-3-7-sonnet-20250219",
+          anthropicModel: currentConfig?.anthropic_model || localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5",
           deepseekKey: currentConfig?.deepseek_key || localStorage.getItem("ai_deepseek_key") || "",
           deepseekModel: currentConfig?.deepseek_model || localStorage.getItem("ai_deepseek_model") || "deepseek-chat"
         });

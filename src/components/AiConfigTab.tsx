@@ -15,7 +15,7 @@ export default function AiConfigTab() {
   const [openaiModel, setOpenaiModel] = useState("gpt-4o");
   
   const [anthropicKey, setAnthropicKey] = useState("");
-  const [anthropicModel, setAnthropicModel] = useState("claude-3-7-sonnet-20250219");
+  const [anthropicModel, setAnthropicModel] = useState("claude-sonnet-5");
   
   const [deepseekKey, setDeepseekKey] = useState("");
   const [deepseekModel, setDeepseekModel] = useState("deepseek-chat");
@@ -46,7 +46,7 @@ export default function AiConfigTab() {
       setOpenaiModel(localStorage.getItem("ai_openai_model") || "gpt-4o");
 
       setAnthropicKey(localStorage.getItem("ai_anthropic_key") || "");
-      setAnthropicModel(localStorage.getItem("ai_anthropic_model") || "claude-3-7-sonnet-20250219");
+      setAnthropicModel(localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5");
 
       setDeepseekKey(localStorage.getItem("ai_deepseek_key") || "");
       setDeepseekModel(localStorage.getItem("ai_deepseek_model") || "deepseek-chat");
@@ -434,10 +434,9 @@ export default function AiConfigTab() {
                       onChange={(e) => setAnthropicModel(e.target.value)}
                       className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
                     >
-                      <option value="claude-3-7-sonnet-20250219">claude-3-7-sonnet-20250219 (Claude 3.7 Sonnet - Híbrido emblemático)</option>
-                      <option value="claude-3-5-sonnet-20241022">claude-3-5-sonnet-20241022 (Claude 3.5 Sonnet v2)</option>
-                      <option value="claude-3-5-haiku-20241022">claude-3-5-haiku-20241022 (Claude 3.5 Haiku)</option>
-                      <option value="claude-3-opus-20240229">claude-3-opus-20240229 (Claude 3 Opus)</option>
+                      <option value="claude-sonnet-5">claude-sonnet-5 (Equilíbrio entre custo e capacidade - Recomendado)</option>
+                      <option value="claude-opus-5">claude-opus-5 (Máxima capacidade de raciocínio)</option>
+                      <option value="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001 (Rápido e econômico)</option>
                     </select>
                   </div>
                 </div>

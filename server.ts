@@ -2,13 +2,15 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createRequire } from "module";
-import JSZip from "jszip";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 
+// .env.local first: dotenv never overwrites an already-set variable, so this gives the
+// local file precedence over .env, matching Vite's convention and the README instructions.
+dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 // Helper: resolve the active AI config for a user from Supabase using their JWT
@@ -58,6 +60,23 @@ function getFallbackModels(primaryModel: string): string[] {
     "gemini-3.1-pro-preview"
   ];
   return Array.from(new Set(baseList.filter(Boolean)));
+}
+
+/**
+ * Server-side API keys are a shared cost: every request that falls back to one is billed
+ * to whoever deployed the app, not to the user making the request. This app's model is
+ * "each user brings their own key", so the fallback stays disabled unless it is turned on
+ * explicitly — normally only for local development.
+ *
+ * Set ALLOW_SERVER_AI_KEY_FALLBACK=true to opt in.
+ */
+const SERVER_KEY_FALLBACK_ENABLED =
+  String(process.env.ALLOW_SERVER_AI_KEY_FALLBACK || "").trim().toLowerCase() === "true";
+
+function getServerFallbackKey(varName: "GEMINI_API_KEY" | "OPENAI_API_KEY"): string | null {
+  if (!SERVER_KEY_FALLBACK_ENABLED) return null;
+  const key = String(process.env[varName] || "").trim();
+  return key.length > 10 ? key : null;
 }
 
 // Helper: resolve the active AI config for a user from Supabase, payload, or server environment
@@ -130,7 +149,7 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
             const modelMap: Record<string, string> = {
               gemini: row.gemini_model || "gemini-3.7-flash",
               openai: row.openai_model || "gpt-4o",
-              anthropic: row.anthropic_model || "claude-3-7-sonnet-20250219",
+              anthropic: row.anthropic_model || "claude-sonnet-5",
               deepseek: row.deepseek_model || "deepseek-chat"
             };
 
@@ -160,21 +179,23 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
     }
   }
 
-  // 3. Environment Variable Fallback on Server
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 10) {
-    console.log("[AI Config] ✅ Using server GEMINI_API_KEY environment variable");
+  // 3. Environment Variable Fallback on Server (opt-in only — billed to the deployer)
+  const serverGeminiKey = getServerFallbackKey("GEMINI_API_KEY");
+  if (serverGeminiKey) {
+    console.log("[AI Config] ⚠️ Using server GEMINI_API_KEY environment variable (cost billed to the deployer)");
     return {
       provider: "gemini",
-      apiKey: process.env.GEMINI_API_KEY.trim(),
+      apiKey: serverGeminiKey,
       model: "gemini-3.7-flash"
     };
   }
 
-  if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 10) {
-    console.log("[AI Config] ✅ Using server OPENAI_API_KEY environment variable");
+  const serverOpenaiKey = getServerFallbackKey("OPENAI_API_KEY");
+  if (serverOpenaiKey) {
+    console.log("[AI Config] ⚠️ Using server OPENAI_API_KEY environment variable (cost billed to the deployer)");
     return {
       provider: "openai",
-      apiKey: process.env.OPENAI_API_KEY.trim(),
+      apiKey: serverOpenaiKey,
       model: "gpt-4o"
     };
   }
@@ -194,9 +215,10 @@ function getAiClientForConfig(aiConfig?: any): GoogleGenAI | undefined {
       },
     });
   }
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 10) {
+  const serverKey = getServerFallbackKey("GEMINI_API_KEY");
+  if (serverKey) {
     return new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY.trim(),
+      apiKey: serverKey,
       httpOptions: {
         headers: {
           "User-Agent": "aistudio-build",
@@ -656,6 +678,77 @@ async function generateContentWithFallback(params: {
   throw lastError;
 }
 
+// Inline binary types the vision-capable providers accept.
+const SUPPORTED_IMAGE_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+function normalizeMimeType(mime: string | undefined): string {
+  const m = (mime || "").toLowerCase().trim();
+  return m === "image/jpg" ? "image/jpeg" : m;
+}
+
+/**
+ * Converts normalized Gemini-style contents into provider-native messages.
+ *
+ * Text-only messages collapse to a plain string, which is what both the OpenAI and
+ * Anthropic APIs expect. Messages carrying binary parts (scanned PDFs or images that
+ * survived local pdf-parse extraction) are wrapped in each provider's own multimodal
+ * envelope, so the user's own key is always sent to the provider they selected.
+ */
+function buildProviderMessages(contents: any[], provider: string): any[] {
+  const messages: any[] = [];
+
+  for (const c of contents) {
+    const role = c.role === "model" || c.role === "assistant" ? "assistant" : "user";
+
+    let parts: any[] = [];
+    if (typeof c === "string") {
+      parts = [{ text: c }];
+    } else if (c.text) {
+      parts = [{ text: c.text }];
+    } else if (Array.isArray(c.parts)) {
+      parts = c.parts;
+    }
+
+    if (!parts.some((p: any) => p.inlineData)) {
+      const content = parts.map((p: any) => p.text || "").join("\n");
+      if (content.trim() !== "") messages.push({ role, content });
+      continue;
+    }
+
+    const blocks: any[] = [];
+    for (const p of parts) {
+      if (p.inlineData) {
+        const mimeType = normalizeMimeType(p.inlineData.mimeType);
+        const data = p.inlineData.data || "";
+        if (!data) continue;
+
+        const isPdf = mimeType === "application/pdf";
+        if (!isPdf && !SUPPORTED_IMAGE_MIMES.includes(mimeType)) {
+          blocks.push({ type: "text", text: `[Anexo ignorado: o formato ${mimeType || "desconhecido"} não é suportado por este provedor.]` });
+          continue;
+        }
+
+        if (provider === "anthropic") {
+          blocks.push({
+            type: isPdf ? "document" : "image",
+            source: { type: "base64", media_type: mimeType, data }
+          });
+        } else {
+          blocks.push(isPdf
+            ? { type: "file", file: { filename: p.inlineData.fileName || "documento.pdf", file_data: `data:${mimeType};base64,${data}` } }
+            : { type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
+        }
+      } else if (p.text && p.text.trim() !== "") {
+        blocks.push({ type: "text", text: p.text });
+      }
+    }
+
+    if (blocks.length > 0) messages.push({ role, content: blocks });
+  }
+
+  return messages;
+}
+
 // Dynamic Multi-Provider AI Routing Helper using exclusively user API keys
 async function generateAiResponse(params: {
   contents: any[];
@@ -682,56 +775,25 @@ async function generateAiResponse(params: {
 
   const normalizedContents = normalizeContents(contents);
 
-  // Pre-process contents if they contain inlineData (binary files/images) and provider is not Gemini.
-  let processedContents = [...normalizedContents];
-  const hasInlineData = normalizedContents.some(c => 
+  const hasInlineData = normalizedContents.some(c =>
     c.parts && c.parts.some((p: any) => p.inlineData)
   );
 
+  // Binary attachments only reach this point when local pdf-parse extraction failed,
+  // i.e. scanned PDFs and images. DeepSeek has no vision support, so fail with an
+  // actionable message instead of silently sending a prompt with no document in it.
+  if (hasInlineData && provider === "deepseek") {
+    throw new Error(
+      "❌ O DeepSeek não consegue ler PDFs escaneados nem imagens. Envie um PDF com texto selecionável, ou troque para Gemini, OpenAI ou Anthropic em 'IA & Modelos'."
+    );
+  }
+
   if (hasInlineData && provider !== "gemini") {
-    console.log(`[Dynamic AI Router] Extracting text from binary file via Gemini helper for ${provider}...`);
-    for (let i = 0; i < processedContents.length; i++) {
-      const c = processedContents[i];
-      if (c.parts) {
-        const newParts = [];
-        for (const p of c.parts) {
-          if (p.inlineData) {
-            try {
-              const extractionResponse = await generateContentWithFallback({
-                apiKey: apiKey,
-                contents: [{ parts: [p, { text: "Extraia todo o texto contido neste documento na íntegra de forma exata, mantendo a estrutura original e tabelas se houver. Não faça comentários ou introduções, apenas retorne o texto do documento." }] }],
-                model: "gemini-3.7-flash"
-              });
-              const extractedText = extractionResponse.text || "";
-              newParts.push({ text: `[Conteúdo extraído do arquivo]:\n${extractedText}` });
-            } catch (err: any) {
-              console.error("Erro ao extrair texto do arquivo:", err.message);
-              newParts.push({ text: `[Erro na extração do arquivo: ${err.message}]` });
-            }
-          } else {
-            newParts.push(p);
-          }
-        }
-        processedContents[i] = { ...c, parts: newParts };
-      }
-    }
+    console.log(`[Dynamic AI Router] Sending binary attachment natively to ${provider}...`);
   }
 
   // Map Gemini contents format to standard OpenAI/Anthropic messages format
-  const messages = processedContents.map(c => {
-    const role = c.role === "model" || c.role === "assistant" ? "assistant" : "user";
-    let content = "";
-    if (typeof c === "string") {
-      content = c;
-    } else if (c.text) {
-      content = c.text;
-    } else if (c.parts) {
-      content = c.parts.map((p: any) => p.text || "").join("\n");
-    }
-    return { role, content };
-  });
-
-  const validMessages = messages.filter(m => m.content.trim() !== "");
+  const validMessages = buildProviderMessages(normalizedContents, provider);
 
   if (provider === "openai") {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -782,7 +844,7 @@ async function generateAiResponse(params: {
         "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
-        model: activeModel || "claude-3-7-sonnet-20250219",
+        model: activeModel || "claude-sonnet-5",
         max_tokens: 4096,
         system: systemInstruction,
         messages: validMessages
@@ -855,7 +917,7 @@ async function generateAiResponse(params: {
   if (provider === "gemini") {
     const candidateKeys = Array.from(new Set([
       apiKey,
-      process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : null
+      getServerFallbackKey("GEMINI_API_KEY")
     ].filter((k): k is string => Boolean(k && k.trim().length > 10))));
 
     const primaryModel = normalizeGeminiModel(activeModel || "gemini-3.7-flash");
@@ -890,7 +952,7 @@ async function generateAiResponse(params: {
 
             const response = await customClient.models.generateContent({
               model: geminiModelName,
-              contents: processedContents,
+              contents: normalizedContents,
               ...(Object.keys(reqConfig).length > 0 ? { config: reqConfig } : {})
             });
 
@@ -985,7 +1047,7 @@ async function generateAiResponse(params: {
 
                   const responseNoTools = await customClient.models.generateContent({
                     model: geminiModelName,
-                    contents: processedContents,
+                    contents: normalizedContents,
                     ...(Object.keys(reqConfigNoTools).length > 0 ? { config: reqConfigNoTools } : {})
                   });
                   const text = sanitizeAiTextResponse(responseNoTools.text || "");
@@ -1008,7 +1070,7 @@ async function generateAiResponse(params: {
 
                   const responseNoSchema = await customClient.models.generateContent({
                     model: geminiModelName,
-                    contents: processedContents,
+                    contents: normalizedContents,
                     ...(Object.keys(reqConfigNoSchema).length > 0 ? { config: reqConfigNoSchema } : {})
                   });
                   const text = sanitizeAiTextResponse(responseNoSchema.text || "");
@@ -1751,7 +1813,7 @@ const PORT = 3000;
         openai_key text default '',
         openai_model text default 'gpt-4o',
         anthropic_key text default '',
-        anthropic_model text default 'claude-3-7-sonnet-20250219',
+        anthropic_model text default 'claude-sonnet-5',
         deepseek_key text default '',
         deepseek_model text default 'deepseek-chat',
         updated_at timestamp with time zone default timezone('utc'::text, now()) not null
@@ -3459,478 +3521,6 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
     }
   });
 
-  // --- ROBÔ DE LANCES AUTOMÁTICOS (COMPRAS.GOV.BR / LANCEBOT + PYTHON-COMPRASNET) ---
-  interface BotLog {
-    id: string;
-    timestamp: string;
-    type: "system" | "competitor" | "own" | "warning" | "success" | "chat";
-    msg: string;
-  }
-
-  interface BotJob {
-    id: string;
-    pregaoId: string;
-    itemNum: string;
-    valorInicial: number;
-    valorLimiteMinimo: number;
-    tipoDecremento: "fixo" | "percentual";
-    valorDecremento: number;
-    intervaloMs: number;
-    isRealMode: boolean;
-    token?: string;
-    cookie?: string;
-    isActive: boolean;
-    currentCompetitorPrice: number;
-    currentOurPrice: number;
-    biddingStrategy?: "imediato" | "cadenciado-15s" | "sniper" | "personalizado";
-    modoAntiDetecao?: boolean;
-    logs: BotLog[];
-    chartData: Array<{ sec: number; "Menor Concorrente": number; "Nosso Lance": number }>;
-    timer?: NodeJS.Timeout;
-    createdAt: string;
-  }
-
-  const activeBots = new Map<string, BotJob>();
-
-  let globalCapturedCredentials = {
-    token: "",
-    cookie: "",
-    updatedAt: ""
-  };
-
-  // Helper to push logs to bot instance
-  const addBotLog = (bot: BotJob, msg: string, type: BotLog["type"]) => {
-    const timestamp = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    bot.logs.push({
-      id: `log-${Date.now()}-${Math.random()}`,
-      timestamp,
-      type,
-      msg
-    });
-    // Cap logs to prevent memory overflow
-    if (bot.logs.length > 100) {
-      bot.logs.shift();
-    }
-  };
-
-  // Bot implementation engine
-  const startBotLoop = (bot: BotJob) => {
-    bot.isActive = true;
-    let secondsElapsed = 0;
-
-    const tick = async () => {
-      if (!bot.isActive) return;
-
-      try {
-        secondsElapsed += (bot.intervaloMs / 1000);
-
-        if (bot.isRealMode) {
-          // --- MODO REAL: Lances ao vivo via APIs de Produção do Compras.gov.br ---
-          addBotLog(bot, `[RPA Ativo] Conectando ao painel de disputa do Compras.gov.br...`, "system");
-
-          const headers: Record<string, string> = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://sala-disputa.comprasnet.gov.br/",
-            "Origin": "https://sala-disputa.comprasnet.gov.br"
-          };
-
-          if (bot.token) {
-            headers["Authorization"] = bot.token.startsWith("Bearer ") ? bot.token : `Bearer ${bot.token}`;
-          }
-          if (bot.cookie) {
-            headers["Cookie"] = bot.cookie;
-          }
-
-          // Fetch current item state from official Comprasnet API
-          const fetchUrl = `https://sala-disputa.comprasnet.gov.br/api/v1/pregoes/${bot.pregaoId}/itens/${bot.itemNum}`;
-          
-          addBotLog(bot, `Efetuando GET requisitando dados do Pregão: ${bot.pregaoId}, Item: ${bot.itemNum}`, "system");
-
-          try {
-            const res = await fetch(fetchUrl, {
-              method: "GET",
-              headers
-            });
-
-            if (res.status === 401 || res.status === 403) {
-              addBotLog(bot, `❌ ERRO DE SESSÃO compras.gov.br (${res.status}): Token de Autorização ou Cookie inválido/expirado!`, "warning");
-              addBotLog(bot, `Por favor, faça login no Comprasnet, capture seu token de cabeçalho 'Authorization' no painel de rede e atualize seus dados.`, "warning");
-              bot.isActive = false;
-              if (bot.timer) clearInterval(bot.timer);
-              return;
-            }
-
-            if (!res.ok) {
-              addBotLog(bot, `⚠️ Instabilidade de comunicação com portal comprasnet.gov.br (Código: ${res.status}). Tentando reconexão resiliente...`, "warning");
-              // Fallback to local simulate to continue demo if required, or simply wait
-            } else {
-              const data: any = await res.json();
-              addBotLog(bot, `✓ Resposta obtida do portal. Dados decodificados com sucesso.`, "success");
-              
-              // Extract current lowest price from official response fields:
-              // Comprasnet api typically returns fields like: menorValor, menorLance, ou lanceVencedor
-              const lowestBid = parseFloat(data.menorValor || data.menorLance || data.valorAtual || "0");
-              if (lowestBid > 0) {
-                bot.currentCompetitorPrice = lowestBid;
-                addBotLog(bot, `Menor lance público capturado do lote: R$ ${lowestBid.toFixed(2)}`, "competitor");
-              }
-            }
-          } catch (fetchErr: any) {
-            addBotLog(bot, `⚠️ Sem resposta imediata da API do Compras.gov.br: "${fetchErr.message}". Operando via barreira de contingência.`, "warning");
-          }
-
-          // COMPUTE NEXT BID
-          let proposedValue = 0;
-          if (bot.tipoDecremento === "percentual") {
-            proposedValue = bot.currentCompetitorPrice * (1 - (bot.valorDecremento / 100));
-          } else {
-            proposedValue = bot.currentCompetitorPrice - bot.valorDecremento;
-          }
-          proposedValue = Math.round(proposedValue * 100) / 100;
-
-          // SAFE MARGIN BOUNDARY CHECK (CÉREBRO DE MARGEM LANCEBOT)
-          if (proposedValue < bot.valorLimiteMinimo) {
-            // Check if we can do a final stand at our exact minimum limit price
-            if (bot.currentOurPrice > bot.valorLimiteMinimo && bot.currentCompetitorPrice > bot.valorLimiteMinimo) {
-              addBotLog(bot, `⚠️ Ajustando lance final para o valor limite mínimo configurado: R$ ${bot.valorLimiteMinimo.toFixed(2)} (Último Suspiro)`, "warning");
-              proposedValue = bot.valorLimiteMinimo;
-            } else {
-              addBotLog(bot, `❌ LANCE IMPEDIDO POR MARGEM DE SEGURANÇA! Contraproposta seria inferior ao seu mínimo de R$ ${bot.valorLimiteMinimo.toFixed(2)}!`, "warning");
-              addBotLog(bot, `🛑 ROBÔ PAUSADO AUTOMATICAMENTE: Risco de venda abaixo do limite operacional configurado.`, "warning");
-              bot.isActive = false;
-              if (bot.timer) clearTimeout(bot.timer);
-              return;
-            }
-          }
-
-          // If we are already the lowest, do not self-bid
-          if (bot.currentOurPrice === bot.currentCompetitorPrice) {
-            addBotLog(bot, `Já possuímos a melhor oferta do lote (R$ ${bot.currentOurPrice.toFixed(2)}). Aguardando novas ações dos concorrentes.`, "success");
-            return;
-          }
-
-          // POST BID TO REAL PORTAL
-          const postUrl = `https://sala-disputa.comprasnet.gov.br/api/v1/pregoes/${bot.pregaoId}/itens/${bot.itemNum}/lances`;
-          addBotLog(bot, `🚀 Despachando lance automático de R$ ${proposedValue.toFixed(2)} p/ Compras.gov.br...`, "own");
-
-          try {
-            const postRes = await fetch(postUrl, {
-              method: "POST",
-              headers: {
-                ...headers,
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                valor: proposedValue,
-                valorLance: proposedValue
-              })
-            });
-
-            if (postRes.ok) {
-              bot.currentOurPrice = proposedValue;
-              bot.currentCompetitorPrice = proposedValue;
-              addBotLog(bot, `✓ SUCESSO: Lance de R$ ${proposedValue.toFixed(2)} homologado e inserido na disputa pública!`, "success");
-            } else {
-              const errBody = await postRes.text();
-              addBotLog(bot, `❌ Portal rejeitou o lance (Código ${postRes.status}): "${errBody || 'Erro desconhecido'}". Forçando re-tentativa.`, "warning");
-            }
-          } catch (postErr: any) {
-            addBotLog(bot, `⚠️ Erro de rede ao enviar proposta: "${postErr.message}". Lance adicionado à fila local de retentativa.`, "warning");
-          }
-
-          // Append to chart data
-          bot.chartData.push({
-            sec: Math.round(secondsElapsed),
-            "Menor Concorrente": bot.currentCompetitorPrice,
-            "Nosso Lance": bot.currentOurPrice
-          });
-
-        } else {
-          // --- MODO SANDBOX: Simulação de Alta Fidelidade (para testes operacionais) ---
-          
-          // Random competitor lowering price
-          if (Math.random() < 0.6) {
-            const drop = parseFloat((Math.random() * 9 + 2).toFixed(2));
-            bot.currentCompetitorPrice = Math.round((bot.currentCompetitorPrice - drop) * 100) / 100;
-            addBotLog(bot, `⚡ CONCORRENTE: Postou novo lance concorrente no valor de R$ ${bot.currentCompetitorPrice.toFixed(2)}`, "competitor");
-          }
-
-          // Calculate proposed
-          let proposedValue = 0;
-          if (bot.tipoDecremento === "percentual") {
-            proposedValue = bot.currentCompetitorPrice * (1 - (bot.valorDecremento / 100));
-          } else {
-            proposedValue = bot.currentCompetitorPrice - bot.valorDecremento;
-          }
-          proposedValue = Math.round(proposedValue * 100) / 100;
-
-          // Prevent double bidding if we lead
-          if (bot.currentOurPrice === bot.currentCompetitorPrice) {
-            return;
-          }
-
-          // Margin Limit Barrier Check
-          if (proposedValue < bot.valorLimiteMinimo) {
-            // Check if we can do a final stand at our exact minimum limit price
-            if (bot.currentOurPrice > bot.valorLimiteMinimo && bot.currentCompetitorPrice > bot.valorLimiteMinimo) {
-              addBotLog(bot, `⚠️ Ajustando lance final para o valor limite mínimo configurado: R$ ${bot.valorLimiteMinimo.toFixed(2)} (Último Suspiro)`, "warning");
-              proposedValue = bot.valorLimiteMinimo;
-            } else {
-              addBotLog(bot, `❌ LANCE BLOQUEADO POR MARGEM LIMITE MÍNIMA! Contraproposta seria inferior ao limite estipulado de R$ ${bot.valorLimiteMinimo.toFixed(2)}!`, "warning");
-              addBotLog(bot, `🛑 BOT PAUSADO EMERGÊNCIALMENTE: Margem financeira esgotada para novas propostas.`, "warning");
-              bot.isActive = false;
-              if (bot.timer) clearTimeout(bot.timer);
-              return;
-            }
-          }
-
-          // Accept bid
-          bot.currentOurPrice = proposedValue;
-          bot.currentCompetitorPrice = proposedValue;
-          addBotLog(bot, `🚀 SUCESSO: Enviado lance automático no valor comercial de R$ ${proposedValue.toFixed(2)}`, "own");
-          addBotLog(bot, `✓ Lance de R$ ${proposedValue.toFixed(2)} computado no Compras.gov.br sandbox.`, "success");
-
-          bot.chartData.push({
-            sec: Math.round(secondsElapsed),
-            "Menor Concorrente": bot.currentCompetitorPrice,
-            "Nosso Lance": bot.currentOurPrice
-          });
-        }
-
-      } catch (err: any) {
-        addBotLog(bot, `❌ Falha fatal no ciclo do bot: ${err.message}`, "warning");
-      }
-    };
-
-    const runNextTick = () => {
-      if (!bot.isActive) return;
-      
-      let delay = bot.intervaloMs;
-      if (bot.modoAntiDetecao) {
-        // Add random jitter of +/- 1.5 seconds to emulate human operator typing
-        const jitter = (Math.random() * 3000) - 1500;
-        delay = Math.max(1000, bot.intervaloMs + jitter);
-      }
-      
-      bot.timer = setTimeout(async () => {
-        if (!bot.isActive) return;
-        await tick();
-        runNextTick();
-      }, delay) as any;
-    };
-
-    runNextTick();
-  };
-
-  // Bot endpoints
-  app.post("/api/bot/start", (req, res) => {
-    try {
-      const { 
-        pregaoId, 
-        itemNum, 
-        valorInicial, 
-        valorLimiteMinimo, 
-        tipoDecremento, 
-        valorDecremento, 
-        intervaloMs, 
-        isRealMode,
-        token,
-        cookie,
-        biddingStrategy,
-        modoAntiDetecao
-      } = req.body;
-
-      if (!pregaoId || !itemNum) {
-        return res.status(400).json({ error: "Número do pregão e número do item são obrigatórios." });
-      }
-
-      const botKey = `${pregaoId}-${itemNum}`;
-
-      // Stop old bot if already running
-      if (activeBots.has(botKey)) {
-        const existing = activeBots.get(botKey);
-        if (existing) {
-          existing.isActive = false;
-          if (existing.timer) clearInterval(existing.timer);
-        }
-      }
-
-      const newBot: BotJob = {
-        id: botKey,
-        pregaoId,
-        itemNum,
-        valorInicial: Number(valorInicial || 1000),
-        valorLimiteMinimo: Number(valorLimiteMinimo || 500),
-        tipoDecremento: tipoDecremento || "fixo",
-        valorDecremento: Number(valorDecremento || 10),
-        intervaloMs: Number(intervaloMs || 1500),
-        isRealMode: !!isRealMode,
-        token,
-        cookie,
-        biddingStrategy: biddingStrategy || "cadenciado-15s",
-        modoAntiDetecao: !!modoAntiDetecao,
-        isActive: true,
-        currentCompetitorPrice: Number(valorInicial || 1000),
-        currentOurPrice: Number(valorInicial || 1000),
-        logs: [],
-        chartData: [
-          { sec: 0, "Menor Concorrente": Number(valorInicial || 1000), "Nosso Lance": Number(valorInicial || 1000) }
-        ],
-        createdAt: new Date().toLocaleString("pt-BR")
-      };
-
-      addBotLog(newBot, `--- INICIALIZANDO DISPARADOR RPA COMPRAS.GOV.BR ---`, "system");
-      addBotLog(newBot, `Modo Operacional: ${newBot.isRealMode ? "🚨 PRODUÇÃO REAL (LIVE BIDDING)" : "🛡️ SANDBOX (SIMULAÇÃO DE TESTE)"}`, "system");
-      addBotLog(newBot, `Pregão ID: ${newBot.pregaoId} | Item: ${newBot.itemNum}`, "system");
-      addBotLog(newBot, `Margem Limite: R$ ${newBot.valorLimiteMinimo.toFixed(2)} | Decremento: ${newBot.valorDecremento} (${newBot.tipoDecremento})`, "system");
-
-      startBotLoop(newBot);
-      activeBots.set(botKey, newBot);
-
-      return res.json({ message: "Robô de lances iniciado com sucesso!", botKey });
-    } catch (e: any) {
-      return res.status(500).json({ error: e.message || "Erro interno ao iniciar robô." });
-    }
-  });
-
-  app.post("/api/bot/stop", (req, res) => {
-    try {
-      const { pregaoId, itemNum } = req.body;
-      const botKey = `${pregaoId}-${itemNum}`;
-      const bot = activeBots.get(botKey);
-
-      if (bot) {
-        bot.isActive = false;
-        if (bot.timer) clearInterval(bot.timer);
-        addBotLog(bot, `🔌 ROBÔ MANUALMENTE DESLIGADO. Conexões de lances com portal suspensas.`, "warning");
-        return res.json({ message: "Robô parado com sucesso.", botKey });
-      }
-
-      return res.status(404).json({ error: "Nenhum robô em execução encontrado para este pregão/item." });
-    } catch (e: any) {
-      return res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get("/api/bot/status", (req, res) => {
-    try {
-      const { pregaoId, itemNum } = req.query;
-      const botKey = `${pregaoId}-${itemNum}`;
-      const bot = activeBots.get(botKey);
-
-      if (bot) {
-        return res.json({
-          isActive: bot.isActive,
-          currentCompetitorPrice: bot.currentCompetitorPrice,
-          currentOurPrice: bot.currentOurPrice,
-          logs: bot.logs,
-          chartData: bot.chartData
-        });
-      }
-
-      return res.json({ isActive: false, logs: [], chartData: [] });
-    } catch (e: any) {
-      return res.status(500).json({ error: e.message });
-    }
-  });
-
-  // Endpoints para Sincronização via Extensão de Navegador Chrome
-  app.post("/api/session/update", (req, res) => {
-    try {
-      const { token, cookie } = req.body;
-      globalCapturedCredentials = {
-        token: token || "",
-        cookie: cookie || "",
-        updatedAt: new Date().toLocaleTimeString("pt-BR")
-      };
-
-      // Se houver algum bot ativo em Modo Real, atualiza suas credenciais dinamicamente para não interromper os lances
-      for (const [key, bot] of activeBots.entries()) {
-        if (bot.isActive && bot.isRealMode) {
-          if (token) bot.token = token;
-          if (cookie) bot.cookie = cookie;
-          addBotLog(bot, `🔄 [Extensão] Credenciais atualizadas automaticamente sem pausar o robô!`, "success");
-        }
-      }
-
-      console.log("Sessão atualizada via Extensão:", globalCapturedCredentials.updatedAt);
-      return res.json({ 
-        message: "Sessão sincronizada com sucesso no servidor do LanceBot!", 
-        updatedAt: globalCapturedCredentials.updatedAt 
-      });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/session/current", (req, res) => {
-    return res.json(globalCapturedCredentials);
-  });
-
-  // Helper function to dynamically generate valid Chrome extension ZIP
-  async function generateExtensionZipBuffer(): Promise<Buffer> {
-    const zip = new JSZip();
-    const folder = zip.folder("lancebot-extensao");
-    const extensionDir = path.join(process.cwd(), "public", "extensao-lancebot");
-
-    if (fs.existsSync(extensionDir)) {
-      const files = fs.readdirSync(extensionDir);
-      for (const file of files) {
-        const filePath = path.join(extensionDir, file);
-        if (fs.statSync(filePath).isFile()) {
-          folder.file(file, fs.readFileSync(filePath));
-        }
-      }
-    }
-
-    const readmeContent = `=====================================================
-  HORASIS LanceBot Pro - Extensão Chrome Oficial
-=====================================================
-
-COMO INSTALAR NO GOOGLE CHROME:
-
-1. Extraia o arquivo ZIP em uma pasta no seu computador (clique com o botão direito -> Extrair Tudo).
-2. Abra o Google Chrome e acesse: chrome://extensions
-3. No canto superior direito, ative a opção "Modo do desenvolvedor".
-4. Clique no botão "Carregar sem compactação" (Load unpacked).
-5. Selecione a pasta "lancebot-extensao" que você acabou de extrair.
-
-Pronto! A extensão estará instalada e pronta para capturar os tokens e cookies da sala de disputa do Compras.gov.br.
-`;
-    folder.file("LEIA-ME_COMO_INSTALAR.txt", readmeContent);
-
-    return await zip.generateAsync({
-      type: "nodebuffer",
-      compression: "DEFLATE",
-      compressionOptions: { level: 9 },
-      platform: "UNIX"
-    });
-  }
-
-  // Endpoint para download da Extensão Chrome compactada (.zip)
-  app.get("/api/download-extension", async (req, res) => {
-    try {
-      const zipBuffer = await generateExtensionZipBuffer();
-
-      // Salva em /public para garantir sincronia no filesystem
-      try {
-        const publicZipPath = path.join(process.cwd(), "public", "lancebot-extensao-horasis.zip");
-        fs.writeFileSync(publicZipPath, zipBuffer);
-      } catch (e) {
-        console.warn("Aviso ao salvar arquivo estático zip em public:", e);
-      }
-
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", 'attachment; filename="lancebot-extensao-horasis.zip"');
-      res.setHeader("Content-Length", zipBuffer.length.toString());
-      return res.status(200).send(zipBuffer);
-    } catch (err: any) {
-      console.error("Erro ao gerar zip da extensão:", err);
-      return res.status(500).json({ error: "Erro ao gerar arquivo zip da extensão: " + err.message });
-    }
-  });
 
   // Vite Integration and listen
   async function initializeViteAndListen() {

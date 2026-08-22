@@ -1379,7 +1379,7 @@ create table if not exists public.configuracoes_usuario (
   openai_key text default '',
   openai_model text default 'gpt-4o',
   anthropic_key text default '',
-  anthropic_model text default 'claude-3-7-sonnet-20250219',
+  anthropic_model text default 'claude-sonnet-5',
   deepseek_key text default '',
   deepseek_model text default 'deepseek-chat',
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
@@ -1683,7 +1683,7 @@ export async function saveUserConfigToSupabase(config: {
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",
-      anthropic_model: config.anthropicModel || "claude-3-7-sonnet-20250219",
+      anthropic_model: config.anthropicModel || "claude-sonnet-5",
       deepseek_key: config.deepseekKey || "",
       deepseek_model: config.deepseekModel || "deepseek-chat",
       updated_at: new Date().toISOString()
