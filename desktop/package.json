@@ -41,6 +41,7 @@
     "win": {
       "target": ["nsis"]
     },
+    "artifactName": "HORASIS-LanceBot-Setup.exe",
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true

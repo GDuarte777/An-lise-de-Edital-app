@@ -1,6 +1,9 @@
-import { Bot, Monitor, ShieldCheck, Zap, AlertTriangle, Download, ExternalLink } from "lucide-react";
+import { Bot, Monitor, ShieldCheck, Zap, AlertTriangle, Download } from "lucide-react";
 
-const URL_RELEASES = "https://github.com/GDuarte777/An-lise-de-Edital-app/releases";
+// URL estável servida pelo GitHub: redireciona direto ao .exe da Release mais recente,
+// então o clique já inicia o download em vez de abrir uma página intermediária.
+const URL_INSTALADOR =
+  "https://github.com/GDuarte777/An-lise-de-Edital-app/releases/latest/download/HORASIS-LanceBot-Setup.exe";
 
 /**
  * O robô de lances deixou de rodar no navegador e na nuvem: agora é um aplicativo que
@@ -71,22 +74,17 @@ export default function LanceBotTab({ activeEdital }: { activeEdital?: any }) {
           <span className="text-xs font-bold text-[#111827] uppercase tracking-wide">Baixar o aplicativo</span>
         </div>
         <p className="text-xs text-[#6B7280] leading-relaxed">
-          O instalador do Windows é publicado na página de Releases do repositório. Baixe o arquivo{" "}
-          <code className="bg-[#F3F4F6] px-1.5 py-0.5 rounded">.exe</code> mais recente e execute.
+          Windows, 64 bits. O download começa ao clicar; depois é só executar o arquivo.
         </p>
         <a
-          href={URL_RELEASES}
-          target="_blank"
-          rel="noopener noreferrer"
+          href={URL_INSTALADOR}
           className="inline-flex items-center gap-2 bg-[#FF5A00] text-white text-xs font-bold px-4 py-2 rounded-lg hover:bg-[#E85100] transition-colors w-fit"
         >
-          Abrir página de downloads
-          <ExternalLink className="w-3.5 h-3.5" />
+          <Download className="w-3.5 h-3.5" />
+          Baixar instalador
         </a>
         <p className="text-[11px] text-[#9CA3AF] leading-relaxed">
-          Se ainda não houver nenhuma versão publicada, gere o instalador executando o fluxo{" "}
-          <span className="font-medium">Build LanceBot Desktop</span> na aba Actions do repositório — não é
-          preciso configurar nada antes. Alternativa para desenvolvedores:{" "}
+          Prefere rodar a partir do código?{" "}
           <code className="bg-[#F3F4F6] px-1 py-0.5 rounded">cd desktop &amp;&amp; npm install &amp;&amp; npm run dev</code>.
         </p>
       </div>
