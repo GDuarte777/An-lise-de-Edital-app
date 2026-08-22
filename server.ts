@@ -130,7 +130,7 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
             const modelMap: Record<string, string> = {
               gemini: row.gemini_model || "gemini-3.7-flash",
               openai: row.openai_model || "gpt-4o",
-              anthropic: row.anthropic_model || "claude-3-7-sonnet-20250219",
+              anthropic: row.anthropic_model || "claude-sonnet-5",
               deepseek: row.deepseek_model || "deepseek-chat"
             };
 
@@ -656,6 +656,77 @@ async function generateContentWithFallback(params: {
   throw lastError;
 }
 
+// Inline binary types the vision-capable providers accept.
+const SUPPORTED_IMAGE_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+function normalizeMimeType(mime: string | undefined): string {
+  const m = (mime || "").toLowerCase().trim();
+  return m === "image/jpg" ? "image/jpeg" : m;
+}
+
+/**
+ * Converts normalized Gemini-style contents into provider-native messages.
+ *
+ * Text-only messages collapse to a plain string, which is what both the OpenAI and
+ * Anthropic APIs expect. Messages carrying binary parts (scanned PDFs or images that
+ * survived local pdf-parse extraction) are wrapped in each provider's own multimodal
+ * envelope, so the user's own key is always sent to the provider they selected.
+ */
+function buildProviderMessages(contents: any[], provider: string): any[] {
+  const messages: any[] = [];
+
+  for (const c of contents) {
+    const role = c.role === "model" || c.role === "assistant" ? "assistant" : "user";
+
+    let parts: any[] = [];
+    if (typeof c === "string") {
+      parts = [{ text: c }];
+    } else if (c.text) {
+      parts = [{ text: c.text }];
+    } else if (Array.isArray(c.parts)) {
+      parts = c.parts;
+    }
+
+    if (!parts.some((p: any) => p.inlineData)) {
+      const content = parts.map((p: any) => p.text || "").join("\n");
+      if (content.trim() !== "") messages.push({ role, content });
+      continue;
+    }
+
+    const blocks: any[] = [];
+    for (const p of parts) {
+      if (p.inlineData) {
+        const mimeType = normalizeMimeType(p.inlineData.mimeType);
+        const data = p.inlineData.data || "";
+        if (!data) continue;
+
+        const isPdf = mimeType === "application/pdf";
+        if (!isPdf && !SUPPORTED_IMAGE_MIMES.includes(mimeType)) {
+          blocks.push({ type: "text", text: `[Anexo ignorado: o formato ${mimeType || "desconhecido"} não é suportado por este provedor.]` });
+          continue;
+        }
+
+        if (provider === "anthropic") {
+          blocks.push({
+            type: isPdf ? "document" : "image",
+            source: { type: "base64", media_type: mimeType, data }
+          });
+        } else {
+          blocks.push(isPdf
+            ? { type: "file", file: { filename: p.inlineData.fileName || "documento.pdf", file_data: `data:${mimeType};base64,${data}` } }
+            : { type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
+        }
+      } else if (p.text && p.text.trim() !== "") {
+        blocks.push({ type: "text", text: p.text });
+      }
+    }
+
+    if (blocks.length > 0) messages.push({ role, content: blocks });
+  }
+
+  return messages;
+}
+
 // Dynamic Multi-Provider AI Routing Helper using exclusively user API keys
 async function generateAiResponse(params: {
   contents: any[];
@@ -682,56 +753,25 @@ async function generateAiResponse(params: {
 
   const normalizedContents = normalizeContents(contents);
 
-  // Pre-process contents if they contain inlineData (binary files/images) and provider is not Gemini.
-  let processedContents = [...normalizedContents];
-  const hasInlineData = normalizedContents.some(c => 
+  const hasInlineData = normalizedContents.some(c =>
     c.parts && c.parts.some((p: any) => p.inlineData)
   );
 
+  // Binary attachments only reach this point when local pdf-parse extraction failed,
+  // i.e. scanned PDFs and images. DeepSeek has no vision support, so fail with an
+  // actionable message instead of silently sending a prompt with no document in it.
+  if (hasInlineData && provider === "deepseek") {
+    throw new Error(
+      "❌ O DeepSeek não consegue ler PDFs escaneados nem imagens. Envie um PDF com texto selecionável, ou troque para Gemini, OpenAI ou Anthropic em 'IA & Modelos'."
+    );
+  }
+
   if (hasInlineData && provider !== "gemini") {
-    console.log(`[Dynamic AI Router] Extracting text from binary file via Gemini helper for ${provider}...`);
-    for (let i = 0; i < processedContents.length; i++) {
-      const c = processedContents[i];
-      if (c.parts) {
-        const newParts = [];
-        for (const p of c.parts) {
-          if (p.inlineData) {
-            try {
-              const extractionResponse = await generateContentWithFallback({
-                apiKey: apiKey,
-                contents: [{ parts: [p, { text: "Extraia todo o texto contido neste documento na íntegra de forma exata, mantendo a estrutura original e tabelas se houver. Não faça comentários ou introduções, apenas retorne o texto do documento." }] }],
-                model: "gemini-3.7-flash"
-              });
-              const extractedText = extractionResponse.text || "";
-              newParts.push({ text: `[Conteúdo extraído do arquivo]:\n${extractedText}` });
-            } catch (err: any) {
-              console.error("Erro ao extrair texto do arquivo:", err.message);
-              newParts.push({ text: `[Erro na extração do arquivo: ${err.message}]` });
-            }
-          } else {
-            newParts.push(p);
-          }
-        }
-        processedContents[i] = { ...c, parts: newParts };
-      }
-    }
+    console.log(`[Dynamic AI Router] Sending binary attachment natively to ${provider}...`);
   }
 
   // Map Gemini contents format to standard OpenAI/Anthropic messages format
-  const messages = processedContents.map(c => {
-    const role = c.role === "model" || c.role === "assistant" ? "assistant" : "user";
-    let content = "";
-    if (typeof c === "string") {
-      content = c;
-    } else if (c.text) {
-      content = c.text;
-    } else if (c.parts) {
-      content = c.parts.map((p: any) => p.text || "").join("\n");
-    }
-    return { role, content };
-  });
-
-  const validMessages = messages.filter(m => m.content.trim() !== "");
+  const validMessages = buildProviderMessages(normalizedContents, provider);
 
   if (provider === "openai") {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -782,7 +822,7 @@ async function generateAiResponse(params: {
         "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
-        model: activeModel || "claude-3-7-sonnet-20250219",
+        model: activeModel || "claude-sonnet-5",
         max_tokens: 4096,
         system: systemInstruction,
         messages: validMessages
@@ -890,7 +930,7 @@ async function generateAiResponse(params: {
 
             const response = await customClient.models.generateContent({
               model: geminiModelName,
-              contents: processedContents,
+              contents: normalizedContents,
               ...(Object.keys(reqConfig).length > 0 ? { config: reqConfig } : {})
             });
 
@@ -985,7 +1025,7 @@ async function generateAiResponse(params: {
 
                   const responseNoTools = await customClient.models.generateContent({
                     model: geminiModelName,
-                    contents: processedContents,
+                    contents: normalizedContents,
                     ...(Object.keys(reqConfigNoTools).length > 0 ? { config: reqConfigNoTools } : {})
                   });
                   const text = sanitizeAiTextResponse(responseNoTools.text || "");
@@ -1008,7 +1048,7 @@ async function generateAiResponse(params: {
 
                   const responseNoSchema = await customClient.models.generateContent({
                     model: geminiModelName,
-                    contents: processedContents,
+                    contents: normalizedContents,
                     ...(Object.keys(reqConfigNoSchema).length > 0 ? { config: reqConfigNoSchema } : {})
                   });
                   const text = sanitizeAiTextResponse(responseNoSchema.text || "");
@@ -1751,7 +1791,7 @@ const PORT = 3000;
         openai_key text default '',
         openai_model text default 'gpt-4o',
         anthropic_key text default '',
-        anthropic_model text default 'claude-3-7-sonnet-20250219',
+        anthropic_model text default 'claude-sonnet-5',
         deepseek_key text default '',
         deepseek_model text default 'deepseek-chat',
         updated_at timestamp with time zone default timezone('utc'::text, now()) not null
