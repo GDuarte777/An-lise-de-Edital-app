@@ -1,0 +1,46 @@
+{
+  "name": "horasis-lancebot-desktop",
+  "productName": "HORASIS LanceBot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Robô de lances para pregão eletrônico, executado localmente na máquina do operador.",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx src/main/engine/strategy.test.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.108.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.0.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  },
+  "build": {
+    "appId": "br.com.horasis.lancebot",
+    "productName": "HORASIS LanceBot",
+    "files": ["out/**/*"],
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
