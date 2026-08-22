@@ -9,6 +9,9 @@ import dotenv from "dotenv";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 
+// .env.local first: dotenv never overwrites an already-set variable, so this gives the
+// local file precedence over .env, matching Vite's convention and the README instructions.
+dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 // Helper: resolve the active AI config for a user from Supabase using their JWT
@@ -58,6 +61,23 @@ function getFallbackModels(primaryModel: string): string[] {
     "gemini-3.1-pro-preview"
   ];
   return Array.from(new Set(baseList.filter(Boolean)));
+}
+
+/**
+ * Server-side API keys are a shared cost: every request that falls back to one is billed
+ * to whoever deployed the app, not to the user making the request. This app's model is
+ * "each user brings their own key", so the fallback stays disabled unless it is turned on
+ * explicitly — normally only for local development.
+ *
+ * Set ALLOW_SERVER_AI_KEY_FALLBACK=true to opt in.
+ */
+const SERVER_KEY_FALLBACK_ENABLED =
+  String(process.env.ALLOW_SERVER_AI_KEY_FALLBACK || "").trim().toLowerCase() === "true";
+
+function getServerFallbackKey(varName: "GEMINI_API_KEY" | "OPENAI_API_KEY"): string | null {
+  if (!SERVER_KEY_FALLBACK_ENABLED) return null;
+  const key = String(process.env[varName] || "").trim();
+  return key.length > 10 ? key : null;
 }
 
 // Helper: resolve the active AI config for a user from Supabase, payload, or server environment
@@ -160,21 +180,23 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
     }
   }
 
-  // 3. Environment Variable Fallback on Server
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 10) {
-    console.log("[AI Config] ✅ Using server GEMINI_API_KEY environment variable");
+  // 3. Environment Variable Fallback on Server (opt-in only — billed to the deployer)
+  const serverGeminiKey = getServerFallbackKey("GEMINI_API_KEY");
+  if (serverGeminiKey) {
+    console.log("[AI Config] ⚠️ Using server GEMINI_API_KEY environment variable (cost billed to the deployer)");
     return {
       provider: "gemini",
-      apiKey: process.env.GEMINI_API_KEY.trim(),
+      apiKey: serverGeminiKey,
       model: "gemini-3.7-flash"
     };
   }
 
-  if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim().length > 10) {
-    console.log("[AI Config] ✅ Using server OPENAI_API_KEY environment variable");
+  const serverOpenaiKey = getServerFallbackKey("OPENAI_API_KEY");
+  if (serverOpenaiKey) {
+    console.log("[AI Config] ⚠️ Using server OPENAI_API_KEY environment variable (cost billed to the deployer)");
     return {
       provider: "openai",
-      apiKey: process.env.OPENAI_API_KEY.trim(),
+      apiKey: serverOpenaiKey,
       model: "gpt-4o"
     };
   }
@@ -194,9 +216,10 @@ function getAiClientForConfig(aiConfig?: any): GoogleGenAI | undefined {
       },
     });
   }
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 10) {
+  const serverKey = getServerFallbackKey("GEMINI_API_KEY");
+  if (serverKey) {
     return new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY.trim(),
+      apiKey: serverKey,
       httpOptions: {
         headers: {
           "User-Agent": "aistudio-build",
@@ -895,7 +918,7 @@ async function generateAiResponse(params: {
   if (provider === "gemini") {
     const candidateKeys = Array.from(new Set([
       apiKey,
-      process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : null
+      getServerFallbackKey("GEMINI_API_KEY")
     ].filter((k): k is string => Boolean(k && k.trim().length > 10))));
 
     const primaryModel = normalizeGeminiModel(activeModel || "gemini-3.7-flash");
