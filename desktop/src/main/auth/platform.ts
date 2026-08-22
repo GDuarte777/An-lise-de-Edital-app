@@ -1,7 +1,7 @@
 import { safeStorage } from "electron";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { AuthClient, type GoTrueClient } from "@supabase/auth-js";
 
 /**
  * Login na plataforma HORASIS (Supabase), que libera o uso do aplicativo e dá acesso
@@ -11,6 +11,12 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  * pode tratá-la — mas o refresh token só vai para disco cifrado pelo SO
  * (DPAPI no Windows, Keychain no macOS, libsecret no Linux). Se a cifra não estiver
  * disponível, nada é gravado: a sessão dura o tempo do processo.
+ *
+ * Usa AuthClient em vez do supabase-js completo de propósito: o cliente completo
+ * instancia o Realtime, que exige WebSocket global. O processo principal do Electron 33
+ * roda sobre Node 20, onde esse global não existe, e o login falhava com
+ * "native WebSocket not found". Como o aplicativo só precisa autenticar, e nunca
+ * consome Realtime, Postgrest ou Storage, o cliente de auth sozinho resolve.
  */
 
 export interface UsuarioPlataforma {
@@ -19,7 +25,7 @@ export interface UsuarioPlataforma {
 }
 
 export class AutenticacaoPlataforma {
-  private cliente: SupabaseClient | null = null;
+  private cliente: GoTrueClient | null = null;
   private usuario: UsuarioPlataforma | null = null;
 
   constructor(
@@ -28,15 +34,24 @@ export class AutenticacaoPlataforma {
     private readonly caminhoSessao: string
   ) {}
 
-  private obterCliente(): SupabaseClient {
+  private obterCliente(): GoTrueClient {
     if (!this.supabaseUrl || !this.supabaseAnonKey) {
       throw new Error(
-        "Plataforma não configurada: defini VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no build do aplicativo."
+        "Plataforma não configurada: defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no build do aplicativo."
       );
     }
     if (!this.cliente) {
-      this.cliente = createClient(this.supabaseUrl, this.supabaseAnonKey, {
-        auth: { persistSession: false, autoRefreshToken: true }
+      this.cliente = new AuthClient({
+        url: `${this.supabaseUrl.replace(/\/$/, "")}/auth/v1`,
+        headers: {
+          apikey: this.supabaseAnonKey,
+          Authorization: `Bearer ${this.supabaseAnonKey}`
+        },
+        // A persistência é nossa, via safeStorage; o cliente não deve procurar
+        // localStorage, que não existe no processo principal.
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
       });
     }
     return this.cliente;
@@ -47,7 +62,7 @@ export class AutenticacaoPlataforma {
   }
 
   async entrar(email: string, senha: string): Promise<UsuarioPlataforma> {
-    const { data, error } = await this.obterCliente().auth.signInWithPassword({ email, password: senha });
+    const { data, error } = await this.obterCliente().signInWithPassword({ email, password: senha });
     if (error) throw new Error(`Não foi possível entrar na plataforma: ${error.message}`);
     if (!data.user || !data.session) throw new Error("A plataforma não retornou uma sessão válida.");
 
@@ -61,7 +76,7 @@ export class AutenticacaoPlataforma {
     const refreshToken = await this.lerSessao();
     if (!refreshToken) return null;
 
-    const { data, error } = await this.obterCliente().auth.refreshSession({ refresh_token: refreshToken });
+    const { data, error } = await this.obterCliente().refreshSession({ refresh_token: refreshToken });
     if (error || !data.user || !data.session) {
       await this.descartarSessao();
       return null;
@@ -74,7 +89,7 @@ export class AutenticacaoPlataforma {
 
   async sair(): Promise<void> {
     try {
-      await this.obterCliente().auth.signOut();
+      await this.obterCliente().signOut();
     } catch {
       // Sessão remota já pode ter expirado; o que importa é limpar o lado local.
     }
