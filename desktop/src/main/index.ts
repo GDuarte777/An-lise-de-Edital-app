@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AutenticacaoPlataforma, caminhoPadraoSessao } from "./auth/platform.js";
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.js";
 import { abrirLogin, abrirSalaDisputa, sair as sairComprasnet, sessaoComprasnet, verificarSessao } from "./auth/comprasnet.js";
 import { GravadorTrafego } from "./engine/recorder.js";
 import { MotorLances, type ConfiguracaoRobo, type EntradaLog, type EstadoRobo } from "./engine/engine.js";
@@ -17,8 +18,8 @@ let motor: MotorLances | null = null;
 let gravador: GravadorTrafego | null = null;
 
 const auth = new AutenticacaoPlataforma(
-  process.env.VITE_SUPABASE_URL ?? "",
-  process.env.VITE_SUPABASE_ANON_KEY ?? "",
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
   caminhoPadraoSessao(app.getPath("userData"))
 );
 
