@@ -20,16 +20,30 @@ import { BrowserWindow, session, type Session } from "electron";
 const PARTITION = "persist:comprasnet";
 
 /**
- * Página de login do SSO gov.br já parametrizada para o Compras.gov.br. Abrir esta URL
- * direto poupa o operador de navegar pelo portal até achar "Entrar com gov.br".
+ * Entrada de login do SSO gov.br para o Compras.gov.br.
+ *
+ * O `authorization_id` que aparece na barra do navegador é emitido por tentativa de
+ * login, então fixá-lo aqui daria uma URL vencida. Pedimos o login sem ele e deixamos o
+ * SSO emitir o seu; se por qualquer motivo essa página não abrir, caímos na sala de
+ * disputa, que redireciona para o mesmo login com os parâmetros corretos.
  */
-const URL_LOGIN =
-  "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=1a02f3bf8d7";
+const URL_LOGIN = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
+const URL_LOGIN_ALTERNATIVA = "https://sala-disputa.comprasnet.gov.br/";
 
 const URL_SALA_DISPUTA = "https://sala-disputa.comprasnet.gov.br/";
 
-/** Domínios cuja presença de cookie de sessão indica login concluído. */
-const DOMINIOS_SESSAO = ["comprasnet.gov.br", "compras.gov.br", "gov.br"];
+/**
+ * Domínios onde procuramos sessão. O `gov.br` genérico ficou de fora de propósito:
+ * só de visitar o portal já são criados cookies de consentimento e analytics, e contá-los
+ * fazia o aplicativo se declarar conectado sem ninguém ter entrado na conta.
+ */
+const DOMINIOS_SESSAO = ["comprasnet.gov.br", "compras.gov.br"];
+
+/** Nomes que caracterizam um cookie de sessão autenticada, e não de preferência. */
+const COOKIE_DE_SESSAO = /sess|token|auth|jwt|jsession|sso|acesso|logged|usuario/i;
+
+/** Cookies conhecidos por existirem sem login — nunca contam como autenticação. */
+const COOKIE_IGNORADO = /cookie|consent|lgpd|banner|_ga|_gid|analytics|gtm|utm|theme|idioma|accessib/i;
 
 export function sessaoComprasnet(): Session {
   return session.fromPartition(PARTITION);
@@ -48,14 +62,18 @@ export interface StatusSessao {
  */
 export async function verificarSessao(): Promise<StatusSessao> {
   const ses = sessaoComprasnet();
-  let total = 0;
+  let sessao = 0;
 
   for (const domain of DOMINIOS_SESSAO) {
     const cookies = await ses.cookies.get({ domain });
-    total += cookies.length;
+    for (const c of cookies) {
+      if (COOKIE_IGNORADO.test(c.name)) continue;
+      // Cookie de sessão é httpOnly na prática, ou tem nome que o identifica como tal.
+      if (c.httpOnly || COOKIE_DE_SESSAO.test(c.name)) sessao++;
+    }
   }
 
-  return { autenticado: total > 0, verificadoEm: new Date(), cookiesEncontrados: total };
+  return { autenticado: sessao > 0, verificadoEm: new Date(), cookiesEncontrados: sessao };
 }
 
 /**
@@ -82,7 +100,17 @@ export async function abrirLogin(paiId?: number): Promise<StatusSessao> {
     }
   });
 
-  await janela.loadURL(URL_LOGIN);
+  // Uma falha de carregamento não pode deixar a janela em branco e sem explicação:
+  // tentamos a alternativa e, se nem ela abrir, a janela mostra o erro do Chromium.
+  try {
+    await janela.loadURL(URL_LOGIN);
+  } catch {
+    try {
+      await janela.loadURL(URL_LOGIN_ALTERNATIVA);
+    } catch {
+      // A própria janela exibe a página de erro de rede; seguimos para o fluxo de espera.
+    }
+  }
 
   // Fecha a janela sozinha quando o SSO devolve o operador ao portal já autenticado,
   // para ele não precisar adivinhar que o login terminou.

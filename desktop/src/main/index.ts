@@ -105,6 +105,7 @@ ipcMain.handle("calibracao:estado", async (): Promise<EstadoCalibracao & { pront
   const d = obterDescobridor();
   return { ...d.calibracao, pronto: d.prontoParaProducao };
 });
+ipcMain.handle("calibracao:observadas", async () => obterDescobridor().chamadasObservadas);
 ipcMain.handle("calibracao:esquecer", async () => {
   await obterDescobridor().esquecer();
   return { ok: true };

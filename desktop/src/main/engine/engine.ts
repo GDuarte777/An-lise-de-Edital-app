@@ -1,7 +1,7 @@
 import { EstrategiaMargem, type ConfiguracaoMargem } from "./strategy.js";
 import type { PortalAdapter, ReferenciaItem } from "./portal.js";
 
-export type NivelLog = "sistema" | "concorrente" | "proprio" | "alerta" | "sucesso";
+export type NivelLog = "sistema" | "concorrente" | "proprio" | "alerta" | "sucesso" | "pregoeiro";
 
 export interface EntradaLog {
   em: string;
@@ -33,6 +33,8 @@ export class MotorLances {
   private errosSeguidos = 0;
   private readonly maxErrosSeguidos = 3;
   private ciclando = false;
+  /** Assinaturas das mensagens já registradas, para não repetir o chat a cada ciclo. */
+  private readonly mensagensVistas = new Set<string>();
 
   constructor(
     private readonly cfg: ConfiguracaoRobo,
@@ -92,6 +94,20 @@ export class MotorLances {
     try {
       const estadoItem = await this.portal.lerEstado(this.cfg.ref);
       this.errosSeguidos = 0;
+
+      // O chat é informativo: uma falha aqui não pode interromper a disputa.
+      if (this.portal.lerMensagens) {
+        try {
+          for (const m of await this.portal.lerMensagens(this.cfg.ref)) {
+            const assinatura = `${m.em ?? ""}|${m.texto}`;
+            if (this.mensagensVistas.has(assinatura)) continue;
+            this.mensagensVistas.add(assinatura);
+            this.log("pregoeiro", `${m.autor}: ${m.texto}`);
+          }
+        } catch {
+          // Sem chat, o robô segue operando normalmente.
+        }
+      }
 
       if (!estadoItem.aberto) {
         this.log("sistema", "Disputa fechada para este item. Encerrando.");
