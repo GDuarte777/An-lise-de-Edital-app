@@ -7,6 +7,7 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.js";
 import {
   abrirLogin,
   abrirPainelDisputas,
+  habilitarCertificadoDigital,
   abrirSalaDisputa,
   sair as sairComprasnet,
   sessaoComprasnet,
@@ -14,6 +15,7 @@ import {
 } from "./auth/comprasnet.js";
 import { DescobridorApi, type EstadoCalibracao } from "./engine/discovery.js";
 import { listarDisputas } from "./engine/disputas.js";
+import { observarSala, extrairValores, type EventoSala } from "./engine/sniffer.js";
 import { MotorLances, type ConfiguracaoRobo, type EntradaLog, type EstadoRobo } from "./engine/engine.js";
 import { ComprasnetAdapter } from "./engine/comprasnet.js";
 import { SimulacaoAdapter } from "./engine/simulation.js";
@@ -49,6 +51,29 @@ function obterDescobridor(): DescobridorApi {
     void descobridor.carregar().then(() => descobridor?.ligar());
   }
   return descobridor;
+}
+
+/**
+ * Espelha, para a interface, o que a sala de disputa recebe em tempo real. É a via de
+ * leitura que não depende de conhecer a API do portal: os dados chegam já decodificados,
+ * no mesmo instante em que a página os recebe.
+ */
+function ligarObservador(idJanela: number): void {
+  const janela = BrowserWindow.fromId(idJanela);
+  if (!janela) return;
+
+  observarSala(janela.webContents, (evento: EventoSala) => {
+    emitir("sala:evento", evento);
+
+    const valores = extrairValores(evento.dados);
+    if (valores.length > 0) {
+      emitir("robo:log", {
+        em: evento.em,
+        nivel: "concorrente",
+        msg: `Sala: ${valores.map((v) => `R$ ${v.toFixed(2)}`).join(" · ")}`
+      });
+    }
+  });
 }
 
 function criarJanela(): void {
@@ -93,11 +118,15 @@ ipcMain.handle("comprasnet:status", async () => verificarSessao());
 ipcMain.handle("comprasnet:sair", async () => sairComprasnet());
 ipcMain.handle("comprasnet:abrirSala", async (_e, pregaoId?: string) => {
   obterDescobridor();
-  return abrirSalaDisputa(pregaoId);
+  const id = await abrirSalaDisputa(pregaoId);
+  ligarObservador(id);
+  return id;
 });
 ipcMain.handle("comprasnet:abrirPainel", async () => {
   obterDescobridor();
-  return abrirPainelDisputas();
+  const id = await abrirPainelDisputas();
+  ligarObservador(id);
+  return id;
 });
 
 // --- Calibração -------------------------------------------------------------
@@ -155,6 +184,7 @@ ipcMain.handle("robo:parar", async () => {
 });
 
 app.whenReady().then(() => {
+  habilitarCertificadoDigital();
   criarJanela();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) criarJanela();
