@@ -1,11 +1,19 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AutenticacaoPlataforma, caminhoPadraoSessao } from "./auth/platform.js";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.js";
-import { abrirLogin, abrirSalaDisputa, sair as sairComprasnet, sessaoComprasnet, verificarSessao } from "./auth/comprasnet.js";
-import { GravadorTrafego } from "./engine/recorder.js";
+import {
+  abrirLogin,
+  abrirPainelDisputas,
+  abrirSalaDisputa,
+  sair as sairComprasnet,
+  sessaoComprasnet,
+  verificarSessao
+} from "./auth/comprasnet.js";
+import { DescobridorApi, type EstadoCalibracao } from "./engine/discovery.js";
+import { listarDisputas } from "./engine/disputas.js";
 import { MotorLances, type ConfiguracaoRobo, type EntradaLog, type EstadoRobo } from "./engine/engine.js";
 import { ComprasnetAdapter } from "./engine/comprasnet.js";
 import { SimulacaoAdapter } from "./engine/simulation.js";
@@ -15,7 +23,7 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 let janelaPrincipal: BrowserWindow | null = null;
 let motor: MotorLances | null = null;
-let gravador: GravadorTrafego | null = null;
+let descobridor: DescobridorApi | null = null;
 
 const auth = new AutenticacaoPlataforma(
   SUPABASE_URL,
@@ -27,14 +35,31 @@ function emitir(canal: string, carga: unknown): void {
   janelaPrincipal?.webContents.send(canal, carga);
 }
 
+/**
+ * O descobridor observa o tráfego da sessão do portal desde o início, para que a
+ * calibração aconteça só de o operador navegar — sem modo de captura para acionar.
+ */
+function obterDescobridor(): DescobridorApi {
+  if (!descobridor) {
+    descobridor = new DescobridorApi(
+      sessaoComprasnet(),
+      join(app.getPath("userData"), "calibracao-portal.json")
+    );
+    descobridor.observar((estado) => emitir("calibracao:atualizada", estado));
+    void descobridor.carregar().then(() => descobridor?.ligar());
+  }
+  return descobridor;
+}
+
 function criarJanela(): void {
   janelaPrincipal = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 1000,
-    minHeight: 700,
+    width: 1240,
+    height: 880,
+    minWidth: 980,
+    minHeight: 680,
     title: "HORASIS LanceBot",
     autoHideMenuBar: true,
+    backgroundColor: "#0B0D12",
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -60,37 +85,33 @@ ipcMain.handle("plataforma:restaurar", async () => auth.restaurarSessao());
 ipcMain.handle("plataforma:sair", async () => auth.sair());
 
 // --- Compras.gov.br ---------------------------------------------------------
-ipcMain.handle("comprasnet:entrar", async () => abrirLogin(janelaPrincipal?.id));
+ipcMain.handle("comprasnet:entrar", async () => {
+  obterDescobridor(); // começa a observar antes de o portal abrir
+  return abrirLogin(janelaPrincipal?.id);
+});
 ipcMain.handle("comprasnet:status", async () => verificarSessao());
 ipcMain.handle("comprasnet:sair", async () => sairComprasnet());
-ipcMain.handle("comprasnet:abrirSala", async () => abrirSalaDisputa());
-
-// --- Modo Captura -----------------------------------------------------------
-ipcMain.handle("captura:iniciar", async () => {
-  gravador ??= new GravadorTrafego(sessaoComprasnet());
-  gravador.iniciar();
-  return { gravando: true };
+ipcMain.handle("comprasnet:abrirSala", async (_e, pregaoId?: string) => {
+  obterDescobridor();
+  return abrirSalaDisputa(pregaoId);
+});
+ipcMain.handle("comprasnet:abrirPainel", async () => {
+  obterDescobridor();
+  return abrirPainelDisputas();
 });
 
-ipcMain.handle("captura:parar", async () => {
-  gravador?.parar();
-  return { gravando: false, total: gravador?.total ?? 0 };
+// --- Calibração -------------------------------------------------------------
+ipcMain.handle("calibracao:estado", async (): Promise<EstadoCalibracao & { pronto: boolean }> => {
+  const d = obterDescobridor();
+  return { ...d.calibracao, pronto: d.prontoParaProducao };
+});
+ipcMain.handle("calibracao:esquecer", async () => {
+  await obterDescobridor().esquecer();
+  return { ok: true };
 });
 
-ipcMain.handle("captura:exportar", async () => {
-  if (!gravador || gravador.total === 0) {
-    throw new Error("Nada capturado ainda. Inicie o Modo Captura e navegue pela sala de disputa.");
-  }
-  const { canceled, filePath } = await dialog.showSaveDialog({
-    title: "Exportar captura de tráfego",
-    defaultPath: `captura-comprasnet-${Date.now()}.json`,
-    filters: [{ name: "JSON", extensions: ["json"] }]
-  });
-  if (canceled || !filePath) return { exportado: false };
-
-  const chamadas = await gravador.exportar(filePath);
-  return { exportado: true, caminho: filePath, chamadas };
-});
+// --- Disputas ---------------------------------------------------------------
+ipcMain.handle("disputas:listar", async () => listarDisputas(sessaoComprasnet(), obterDescobridor()));
 
 // --- Robô -------------------------------------------------------------------
 ipcMain.handle("robo:iniciar", async (_e, cfg: ConfiguracaoRobo & { modo: "real" | "simulacao" }) => {
@@ -98,15 +119,23 @@ ipcMain.handle("robo:iniciar", async (_e, cfg: ConfiguracaoRobo & { modo: "real"
     throw new Error("Já existe um robô em execução. Pare o atual antes de iniciar outro.");
   }
 
+  let portal: PortalAdapter;
+
   if (cfg.modo === "real") {
     const status = await verificarSessao();
-    if (!status.autenticado) {
-      throw new Error("Entre no Compras.gov.br antes de operar em modo real.");
-    }
-  }
+    if (!status.autenticado) throw new Error("Entre no Compras.gov.br antes de operar em modo produção.");
 
-  const portal: PortalAdapter =
-    cfg.modo === "real" ? new ComprasnetAdapter(sessaoComprasnet()) : new SimulacaoAdapter(cfg.valorLimiteMinimo * 1.4);
+    const d = obterDescobridor();
+    if (!d.prontoParaProducao) {
+      throw new Error(
+        "O aplicativo ainda não aprendeu como o portal envia lances. Abra a sala de disputa deste item " +
+          "e envie um lance manualmente uma vez — a partir daí o robô assume sozinho."
+      );
+    }
+    portal = new ComprasnetAdapter(sessaoComprasnet(), d);
+  } else {
+    portal = new SimulacaoAdapter(cfg.valorLimiteMinimo * 1.4);
+  }
 
   motor = new MotorLances(
     cfg,

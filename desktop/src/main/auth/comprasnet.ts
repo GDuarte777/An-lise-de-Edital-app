@@ -18,7 +18,14 @@ import { BrowserWindow, session, type Session } from "electron";
  */
 
 const PARTITION = "persist:comprasnet";
-const URL_PORTAL = "https://www.gov.br/compras/pt-br/";
+
+/**
+ * Página de login do SSO gov.br já parametrizada para o Compras.gov.br. Abrir esta URL
+ * direto poupa o operador de navegar pelo portal até achar "Entrar com gov.br".
+ */
+const URL_LOGIN =
+  "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=1a02f3bf8d7";
+
 const URL_SALA_DISPUTA = "https://sala-disputa.comprasnet.gov.br/";
 
 /** Domínios cuja presença de cookie de sessão indica login concluído. */
@@ -75,7 +82,17 @@ export async function abrirLogin(paiId?: number): Promise<StatusSessao> {
     }
   });
 
-  await janela.loadURL(URL_PORTAL);
+  await janela.loadURL(URL_LOGIN);
+
+  // Fecha a janela sozinha quando o SSO devolve o operador ao portal já autenticado,
+  // para ele não precisar adivinhar que o login terminou.
+  janela.webContents.on("did-navigate", (_e, url) => {
+    if (!/sso\.acesso\.gov\.br/i.test(url) && /comprasnet\.gov\.br|compras\.gov\.br/i.test(url)) {
+      void verificarSessao().then((s) => {
+        if (s.autenticado && !janela.isDestroyed()) janela.close();
+      });
+    }
+  });
 
   return new Promise<StatusSessao>((resolve) => {
     janela.on("closed", () => {
@@ -84,12 +101,11 @@ export async function abrirLogin(paiId?: number): Promise<StatusSessao> {
   });
 }
 
-/** Abre a sala de disputa na mesma sessão — usado junto com o Modo Captura. */
-export async function abrirSalaDisputa(): Promise<number> {
+function abrirNoPortal(titulo: string, url: string): Promise<number> {
   const janela = new BrowserWindow({
     width: 1280,
     height: 900,
-    title: "Sala de Disputa — Compras.gov.br",
+    title: titulo,
     autoHideMenuBar: true,
     webPreferences: {
       partition: PARTITION,
@@ -98,8 +114,21 @@ export async function abrirSalaDisputa(): Promise<number> {
       sandbox: true
     }
   });
-  await janela.loadURL(URL_SALA_DISPUTA);
-  return janela.id;
+  return janela.loadURL(url).then(() => janela.id);
+}
+
+/**
+ * Abre a sala de disputa na mesma sessão. Navegar por ela é o que alimenta a
+ * calibração automática: o descobridor observa as chamadas que a própria página faz.
+ */
+export function abrirSalaDisputa(pregaoId?: string): Promise<number> {
+  const url = pregaoId ? `${URL_SALA_DISPUTA}?compra=${encodeURIComponent(pregaoId)}` : URL_SALA_DISPUTA;
+  return abrirNoPortal("Sala de Disputa — Compras.gov.br", url);
+}
+
+/** Abre o painel do fornecedor, de onde saem as disputas com proposta cadastrada. */
+export function abrirPainelDisputas(): Promise<number> {
+  return abrirNoPortal("Minhas disputas — Compras.gov.br", URL_SALA_DISPUTA);
 }
 
 /** Encerra a sessão local apagando os dados da partition. */

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApiLanceBot } from "../preload/index.js";
+import type { ApiLanceBot, Calibracao, Disputa, Usuario } from "../preload/index.js";
 
 declare global {
   interface Window {
@@ -13,101 +13,158 @@ interface Log {
   msg: string;
 }
 
-const CORES: Record<string, string> = {
-  sistema: "#94a3b8",
-  concorrente: "#fbbf24",
-  proprio: "#60a5fa",
-  alerta: "#f87171",
-  sucesso: "#4ade80"
-};
+const api = () => window.lancebot;
 
 export default function App() {
-  const [usuario, setUsuario] = useState<{ email: string } | null>(null);
+  const [usuario, setUsuario] = useState<Usuario | null>(null);
+  const [carregando, setCarregando] = useState(true);
+
+  if (carregando) {
+    return (
+      <div className="gate">
+        <p className="muted">Carregando…</p>
+      </div>
+    );
+  }
+
+  return usuario ? (
+    <Cockpit usuario={usuario} aoSair={() => setUsuario(null)} />
+  ) : (
+    <Portao aoEntrar={setUsuario} aoTerminarCarga={() => setCarregando(false)} carregando={carregando} />
+  );
+}
+
+/* ------------------------------------------------------------------ Portão */
+
+function Portao({
+  aoEntrar,
+  aoTerminarCarga,
+  carregando
+}: {
+  aoEntrar: (u: Usuario) => void;
+  aoTerminarCarga: () => void;
+  carregando: boolean;
+}) {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
-  const [carregando, setCarregando] = useState(true);
+  const [entrando, setEntrando] = useState(false);
 
-  const [cnAutenticado, setCnAutenticado] = useState(false);
-  const [gravando, setGravando] = useState(false);
+  useEffect(() => {
+    if (!carregando) return;
+    void api()
+      .plataforma.restaurar()
+      .then((u) => u && aoEntrar(u))
+      .finally(aoTerminarCarga);
+  }, [carregando, aoEntrar, aoTerminarCarga]);
 
-  const [pregaoId, setPregaoId] = useState("");
-  const [itemNum, setItemNum] = useState("");
+  const entrar = useCallback(async () => {
+    setErro("");
+    setEntrando(true);
+    try {
+      aoEntrar(await api().plataforma.entrar(email, senha));
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEntrando(false);
+    }
+  }, [email, senha, aoEntrar]);
+
+  return (
+    <div className="gate">
+      <div className="gate-card">
+        <div className="row tight">
+          <span className="brand-dot" />
+          <h1 className="gate-title">LanceBot</h1>
+        </div>
+        <p className="muted">Entre com sua conta HORASIS.</p>
+
+        <div className="field">
+          <label htmlFor="email">E-mail</label>
+          <input id="email" className="input" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </div>
+        <div className="field">
+          <label htmlFor="senha">Senha</label>
+          <input
+            id="senha"
+            className="input"
+            type="password"
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void entrar()}
+          />
+        </div>
+
+        {erro && <p className="err">{erro}</p>}
+
+        <button className="btn primary block" onClick={() => void entrar()} disabled={entrando}>
+          {entrando ? "Entrando…" : "Entrar"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------- Cockpit */
+
+function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) {
+  const [conectado, setConectado] = useState(false);
+  const [calib, setCalib] = useState<Calibracao | null>(null);
+  const [disputas, setDisputas] = useState<Disputa[]>([]);
+  const [selecionada, setSelecionada] = useState<Disputa | null>(null);
+  const [erro, setErro] = useState("");
+
   const [piso, setPiso] = useState("");
   const [decremento, setDecremento] = useState("1");
-  const [tipoDecremento, setTipoDecremento] = useState<"fixo" | "percentual">("fixo");
+  const [tipo, setTipo] = useState<"fixo" | "percentual">("fixo");
   const [intervalo, setIntervalo] = useState("1000");
   const [modo, setModo] = useState<"simulacao" | "real">("simulacao");
 
   const [estadoRobo, setEstadoRobo] = useState("parado");
   const [logs, setLogs] = useState<Log[]>([]);
-  const fimLogs = useRef<HTMLDivElement>(null);
+  const fim = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    void window.lancebot.plataforma
-      .restaurar()
-      .then((u) => u && setUsuario({ email: u.email }))
-      .finally(() => setCarregando(false));
+    void api().comprasnet.status().then((s) => setConectado(s.autenticado));
+    void api().calibracao.estado().then(setCalib);
 
-    void window.lancebot.comprasnet.status().then((s) => setCnAutenticado(s.autenticado));
-
-    const offLog = window.lancebot.robo.aoLog((e) => setLogs((atual) => [...atual.slice(-499), e as Log]));
-    const offEstado = window.lancebot.robo.aoEstado(setEstadoRobo);
-    return () => {
-      offLog();
-      offEstado();
-    };
+    const off = [
+      api().robo.aoLog((e) => setLogs((a) => [...a.slice(-399), e as Log])),
+      api().robo.aoEstado(setEstadoRobo),
+      api().calibracao.aoAtualizar(() => void api().calibracao.estado().then(setCalib))
+    ];
+    return () => off.forEach((f) => f());
   }, []);
 
   useEffect(() => {
-    fimLogs.current?.scrollIntoView({ behavior: "smooth" });
+    fim.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const entrarPlataforma = useCallback(async () => {
+  const conectar = useCallback(async () => {
+    setErro("");
+    const s = await api().comprasnet.entrar();
+    setConectado(s.autenticado);
+    void api().calibracao.estado().then(setCalib);
+  }, []);
+
+  const carregarDisputas = useCallback(async () => {
     setErro("");
     try {
-      const u = await window.lancebot.plataforma.entrar(email, senha);
-      setUsuario({ email: u.email });
-      setSenha("");
+      setDisputas(await api().disputas.listar());
     } catch (e) {
       setErro(e instanceof Error ? e.message : String(e));
     }
-  }, [email, senha]);
-
-  const entrarComprasnet = useCallback(async () => {
-    const s = await window.lancebot.comprasnet.entrar();
-    setCnAutenticado(s.autenticado);
   }, []);
 
-  const alternarCaptura = useCallback(async () => {
-    if (gravando) {
-      const r = await window.lancebot.captura.parar();
-      setGravando(false);
-      alert(`Captura encerrada. ${r.total} requisições registradas. Use "Exportar" para salvar.`);
-    } else {
-      await window.lancebot.captura.iniciar();
-      setGravando(true);
-      await window.lancebot.comprasnet.abrirSala();
-    }
-  }, [gravando]);
-
-  const exportarCaptura = useCallback(async () => {
-    try {
-      const r = await window.lancebot.captura.exportar();
-      if (r.exportado) alert(`Exportado: ${r.caminho}\n${r.chamadas} chamadas de API registradas.`);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  const iniciarRobo = useCallback(async () => {
+  const iniciar = useCallback(async () => {
     setErro("");
+    if (!selecionada) return setErro("Escolha uma disputa na lista ao lado.");
     setLogs([]);
     try {
-      await window.lancebot.robo.iniciar({
-        ref: { pregaoId, itemNum },
+      await api().robo.iniciar({
+        ref: { pregaoId: selecionada.pregaoId, itemNum: selecionada.itemNum },
         valorLimiteMinimo: Number(piso),
-        tipoDecremento,
+        tipoDecremento: tipo,
         valorDecremento: Number(decremento),
         intervaloMs: Number(intervalo),
         modo
@@ -115,172 +172,258 @@ export default function App() {
     } catch (e) {
       setErro(e instanceof Error ? e.message : String(e));
     }
-  }, [pregaoId, itemNum, piso, tipoDecremento, decremento, intervalo, modo]);
-
-  if (carregando) return <div style={s.centro}>Carregando…</div>;
-
-  if (!usuario) {
-    return (
-      <div style={s.centro}>
-        <div style={s.cartao}>
-          <h1 style={s.titulo}>HORASIS LanceBot</h1>
-          <p style={s.sub}>Entre com sua conta da plataforma.</p>
-          <input style={s.input} placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <input
-            style={s.input}
-            type="password"
-            placeholder="Senha"
-            value={senha}
-            onChange={(e) => setSenha(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void entrarPlataforma()}
-          />
-          {erro && <p style={s.erro}>{erro}</p>}
-          <button style={s.botaoPrimario} onClick={() => void entrarPlataforma()}>
-            Entrar
-          </button>
-        </div>
-      </div>
-    );
-  }
+  }, [selecionada, piso, tipo, decremento, intervalo, modo]);
 
   const rodando = estadoRobo === "rodando";
+  const pronto = calib?.pronto ?? false;
 
   return (
-    <div style={s.pagina}>
-      <header style={s.cabecalho}>
-        <strong>HORASIS LanceBot</strong>
-        <span style={s.sub}>{usuario.email}</span>
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-dot" />
+          LanceBot
+        </div>
+        <div className="row tight">
+          <EstadoPill estado={estadoRobo} />
+          <span className="faint">{usuario.email}</span>
+          <button
+            className="btn ghost"
+            onClick={() => void api().plataforma.sair().then(aoSair)}
+          >
+            Sair
+          </button>
+        </div>
       </header>
 
-      <section style={s.painel}>
-        <h2 style={s.h2}>Conexões</h2>
-        <div style={s.linha}>
-          <span>Compras.gov.br:</span>
-          <strong style={{ color: cnAutenticado ? "#4ade80" : "#f87171" }}>
-            {cnAutenticado ? "sessão ativa" : "sem sessão"}
-          </strong>
-          <button style={s.botao} onClick={() => void entrarComprasnet()}>
-            {cnAutenticado ? "Entrar novamente" : "Entrar no Compras.gov.br"}
-          </button>
-        </div>
-        <p style={s.nota}>
-          O login acontece na página oficial do gov.br, numa janela do navegador. Este aplicativo não vê nem
-          guarda sua senha, e certificado digital funciona normalmente.
-        </p>
-      </section>
-
-      <section style={s.painel}>
-        <h2 style={s.h2}>Modo Captura</h2>
-        <p style={s.nota}>
-          A integração com o portal ainda não foi calibrada. Rode a captura durante um pregão real, exporte o
-          arquivo e use-o para preencher o mapeamento da API.
-        </p>
-        <div style={s.linha}>
-          <button style={s.botao} onClick={() => void alternarCaptura()}>
-            {gravando ? "Parar captura" : "Iniciar captura + abrir sala"}
-          </button>
-          <button style={s.botao} onClick={() => void exportarCaptura()}>
-            Exportar
-          </button>
-        </div>
-      </section>
-
-      <section style={s.painel}>
-        <h2 style={s.h2}>Disputa</h2>
-        <div style={s.grade}>
-          <label style={s.rotulo}>
-            Pregão
-            <input style={s.input} value={pregaoId} onChange={(e) => setPregaoId(e.target.value)} />
-          </label>
-          <label style={s.rotulo}>
-            Item
-            <input style={s.input} value={itemNum} onChange={(e) => setItemNum(e.target.value)} />
-          </label>
-          <label style={s.rotulo}>
-            Piso (R$)
-            <input style={s.input} value={piso} onChange={(e) => setPiso(e.target.value)} />
-          </label>
-          <label style={s.rotulo}>
-            Decremento
-            <input style={s.input} value={decremento} onChange={(e) => setDecremento(e.target.value)} />
-          </label>
-          <label style={s.rotulo}>
-            Tipo
-            <select style={s.input} value={tipoDecremento} onChange={(e) => setTipoDecremento(e.target.value as "fixo" | "percentual")}>
-              <option value="fixo">Fixo (R$)</option>
-              <option value="percentual">Percentual (%)</option>
-            </select>
-          </label>
-          <label style={s.rotulo}>
-            Intervalo (ms)
-            <input style={s.input} value={intervalo} onChange={(e) => setIntervalo(e.target.value)} />
-          </label>
-        </div>
-
-        <div style={{ ...s.linha, marginTop: 12 }}>
-          <label style={s.linha}>
-            <input type="radio" checked={modo === "simulacao"} onChange={() => setModo("simulacao")} />
-            Simulação
-          </label>
-          <label style={s.linha}>
-            <input type="radio" checked={modo === "real"} onChange={() => setModo("real")} />
-            Produção (lances reais)
-          </label>
-        </div>
-
-        {modo === "real" && (
-          <p style={{ ...s.nota, color: "#fbbf24" }}>
-            Modo produção envia lances de verdade, em seu nome. O robô para sozinho se o próximo lance ficaria
-            abaixo do piso informado.
-          </p>
-        )}
-
-        {erro && <p style={s.erro}>{erro}</p>}
-
-        <div style={{ ...s.linha, marginTop: 12 }}>
-          <button style={s.botaoPrimario} onClick={() => void iniciarRobo()} disabled={rodando}>
-            Iniciar
-          </button>
-          <button style={s.botao} onClick={() => void window.lancebot.robo.parar()} disabled={!rodando}>
-            Parar
-          </button>
-          <span style={s.sub}>Estado: {estadoRobo}</span>
-        </div>
-      </section>
-
-      <section style={{ ...s.painel, flex: 1, minHeight: 220 }}>
-        <h2 style={s.h2}>Log de auditoria</h2>
-        <div style={s.log}>
-          {logs.length === 0 && <span style={s.sub}>Sem eventos.</span>}
-          {logs.map((l, i) => (
-            <div key={i} style={{ color: CORES[l.nivel] ?? "#e2e8f0" }}>
-              <span style={s.sub}>{new Date(l.em).toLocaleTimeString("pt-BR")} </span>
-              {l.msg}
+      <div className="main">
+        {/* ---------------- Coluna esquerda ---------------- */}
+        <div className="col">
+          <section className="card">
+            <div className="card-head">
+              <h2 className="card-title">Compras.gov.br</h2>
+              <span className={`pill ${conectado ? "ok" : "idle"}`}>
+                <span className="dot" />
+                {conectado ? "conectado" : "desconectado"}
+              </span>
             </div>
-          ))}
-          <div ref={fimLogs} />
+
+            <p className="muted">
+              O login abre a página oficial do gov.br. Sua senha não passa por este aplicativo, e certificado
+              digital funciona normalmente.
+            </p>
+
+            <div className="row tight">
+              <button className="btn" onClick={() => void conectar()}>
+                {conectado ? "Reconectar" : "Entrar no gov.br"}
+              </button>
+              {conectado && (
+                <button className="btn" onClick={() => void api().comprasnet.abrirPainel()}>
+                  Abrir portal
+                </button>
+              )}
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-head">
+              <h2 className="card-title">Calibração</h2>
+              <span className={`pill ${pronto ? "ok" : "warn"}`}>
+                <span className="dot" />
+                {pronto ? "pronta" : "em andamento"}
+              </span>
+            </div>
+
+            <div className="steps">
+              <Passo feito={Boolean(calib?.listaDisputas)} texto="Reconhecer o painel de disputas" />
+              <Passo feito={Boolean(calib?.estadoItem)} texto="Ler o valor dos lances de um item" />
+              <Passo feito={Boolean(calib?.envioLance)} texto="Identificar o envio de lance" />
+            </div>
+
+            <p className="faint">
+              {pronto
+                ? "O aplicativo aprendeu o necessário para operar em produção."
+                : "Navegue pelo portal e abra a sala de disputa: o aplicativo aprende sozinho, sem exportar nada. O envio de lance é reconhecido quando você manda um lance manualmente uma vez."}
+            </p>
+          </section>
+
+          <section className="card flex">
+            <div className="card-head">
+              <h2 className="card-title">Suas disputas</h2>
+              <button className="btn ghost" onClick={() => void carregarDisputas()} disabled={!conectado}>
+                Atualizar
+              </button>
+            </div>
+
+            {disputas.length === 0 ? (
+              <div className="empty">
+                <p className="muted">Nenhuma disputa carregada.</p>
+                <p className="faint">
+                  {conectado ? "Clique em Atualizar." : "Entre no gov.br primeiro."}
+                </p>
+              </div>
+            ) : (
+              <div className="list">
+                {disputas.map((d) => (
+                  <div
+                    key={`${d.pregaoId}-${d.itemNum}`}
+                    className="dispute"
+                    data-sel={selecionada?.pregaoId === d.pregaoId && selecionada?.itemNum === d.itemNum}
+                    onClick={() => setSelecionada(d)}
+                  >
+                    <div className="dispute-top">
+                      <span className="dispute-id">
+                        {d.pregaoId}
+                        {d.itemNum && ` · item ${d.itemNum}`}
+                      </span>
+                      <span className={`pill ${d.emFaseDeLances ? "ok" : "idle"}`}>
+                        {d.emFaseDeLances ? "em lances" : d.situacao || "—"}
+                      </span>
+                    </div>
+                    <span className="dispute-desc">{d.descricao}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
-      </section>
+
+        {/* ---------------- Coluna direita ---------------- */}
+        <div className="col">
+          <section className="card">
+            <div className="card-head">
+              <h2 className="card-title">Configuração da disputa</h2>
+              {selecionada && (
+                <button className="btn ghost" onClick={() => void api().comprasnet.abrirSala(selecionada.pregaoId)}>
+                  Abrir sala
+                </button>
+              )}
+            </div>
+
+            {selecionada ? (
+              <p className="muted">
+                <strong>{selecionada.pregaoId}</strong>
+                {selecionada.itemNum && ` · item ${selecionada.itemNum}`} — {selecionada.descricao}
+              </p>
+            ) : (
+              <p className="faint">Escolha uma disputa na lista à esquerda.</p>
+            )}
+
+            <div className="grid-2">
+              <div className="field">
+                <label htmlFor="piso">Piso — menor valor aceito (R$)</label>
+                <input id="piso" className="input" value={piso} onChange={(e) => setPiso(e.target.value)} placeholder="0,00" />
+              </div>
+              <div className="field">
+                <label htmlFor="dec">Decremento</label>
+                <input id="dec" className="input" value={decremento} onChange={(e) => setDecremento(e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="tipo">Tipo de decremento</label>
+                <select
+                  id="tipo"
+                  className="input"
+                  value={tipo}
+                  onChange={(e) => setTipo(e.target.value as "fixo" | "percentual")}
+                >
+                  <option value="fixo">Reais</option>
+                  <option value="percentual">Percentual</option>
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="int">Intervalo de leitura (ms)</label>
+                <input id="int" className="input" value={intervalo} onChange={(e) => setIntervalo(e.target.value)} />
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Modo de operação</label>
+              <div className="segmented">
+                <button data-on={modo === "simulacao"} onClick={() => setModo("simulacao")}>
+                  Simulação
+                </button>
+                <button data-on={modo === "real"} data-live="true" onClick={() => setModo("real")}>
+                  Produção
+                </button>
+              </div>
+            </div>
+
+            {modo === "real" && (
+              <p className="muted" style={{ color: "var(--warn)" }}>
+                Produção envia lances reais em seu nome. O robô para sozinho antes de cruzar o piso.
+              </p>
+            )}
+
+            {erro && <p className="err">{erro}</p>}
+
+            <div className="row spread">
+              <div className="row tight">
+                <button className="btn primary" onClick={() => void iniciar()} disabled={rodando || !selecionada}>
+                  Ativar robô
+                </button>
+                <button className="btn danger" onClick={() => void api().robo.parar()} disabled={!rodando}>
+                  Parar
+                </button>
+              </div>
+              {modo === "real" && !pronto && <span className="faint">Calibração ainda incompleta</span>}
+            </div>
+          </section>
+
+          <section className="card flex">
+            <div className="card-head">
+              <h2 className="card-title">Log de auditoria</h2>
+              {logs.length > 0 && (
+                <button className="btn ghost" onClick={() => setLogs([])}>
+                  Limpar
+                </button>
+              )}
+            </div>
+
+            <div className="log">
+              {logs.length === 0 ? (
+                <span className="faint">Sem eventos.</span>
+              ) : (
+                logs.map((l, i) => (
+                  <div className="log-line" key={i}>
+                    <span className="log-time">{new Date(l.em).toLocaleTimeString("pt-BR")}</span>
+                    <span className="log-msg" data-n={l.nivel}>
+                      {l.msg}
+                    </span>
+                  </div>
+                ))
+              )}
+              <div ref={fim} />
+            </div>
+          </section>
+        </div>
+      </div>
     </div>
   );
 }
 
-const s: Record<string, React.CSSProperties> = {
-  centro: { display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0f172a", color: "#e2e8f0" },
-  pagina: { display: "flex", flexDirection: "column", gap: 12, padding: 16, background: "#0f172a", color: "#e2e8f0", minHeight: "100vh", fontFamily: "system-ui, sans-serif", fontSize: 14 },
-  cabecalho: { display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: 8, borderBottom: "1px solid #1e293b" },
-  cartao: { background: "#1e293b", padding: 28, borderRadius: 12, width: 340, display: "flex", flexDirection: "column", gap: 10 },
-  painel: { background: "#1e293b", padding: 16, borderRadius: 10, display: "flex", flexDirection: "column", gap: 8 },
-  titulo: { margin: 0, fontSize: 20 },
-  h2: { margin: 0, fontSize: 13, textTransform: "uppercase", letterSpacing: 0.6, color: "#94a3b8" },
-  sub: { color: "#94a3b8", fontSize: 12 },
-  nota: { color: "#94a3b8", fontSize: 12, margin: 0, lineHeight: 1.5 },
-  erro: { color: "#f87171", fontSize: 12, margin: 0 },
-  input: { background: "#0f172a", border: "1px solid #334155", borderRadius: 6, padding: "8px 10px", color: "#e2e8f0", fontSize: 13, width: "100%", boxSizing: "border-box" },
-  rotulo: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#94a3b8" },
-  grade: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 },
-  linha: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
-  botao: { background: "#334155", border: "none", borderRadius: 6, padding: "8px 14px", color: "#e2e8f0", cursor: "pointer", fontSize: 13 },
-  botaoPrimario: { background: "#f97316", border: "none", borderRadius: 6, padding: "8px 18px", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 13 },
-  log: { background: "#0f172a", borderRadius: 6, padding: 10, overflowY: "auto", maxHeight: 260, fontFamily: "ui-monospace, monospace", fontSize: 12, lineHeight: 1.6 }
-};
+/* ------------------------------------------------------------------ Peças */
+
+function Passo({ feito, texto }: { feito: boolean; texto: string }) {
+  return (
+    <div className="step" data-done={feito}>
+      <span className="step-mark">{feito ? "✓" : ""}</span>
+      <span className="step-text">{texto}</span>
+    </div>
+  );
+}
+
+function EstadoPill({ estado }: { estado: string }) {
+  const mapa: Record<string, { classe: string; texto: string }> = {
+    rodando: { classe: "ok", texto: "operando" },
+    "pausado-por-margem": { classe: "warn", texto: "pausado — margem" },
+    erro: { classe: "danger", texto: "erro" },
+    parado: { classe: "idle", texto: "parado" }
+  };
+  const { classe, texto } = mapa[estado] ?? mapa.parado;
+  return (
+    <span className={`pill ${classe}`}>
+      <span className="dot" />
+      {texto}
+    </span>
+  );
+}
