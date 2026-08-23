@@ -18,6 +18,48 @@ const api = () => window.lancebot;
 export default function App() {
   const [usuario, setUsuario] = useState<Usuario | null>(null);
   const [carregando, setCarregando] = useState(true);
+  const [avisoInicial, setAvisoInicial] = useState("");
+
+  // A restauração da sessão precisa rodar aqui, e não no Portão: enquanto `carregando`
+  // for true o Portão nem é montado, então um efeito lá dentro nunca dispararia e a
+  // tela de carregamento ficaria presa para sempre.
+  useEffect(() => {
+    let vivo = true;
+
+    const concluir = (aviso = "") => {
+      if (!vivo) return;
+      if (aviso) setAvisoInicial(aviso);
+      setCarregando(false);
+    };
+
+    // Sem a ponte com o processo principal nada funciona; travar numa tela de
+    // carregamento esconderia a causa em vez de mostrá-la.
+    if (!window.lancebot) {
+      concluir("A ponte com o processo principal não carregou. Reinstale o aplicativo.");
+      return;
+    }
+
+    // Rede de segurança: nenhuma demora na restauração pode prender a tela inicial.
+    const limite = setTimeout(() => concluir(), 8000);
+
+    window.lancebot.plataforma
+      .restaurar()
+      .then((u) => {
+        if (vivo && u) setUsuario(u);
+      })
+      .catch(() => {
+        // Sessão anterior inválida apenas leva à tela de login.
+      })
+      .finally(() => {
+        clearTimeout(limite);
+        concluir();
+      });
+
+    return () => {
+      vivo = false;
+      clearTimeout(limite);
+    };
+  }, []);
 
   if (carregando) {
     return (
@@ -30,33 +72,17 @@ export default function App() {
   return usuario ? (
     <Cockpit usuario={usuario} aoSair={() => setUsuario(null)} />
   ) : (
-    <Portao aoEntrar={setUsuario} aoTerminarCarga={() => setCarregando(false)} carregando={carregando} />
+    <Portao aoEntrar={setUsuario} avisoInicial={avisoInicial} />
   );
 }
 
 /* ------------------------------------------------------------------ Portão */
 
-function Portao({
-  aoEntrar,
-  aoTerminarCarga,
-  carregando
-}: {
-  aoEntrar: (u: Usuario) => void;
-  aoTerminarCarga: () => void;
-  carregando: boolean;
-}) {
+function Portao({ aoEntrar, avisoInicial }: { aoEntrar: (u: Usuario) => void; avisoInicial: string }) {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
-  const [erro, setErro] = useState("");
+  const [erro, setErro] = useState(avisoInicial);
   const [entrando, setEntrando] = useState(false);
-
-  useEffect(() => {
-    if (!carregando) return;
-    void api()
-      .plataforma.restaurar()
-      .then((u) => u && aoEntrar(u))
-      .finally(aoTerminarCarga);
-  }, [carregando, aoEntrar, aoTerminarCarga]);
 
   const entrar = useCallback(async () => {
     setErro("");

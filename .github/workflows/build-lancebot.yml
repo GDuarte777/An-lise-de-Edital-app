@@ -44,6 +44,12 @@ jobs:
       - name: Compilar aplicativo
         run: npm run build
 
+      # Sobe o aplicativo de verdade e confere que a interface passa da tela inicial.
+      # Uma versão que abria e ficava presa em "Carregando…" já foi publicada por
+      # faltar exatamente esta checagem: tipos e testes de unidade passavam.
+      - name: Verificar que a interface abre
+        run: npm run test:ui
+
       - name: Gerar instalador
         run: npx electron-builder --win --publish never
 
@@ -70,7 +76,9 @@ jobs:
             Download direto:
             https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Setup.exe
 
-            O envio de lances reais depende de calibrar a integração com o portal;
-            até lá o aplicativo opera em modo simulação e no Modo Captura.
+            A calibração com o portal é automática: basta entrar no gov.br pelo
+            aplicativo e navegar pela sala de disputa. O envio de lance é reconhecido
+            quando você manda um lance manualmente uma vez; até lá o robô opera em
+            modo simulação.
 
             Build: ${{ github.sha }}

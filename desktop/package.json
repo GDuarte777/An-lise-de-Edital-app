@@ -12,7 +12,8 @@
     "start": "electron-vite preview",
     "dist:win": "electron-vite build && electron-builder --win",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx src/main/engine/strategy.test.ts"
+    "test": "tsx src/main/engine/strategy.test.ts",
+    "test:ui": "electron scripts/smoke-ui.cjs --no-sandbox"
   },
   "dependencies": {
     "@supabase/auth-js": "^2.112.3"
