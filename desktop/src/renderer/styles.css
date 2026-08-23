@@ -252,6 +252,7 @@ body {
 .log-msg[data-n="proprio"]     { color: var(--info); }
 .log-msg[data-n="sucesso"]     { color: var(--ok); }
 .log-msg[data-n="alerta"]      { color: var(--danger); }
+.log-msg[data-n="pregoeiro"]   { color: #c4b5fd; font-style: italic; }
 
 /* ---------- Login ---------- */
 

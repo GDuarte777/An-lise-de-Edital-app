@@ -57,6 +57,7 @@ export interface ApiLanceBot {
   calibracao: {
     estado(): Promise<Calibracao>;
     esquecer(): Promise<{ ok: boolean }>;
+    observadas(): Promise<Array<{ metodo: string; url: string; status: number; em: string }>>;
     aoAtualizar(cb: (e: unknown) => void): () => void;
   };
   disputas: {
@@ -92,6 +93,7 @@ const api: ApiLanceBot = {
   calibracao: {
     estado: () => ipcRenderer.invoke("calibracao:estado"),
     esquecer: () => ipcRenderer.invoke("calibracao:esquecer"),
+    observadas: () => ipcRenderer.invoke("calibracao:observadas"),
     aoAtualizar: (cb) => assinar("calibracao:atualizada", cb)
   },
   disputas: {

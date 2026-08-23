@@ -139,6 +139,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [disputas, setDisputas] = useState<Disputa[]>([]);
   const [selecionada, setSelecionada] = useState<Disputa | null>(null);
   const [erro, setErro] = useState("");
+  const [observadas, setObservadas] = useState<Array<{ metodo: string; url: string; status: number }> | null>(null);
 
   const [piso, setPiso] = useState("");
   const [decremento, setDecremento] = useState("1");
@@ -168,9 +169,17 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
   const conectar = useCallback(async () => {
     setErro("");
-    const s = await api().comprasnet.entrar();
-    setConectado(s.autenticado);
-    void api().calibracao.estado().then(setCalib);
+    try {
+      const s = await api().comprasnet.entrar();
+      setConectado(s.autenticado);
+      if (!s.autenticado) {
+        setErro("A janela foi fechada sem login concluído. Entre na sua conta gov.br e aguarde o portal carregar.");
+      }
+      void api().calibracao.estado().then(setCalib);
+    } catch (e) {
+      // Sem isto, uma falha ao abrir a janela de login não deixava rastro na tela.
+      setErro(`Não foi possível abrir o login do gov.br: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }, []);
 
   const carregarDisputas = useCallback(async () => {
@@ -271,6 +280,37 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                 ? "O aplicativo aprendeu o necessário para operar em produção."
                 : "Navegue pelo portal e abra a sala de disputa: o aplicativo aprende sozinho, sem exportar nada. O envio de lance é reconhecido quando você manda um lance manualmente uma vez."}
             </p>
+
+            <button
+              className="btn ghost"
+              style={{ alignSelf: "flex-start" }}
+              onClick={() =>
+                void api()
+                  .calibracao.observadas()
+                  .then((o) => setObservadas(o))
+              }
+            >
+              {observadas ? `Ver chamadas observadas (${observadas.length})` : "Ver o que o portal expôs"}
+            </button>
+
+            {observadas && (
+              <div className="log" style={{ maxHeight: 150 }}>
+                {observadas.length === 0 ? (
+                  <span className="faint">
+                    Nada observado ainda. Entre no gov.br e abra a sala de disputa.
+                  </span>
+                ) : (
+                  observadas.slice(0, 40).map((o, i) => (
+                    <div className="log-line" key={i}>
+                      <span className="log-time">{o.metodo}</span>
+                      <span className="log-msg" data-n="sistema">
+                        {o.status} · {o.url.replace(/^https:\/\//, "").slice(0, 110)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </section>
 
           <section className="card flex">

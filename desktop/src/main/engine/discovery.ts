@@ -101,9 +101,21 @@ export function gerarPadrao(url: string, pregaoId?: string, itemNum?: string): s
   return padrao;
 }
 
+/** Registro cru do que foi visto, para diagnóstico quando a classificação não acerta. */
+export interface ChamadaObservada {
+  metodo: string;
+  url: string;
+  status: number;
+  em: string;
+  /** Campos do topo da resposta, quando ela é JSON — ajuda a identificar o endpoint. */
+  camposVistos?: string[];
+  classificadaComo?: PapelEndpoint;
+}
+
 export class DescobridorApi {
   private estado: EstadoCalibracao = {};
   private readonly contagem = new Map<string, number>();
+  private readonly observadas: ChamadaObservada[] = [];
   private ligado = false;
   private aoAprender: (e: EstadoCalibracao) => void = () => {};
 
@@ -159,6 +171,18 @@ export class DescobridorApi {
 
       const chave = `${detalhes.method} ${gerarPadrao(detalhes.url)}`;
       this.contagem.set(chave, (this.contagem.get(chave) ?? 0) + 1);
+
+      // Guarda o rastro cru: se a heurística errar, o operador consegue ver o que o
+      // portal realmente expôs, em vez de ficar sem pista nenhuma.
+      if (!this.observadas.some((o) => o.metodo === detalhes.method && o.url === detalhes.url)) {
+        this.observadas.push({
+          metodo: detalhes.method,
+          url: detalhes.url,
+          status: detalhes.statusCode,
+          em: new Date().toISOString()
+        });
+        if (this.observadas.length > 200) this.observadas.shift();
+      }
 
       if (detalhes.method === "POST" || detalhes.method === "PUT") {
         void this.classificarEnvio(detalhes.url, detalhes.method);
@@ -255,6 +279,11 @@ export class DescobridorApi {
       ocorrencias: (this.estado.envioLance?.ocorrencias ?? 0) + 1
     };
     await this.salvar();
+  }
+
+  /** Tudo que foi visto do portal, mais recente primeiro. Base do diagnóstico. */
+  get chamadasObservadas(): ChamadaObservada[] {
+    return [...this.observadas].reverse();
   }
 
   /** Corrige manualmente o que foi aprendido, quando a heurística erra. */

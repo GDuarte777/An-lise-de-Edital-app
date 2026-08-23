@@ -22,6 +22,13 @@ export interface EstadoItem {
   lidoEm: Date;
 }
 
+/** Mensagem do chat oficial da sala, normalmente do pregoeiro. */
+export interface MensagemChat {
+  autor: string;
+  texto: string;
+  em?: string;
+}
+
 export interface ReferenciaItem {
   pregaoId: string;
   itemNum: string;
@@ -40,6 +47,12 @@ export interface PortalAdapter {
 
   lerEstado(ref: ReferenciaItem): Promise<EstadoItem>;
   enviarLance(ref: ReferenciaItem, valor: number): Promise<ResultadoEnvio>;
+
+  /**
+   * Mensagens do pregoeiro desde a última leitura. Opcional: um adapter que ainda não
+   * saiba onde fica o chat simplesmente não implementa, e o robô segue operando.
+   */
+  lerMensagens?(ref: ReferenciaItem): Promise<MensagemChat[]>;
 }
 
 /**
