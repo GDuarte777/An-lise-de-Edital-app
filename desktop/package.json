@@ -12,7 +12,7 @@
     "start": "electron-vite preview",
     "dist:win": "electron-vite build && electron-builder --win",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx src/main/engine/strategy.test.ts",
+    "test": "tsx src/main/engine/strategy.test.ts && tsx src/main/engine/modelo-lance.test.ts",
     "test:ui": "electron scripts/smoke-ui.cjs --no-sandbox"
   },
   "dependencies": {

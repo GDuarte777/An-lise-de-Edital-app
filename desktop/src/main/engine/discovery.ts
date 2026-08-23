@@ -31,6 +31,12 @@ export interface EndpointAprendido {
   aprendidoEm: string;
   /** Quantas vezes uma chamada com esse padrão foi observada. Mais vezes = mais confiança. */
   ocorrencias: number;
+  /**
+   * Corpo real da requisição, com o valor do lance trocado por {valor}. Só existe no
+   * endpoint de envio, e é o que permite ao robô montar o POST no formato que o portal
+   * espera em vez de tentar adivinhar nomes de campo.
+   */
+  corpoModelo?: string;
 }
 
 export interface EstadoCalibracao {
@@ -116,6 +122,8 @@ export class DescobridorApi {
   private estado: EstadoCalibracao = {};
   private readonly contagem = new Map<string, number>();
   private readonly observadas: ChamadaObservada[] = [];
+  /** Corpo cru do último POST de lance por URL, à espera de virar modelo. */
+  private readonly corpoCapturado = new Map<string, string>();
   private ligado = false;
   private aoAprender: (e: EstadoCalibracao) => void = () => {};
 
@@ -160,6 +168,16 @@ export class DescobridorApi {
     this.ligado = true;
 
     const filtro = { urls: ["https://*.comprasnet.gov.br/*", "https://*.compras.gov.br/*"] };
+
+    // O corpo da requisição só é visível em onBeforeRequest. É daqui que sai o formato
+    // exato do POST de lance, capturado do lance que o próprio operador envia.
+    this.sessao.webRequest.onBeforeRequest(filtro, (detalhes, callback) => {
+      if (detalhes.method === "POST" && /lance|proposta|oferta/i.test(detalhes.url)) {
+        const bruto = detalhes.uploadData?.[0]?.bytes?.toString("utf-8");
+        if (bruto) this.corpoCapturado.set(detalhes.url, bruto);
+      }
+      callback({});
+    });
 
     this.sessao.webRequest.onCompleted(filtro, (detalhes) => {
       // Em execução o Electron reporta "xhr" para chamadas de dados, mas esse valor não
@@ -276,9 +294,31 @@ export class DescobridorApi {
       campos: {},
       exemploUrl: url,
       aprendidoEm: new Date().toISOString(),
-      ocorrencias: (this.estado.envioLance?.ocorrencias ?? 0) + 1
+      ocorrencias: (this.estado.envioLance?.ocorrencias ?? 0) + 1,
+      corpoModelo: this.montarModeloDeCorpo(this.corpoCapturado.get(url)) ?? this.estado.envioLance?.corpoModelo
     };
     await this.salvar();
+  }
+
+  /**
+   * Converte o corpo observado num modelo reutilizável, trocando o valor monetário por
+   * {valor}. Assim o robô repete exatamente o formato do portal — mesmos campos, mesma
+   * ordem, mesmo tipo — em vez de inventar um payload próprio.
+   */
+  montarModeloDeCorpo(bruto: string | undefined): string | undefined {
+    if (!bruto) return undefined;
+
+    // Escolhe o número com casa decimal mais "caro" do corpo: numa requisição de lance,
+    // é o valor ofertado. Identificadores de item e pregão são inteiros.
+    const candidatos = [...bruto.matchAll(/-?\d+[.,]\d{1,2}/g)].map((m) => m[0]);
+    if (candidatos.length === 0) return undefined;
+
+    const alvo = candidatos.reduce((a, b) =>
+      Number(b.replace(",", ".")) > Number(a.replace(",", ".")) ? b : a
+    );
+
+    // Substitui só a ocorrência escolhida, preservando o resto do payload intacto.
+    return bruto.replace(alvo, "{valor}");
   }
 
   /** Tudo que foi visto do portal, mais recente primeiro. Base do diagnóstico. */

@@ -110,28 +110,24 @@ export class ComprasnetAdapter implements PortalAdapter {
   async enviarLance(ref: ReferenciaItem, valor: number): Promise<ResultadoEnvio> {
     const endpoint = this.descobridor.calibracao.envioLance;
     if (!endpoint) throw new PortalNaoCalibradoError("envio de lance");
+    if (!endpoint.corpoModelo) throw new PortalNaoCalibradoError("formato do lance");
+
+    // Repete o formato exato que o portal recebeu do proprio operador, trocando apenas o
+    // valor. Montar um payload nosso aqui seria voltar a adivinhar campos.
+    const modelo = endpoint.corpoModelo;
+    const corpo = modelo.replace("{valor}", valor.toFixed(2));
+    const ehJson = modelo.trimStart().startsWith("{") || modelo.trimStart().startsWith("[");
 
     const resp = await this.sessao.fetch(montarUrl(endpoint, ref), {
       method: endpoint.metodo,
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(this.montarCorpo(ref, valor))
+      headers: {
+        "Content-Type": ehJson ? "application/json" : "application/x-www-form-urlencoded",
+        Accept: "application/json"
+      },
+      body: corpo
     });
 
     const texto = await resp.text();
     return { aceito: resp.ok, mensagem: `HTTP ${resp.status} — ${texto.slice(0, 400)}` };
-  }
-
-  /**
-   * Corpo do POST de lance. O formato exato é aprendido junto com o endpoint quando o
-   * operador envia um lance manualmente pela sala; até lá usamos as chaves mais comuns,
-   * e a resposta do portal (devolvida crua no log) revela se o formato foi aceito.
-   */
-  private montarCorpo(ref: ReferenciaItem, valor: number): Record<string, unknown> {
-    return {
-      valor,
-      valorLance: valor,
-      numeroItem: ref.itemNum,
-      item: ref.itemNum
-    };
   }
 }
