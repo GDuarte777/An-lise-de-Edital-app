@@ -1,4 +1,4 @@
-import { BrowserWindow, session, type Session } from "electron";
+import { app, BrowserWindow, dialog, session, type Session } from "electron";
 
 /**
  * Login no Compras.gov.br.
@@ -45,8 +45,54 @@ const COOKIE_DE_SESSAO = /sess|token|auth|jwt|jsession|sso|acesso|logged|usuario
 /** Cookies conhecidos por existirem sem login — nunca contam como autenticação. */
 const COOKIE_IGNORADO = /cookie|consent|lgpd|banner|_ga|_gid|analytics|gtm|utm|theme|idioma|accessib/i;
 
+/**
+ * User-Agent do Chromium sem o sufixo "Electron/x.y.z".
+ *
+ * Isto não é disfarce: o processo É um Chromium, do mesmo motor que o Chrome usa. O
+ * sufixo do Electron faz portais de governo tratarem a sessão como cliente
+ * desconhecido e recusarem o login. Declarar o motor que de fato renderiza a página é
+ * diferente de forjar um navegador a partir de um servidor, que era o que a versão
+ * antiga deste projeto fazia.
+ */
+const USER_AGENT_CHROMIUM =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+
+let sessaoPreparada = false;
+
 export function sessaoComprasnet(): Session {
-  return session.fromPartition(PARTITION);
+  const ses = session.fromPartition(PARTITION);
+  if (!sessaoPreparada) {
+    ses.setUserAgent(USER_AGENT_CHROMIUM);
+    sessaoPreparada = true;
+  }
+  return ses;
+}
+
+/**
+ * Habilita login por certificado digital A1/A3.
+ *
+ * Sem tratar este evento o Chromium escolhe sozinho — normalmente o primeiro
+ * certificado da lista, ou nenhum — e a autenticação falha em silêncio. Aqui o operador
+ * escolhe qual certificado usar, e a chave privada nunca sai do repositório do sistema
+ * nem do token físico.
+ */
+export function habilitarCertificadoDigital(): void {
+  app.on("select-client-certificate", (evento, _webContents, _url, lista, callback) => {
+    evento.preventDefault();
+
+    if (lista.length === 0) return;
+    if (lista.length === 1) return callback(lista[0]);
+
+    const escolha = dialog.showMessageBoxSync({
+      type: "question",
+      title: "Certificado digital",
+      message: "Escolha o certificado para entrar no Compras.gov.br",
+      buttons: lista.map((c) => c.subjectName || c.issuerName || "Certificado"),
+      cancelId: -1
+    });
+
+    if (escolha >= 0 && escolha < lista.length) callback(lista[escolha]);
+  });
 }
 
 export interface StatusSessao {
