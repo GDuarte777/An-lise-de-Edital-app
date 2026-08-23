@@ -7,22 +7,60 @@ import { contextBridge, ipcRenderer } from "electron";
  * do Compras.gov.br diretamente.
  */
 
+export interface Usuario {
+  id: string;
+  email: string;
+}
+
+export interface StatusSessao {
+  autenticado: boolean;
+  cookiesEncontrados: number;
+}
+
+export interface EndpointAprendido {
+  papel: string;
+  padrao: string;
+  metodo: string;
+  campos: Record<string, string>;
+  aprendidoEm: string;
+  ocorrencias: number;
+}
+
+export interface Calibracao {
+  estadoItem?: EndpointAprendido;
+  listaDisputas?: EndpointAprendido;
+  envioLance?: EndpointAprendido;
+  pronto: boolean;
+}
+
+export interface Disputa {
+  pregaoId: string;
+  itemNum: string;
+  descricao: string;
+  situacao: string;
+  emFaseDeLances: boolean;
+}
+
 export interface ApiLanceBot {
   plataforma: {
-    entrar(email: string, senha: string): Promise<{ id: string; email: string }>;
-    restaurar(): Promise<{ id: string; email: string } | null>;
+    entrar(email: string, senha: string): Promise<Usuario>;
+    restaurar(): Promise<Usuario | null>;
     sair(): Promise<void>;
   };
   comprasnet: {
-    entrar(): Promise<{ autenticado: boolean; cookiesEncontrados: number }>;
-    status(): Promise<{ autenticado: boolean; cookiesEncontrados: number }>;
+    entrar(): Promise<StatusSessao>;
+    status(): Promise<StatusSessao>;
     sair(): Promise<void>;
-    abrirSala(): Promise<number>;
+    abrirSala(pregaoId?: string): Promise<number>;
+    abrirPainel(): Promise<number>;
   };
-  captura: {
-    iniciar(): Promise<{ gravando: boolean }>;
-    parar(): Promise<{ gravando: boolean; total: number }>;
-    exportar(): Promise<{ exportado: boolean; caminho?: string; chamadas?: number }>;
+  calibracao: {
+    estado(): Promise<Calibracao>;
+    esquecer(): Promise<{ ok: boolean }>;
+    aoAtualizar(cb: (e: unknown) => void): () => void;
+  };
+  disputas: {
+    listar(): Promise<Disputa[]>;
   };
   robo: {
     iniciar(cfg: unknown): Promise<{ iniciado: boolean; portal: string; ehSimulacao: boolean }>;
@@ -30,6 +68,12 @@ export interface ApiLanceBot {
     aoLog(cb: (e: unknown) => void): () => void;
     aoEstado(cb: (e: string) => void): () => void;
   };
+}
+
+function assinar<T>(canal: string, cb: (carga: T) => void): () => void {
+  const h = (_e: unknown, carga: T) => cb(carga);
+  ipcRenderer.on(canal, h as never);
+  return () => ipcRenderer.removeListener(canal, h as never);
 }
 
 const api: ApiLanceBot = {
@@ -42,26 +86,22 @@ const api: ApiLanceBot = {
     entrar: () => ipcRenderer.invoke("comprasnet:entrar"),
     status: () => ipcRenderer.invoke("comprasnet:status"),
     sair: () => ipcRenderer.invoke("comprasnet:sair"),
-    abrirSala: () => ipcRenderer.invoke("comprasnet:abrirSala")
+    abrirSala: (pregaoId) => ipcRenderer.invoke("comprasnet:abrirSala", pregaoId),
+    abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel")
   },
-  captura: {
-    iniciar: () => ipcRenderer.invoke("captura:iniciar"),
-    parar: () => ipcRenderer.invoke("captura:parar"),
-    exportar: () => ipcRenderer.invoke("captura:exportar")
+  calibracao: {
+    estado: () => ipcRenderer.invoke("calibracao:estado"),
+    esquecer: () => ipcRenderer.invoke("calibracao:esquecer"),
+    aoAtualizar: (cb) => assinar("calibracao:atualizada", cb)
+  },
+  disputas: {
+    listar: () => ipcRenderer.invoke("disputas:listar")
   },
   robo: {
     iniciar: (cfg) => ipcRenderer.invoke("robo:iniciar", cfg),
     parar: () => ipcRenderer.invoke("robo:parar"),
-    aoLog: (cb) => {
-      const h = (_e: unknown, carga: unknown) => cb(carga);
-      ipcRenderer.on("robo:log", h);
-      return () => ipcRenderer.removeListener("robo:log", h);
-    },
-    aoEstado: (cb) => {
-      const h = (_e: unknown, carga: string) => cb(carga);
-      ipcRenderer.on("robo:estado", h);
-      return () => ipcRenderer.removeListener("robo:estado", h);
-    }
+    aoLog: (cb) => assinar("robo:log", cb),
+    aoEstado: (cb) => assinar<string>("robo:estado", cb)
   }
 };
 
