@@ -119,7 +119,10 @@ export async function verificarSessao(): Promise<StatusSessao> {
     }
   }
 
-  return { autenticado: sessao > 0, verificadoEm: new Date(), cookiesEncontrados: sessao };
+  // Um único cookie httpOnly não distingue visitante de usuário logado: o portal cria
+  // sessão anônima na primeira visita. Exigir vários reduz o falso positivo, mas nem
+  // isso é prova — por isso a interface fala em "sessão detectada", e não em "conectado".
+  return { autenticado: sessao >= 3, verificadoEm: new Date(), cookiesEncontrados: sessao };
 }
 
 /**
@@ -158,15 +161,13 @@ export async function abrirLogin(paiId?: number): Promise<StatusSessao> {
     }
   }
 
-  // Fecha a janela sozinha quando o SSO devolve o operador ao portal já autenticado,
-  // para ele não precisar adivinhar que o login terminou.
-  janela.webContents.on("did-navigate", (_e, url) => {
-    if (!/sso\.acesso\.gov\.br/i.test(url) && /comprasnet\.gov\.br|compras\.gov\.br/i.test(url)) {
-      void verificarSessao().then((s) => {
-        if (s.autenticado && !janela.isDestroyed()) janela.close();
-      });
-    }
-  });
+  // A janela NÃO se fecha sozinha, de propósito.
+  //
+  // Uma versão anterior fechava a janela ao detectar navegação dentro de compras.gov.br
+  // com "sessão presente". Só que o portal cria cookie httpOnly antes de qualquer login:
+  // ao escolher o perfil de fornecedor, a regra disparava e matava a janela no meio do
+  // fluxo — o operador nunca chegava à tela de senha. Quem decide quando o login
+  // terminou é o operador, fechando a janela.
 
   return new Promise<StatusSessao>((resolve) => {
     janela.on("closed", () => {

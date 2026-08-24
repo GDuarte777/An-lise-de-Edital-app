@@ -173,7 +173,9 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       const s = await api().comprasnet.entrar();
       setConectado(s.autenticado);
       if (!s.autenticado) {
-        setErro("A janela foi fechada sem login concluído. Entre na sua conta gov.br e aguarde o portal carregar.");
+        setErro(
+          "Ainda não há sessão. Refaça o login: escolha o perfil, entre com sua conta gov.br e só então feche a janela do portal."
+        );
       }
       void api().calibracao.estado().then(setCalib);
     } catch (e) {
@@ -239,13 +241,14 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
               <h2 className="card-title">Compras.gov.br</h2>
               <span className={`pill ${conectado ? "ok" : "idle"}`}>
                 <span className="dot" />
-                {conectado ? "conectado" : "desconectado"}
+                {conectado ? "sessão detectada" : "sem sessão"}
               </span>
             </div>
 
             <p className="muted">
               O login abre a página oficial do gov.br. Sua senha não passa por este aplicativo, e certificado
-              digital funciona normalmente.
+              digital funciona normalmente. <strong>Feche a janela do portal quando terminar de entrar</strong> —
+              o aplicativo não a fecha sozinha para não interromper o login.
             </p>
 
             <div className="row tight">
