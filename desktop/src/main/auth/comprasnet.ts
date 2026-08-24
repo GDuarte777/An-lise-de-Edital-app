@@ -128,8 +128,15 @@ export async function verificarSessao(): Promise<StatusSessao> {
 /**
  * Abre a janela de login oficial e resolve quando o operador fecha a janela.
  * O retorno diz apenas se, ao final, existe sessão — não o que foi digitado.
+ *
+ * `aoAbrirJanela` é chamado assim que a janela existe, antes de qualquer navegação.
+ * É o gancho para ligar o observador em tempo real (sniffer) nesta mesma janela: o
+ * operador tende a continuar navegando pelo portal aqui mesmo depois de logar — como
+ * a lista de "Compras eletrônicas" —, e sem esse gancho essa navegação inteira ficava
+ * fora do alcance do observador de DOM, ainda que a captura de rede (por sessão)
+ * continuasse funcionando.
  */
-export async function abrirLogin(paiId?: number): Promise<StatusSessao> {
+export async function abrirLogin(paiId?: number, aoAbrirJanela?: (idJanela: number) => void): Promise<StatusSessao> {
   const pai = typeof paiId === "number" ? BrowserWindow.fromId(paiId) : null;
 
   const janela = new BrowserWindow({
@@ -148,6 +155,8 @@ export async function abrirLogin(paiId?: number): Promise<StatusSessao> {
       sandbox: true
     }
   });
+
+  aoAbrirJanela?.(janela.id);
 
   // Uma falha de carregamento não pode deixar a janela em branco e sem explicação:
   // tentamos a alternativa e, se nem ela abrir, a janela mostra o erro do Chromium.
