@@ -3,20 +3,30 @@ import { Cpu, Key, CheckCircle, RefreshCw, AlertTriangle, Sparkles, ExternalLink
 import confetti from "canvas-confetti";
 import { saveUserConfigToSupabase } from "../utils/supabaseClient";
 import { apiFetch } from "../utils/aiClientHelper";
+import { cn } from "../lib/utils";
+import { Button } from "./ui/button";
+import { Card, CardContent } from "./ui/card";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Badge } from "./ui/badge";
+import { Separator } from "./ui/separator";
+
+const selectClassName =
+  "w-full bg-transparent dark:bg-input/30 border border-input rounded-md h-9 px-3 text-xs text-foreground focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring font-medium";
 
 export default function AiConfigTab() {
   const [activeProvider, setActiveProvider] = useState<string>("gemini");
-  
+
   // Credentials
   const [geminiKey, setGeminiKey] = useState("");
   const [geminiModel, setGeminiModel] = useState("gemini-3.7-flash");
-  
+
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-4o");
-  
+
   const [anthropicKey, setAnthropicKey] = useState("");
   const [anthropicModel, setAnthropicModel] = useState("claude-sonnet-5");
-  
+
   const [deepseekKey, setDeepseekKey] = useState("");
   const [deepseekModel, setDeepseekModel] = useState("deepseek-chat");
 
@@ -89,7 +99,7 @@ export default function AiConfigTab() {
 
     try {
       localStorage.setItem("ai_active_provider", activeProvider);
-      
+
       localStorage.setItem("ai_gemini_key", geminiKey);
       localStorage.setItem("ai_gemini_model", geminiModel);
 
@@ -134,8 +144,8 @@ export default function AiConfigTab() {
     try {
       // First save to localStorage
       localStorage.setItem("ai_active_provider", activeProvider);
-      localStorage.setItem(`ai_${activeProvider}_key`, 
-        activeProvider === "gemini" ? geminiKey : 
+      localStorage.setItem(`ai_${activeProvider}_key`,
+        activeProvider === "gemini" ? geminiKey :
         activeProvider === "openai" ? openaiKey :
         activeProvider === "anthropic" ? anthropicKey : deepseekKey
       );
@@ -180,7 +190,7 @@ export default function AiConfigTab() {
     try {
       const projectRef = "cghlfhndoqohmrrvppjj";
       const accessToken = "sbp_e02c61f0dc45290154598e70b63c3ac3535f45dc";
-      
+
       const response = await fetch("/api/supabase/sync-secrets", {
         method: "POST",
         headers: {
@@ -217,37 +227,42 @@ export default function AiConfigTab() {
 
   return (
     <div id="ai-config-tab" className="space-y-6 animate-fade-in select-text font-sans">
-      
+
       {/* Header Info Banner */}
-      <div className="bg-white border border-[#E5E7EB] rounded-xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="bg-[#FFF0E5] text-[#FF5A00] p-3 rounded-xl border border-[#FFD6C2] shrink-0">
-            <Cpu className="w-6 h-6 animate-pulse" />
+      <Card className="py-6">
+        <CardContent className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="bg-primary/10 text-primary p-3 rounded-xl border border-primary/20 shrink-0">
+              <Cpu className="w-6 h-6 animate-pulse" />
+            </div>
+            <div>
+              <h3 className="font-bold text-foreground text-base flex items-center gap-2">
+                Configurações Avançadas de IA & Modelos
+                <Badge variant="secondary" className="text-[10px]">
+                  Multi-Provedor
+                </Badge>
+              </h3>
+              <p className="text-muted-foreground text-xs mt-1 leading-normal max-w-2xl">
+                Escolha e configure o provedor de Inteligência Artificial ativo para toda a plataforma. Insira sua própria chave de API para habilitar os recursos de IA (Gemini, OpenAI, Anthropic ou DeepSeek).
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-bold text-[#111827] text-base flex items-center gap-2">
-              Configurações Avançadas de IA & Modelos
-              <span className="text-[10px] bg-[#FFF0E5] text-[#FF5A00] font-semibold px-2 py-0.5 rounded-full border border-[#FFD6C2]">
-                Multi-Provedor
-              </span>
-            </h3>
-            <p className="text-[#6B7280] text-xs mt-1 leading-normal max-w-2xl">
-              Escolha e configure o provedor de Inteligência Artificial ativo para toda a plataforma. Insira sua própria chave de API para habilitar os recursos de IA (Gemini, OpenAI, Anthropic ou DeepSeek).
-            </p>
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
+
         {/* Main Config Form (Left/Center) */}
-        <form onSubmit={handleSave} className="lg:col-span-2 bg-white border border-[#E5E7EB] rounded-xl p-6 space-y-6 shadow-xs">
-          
+        <form
+          onSubmit={handleSave}
+          className="lg:col-span-2 bg-card text-card-foreground flex flex-col gap-6 rounded-xl border py-6 shadow-sm"
+        >
+
           {/* Provider Selector */}
-          <div className="space-y-3">
-            <label className="text-[11px] font-bold text-[#374151] uppercase tracking-wider block">
+          <CardContent className="space-y-3">
+            <Label className="text-[11px] font-bold text-foreground uppercase tracking-wider block">
               Provedor de Inteligência Artificial Ativo
-            </label>
+            </Label>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
                 { id: "gemini", name: "Google Gemini", desc: "Altamente veloz" },
@@ -257,60 +272,64 @@ export default function AiConfigTab() {
               ].map((p) => {
                 const isActive = activeProvider === p.id;
                 return (
-                  <button
+                  <Button
                     key={p.id}
                     type="button"
+                    variant={isActive ? "default" : "outline"}
                     onClick={() => handleProviderChange(p.id)}
-                    className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-1 justify-between select-none ${
-                      isActive 
-                        ? "bg-[#FFF0E5] border-[#FF5A00] text-[#FF5A00] shadow-xs" 
-                        : "bg-[#F9FAFB] border-[#E5E7EB] text-[#4B5563] hover:text-[#111827] hover:bg-white"
-                    }`}
+                    className="h-auto flex-col items-start gap-1 p-3.5 text-left whitespace-normal select-none"
                   >
                     <span className="font-bold text-xs block">{p.name}</span>
-                    <span className="text-[9px] text-[#6B7280] block font-normal">{p.desc}</span>
-                  </button>
+                    <span
+                      className={cn(
+                        "text-[9px] block font-normal",
+                        isActive ? "text-primary-foreground/70" : "text-muted-foreground"
+                      )}
+                    >
+                      {p.desc}
+                    </span>
+                  </Button>
                 );
               })}
             </div>
-          </div>
+          </CardContent>
 
-          <hr className="border-[#E5E7EB]" />
+          <Separator />
 
           {/* Provider Configuration Forms */}
-          <div className="space-y-4">
-            
+          <CardContent className="space-y-4">
+
             {/* Gemini Config */}
             {activeProvider === "gemini" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-[#FF5A00]">
+                <div className="flex items-center gap-2 text-primary">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações do Google Gemini</span>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API do Gemini</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Chave de API do Gemini</Label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
                         <Key className="w-4 h-4" />
                       </div>
-                      <input
+                      <Input
                         type="password"
                         placeholder="AIzaSy..."
                         value={geminiKey}
                         onChange={(e) => setGeminiKey(e.target.value)}
-                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
+                        className="pl-9 text-xs font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Modelo Ativo</Label>
                     <select
                       value={geminiModel}
                       onChange={(e) => setGeminiModel(e.target.value)}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
+                      className={selectClassName}
                     >
                       <option value="gemini-3.7-flash">gemini-3.7-flash (Geração Flash Mais Recente - Recomendado)</option>
                       <option value="gemini-flash-latest">gemini-flash-latest (Última Versão Flash Estável)</option>
@@ -320,39 +339,46 @@ export default function AiConfigTab() {
                   </div>
                 </div>
 
-                <div className="bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-3 text-xs text-[#374151]">
-                  <div className="space-y-1 text-left">
-                    <p className="font-bold text-[#111827]">Sincronizar com a Nuvem (Supabase Edge)</p>
-                    <p className="text-[10px] text-[#6B7280] max-w-md leading-normal">
-                      Se você utiliza o roteamento de IA em nuvem por Edge Functions, sincronize essa chave para que a nuvem do Supabase passe a utilizá-la em chamadas automáticas.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={syncingSecrets}
-                    onClick={handleSyncSupabaseSecrets}
-                    className="px-4 py-2 bg-[#FFF0E5] hover:bg-[#FFE4D1] border border-[#FFD6C2] text-[#FF5A00] font-bold rounded-lg text-[10px] transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
-                  >
-                    {syncingSecrets ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        Sincronizando...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Sincronizar Chave
-                      </>
-                    )}
-                  </button>
-                </div>
+                <Card className="bg-muted/40 py-4">
+                  <CardContent className="flex flex-col md:flex-row items-center justify-between gap-3 text-xs text-foreground">
+                    <div className="space-y-1 text-left">
+                      <p className="font-bold text-foreground">Sincronizar com a Nuvem (Supabase Edge)</p>
+                      <p className="text-[10px] text-muted-foreground max-w-md leading-normal">
+                        Se você utiliza o roteamento de IA em nuvem por Edge Functions, sincronize essa chave para que a nuvem do Supabase passe a utilizá-la em chamadas automáticas.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={syncingSecrets}
+                      onClick={handleSyncSupabaseSecrets}
+                      size="sm"
+                      className="text-[10px] whitespace-nowrap"
+                    >
+                      {syncingSecrets ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          Sincronizando...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Sincronizar Chave
+                        </>
+                      )}
+                    </Button>
+                  </CardContent>
+                </Card>
 
                 {syncSuccess !== null && (
-                  <div className={`p-3 rounded-lg text-[10px] leading-relaxed border ${
-                    syncSuccess 
-                      ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                      : "bg-rose-50 border-rose-200 text-rose-800"
-                  }`}>
+                  <div
+                    className={cn(
+                      "p-3 rounded-lg text-[10px] leading-relaxed border",
+                      syncSuccess
+                        ? "bg-success/10 border-success/30 text-success"
+                        : "bg-destructive/10 border-destructive/30 text-destructive"
+                    )}
+                  >
                     {syncMessage}
                   </div>
                 )}
@@ -362,34 +388,34 @@ export default function AiConfigTab() {
             {/* OpenAI Config */}
             {activeProvider === "openai" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-[#FF5A00]">
+                <div className="flex items-center gap-2 text-primary">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações da OpenAI (ChatGPT)</span>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API (OpenAI Key)</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Chave de API (OpenAI Key)</Label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
                         <Key className="w-4 h-4" />
                       </div>
-                      <input
+                      <Input
                         type="password"
                         placeholder="sk-proj-..."
                         value={openaiKey}
                         onChange={(e) => setOpenaiKey(e.target.value)}
-                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
+                        className="pl-9 text-xs font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Modelo Ativo</Label>
                     <select
                       value={openaiModel}
                       onChange={(e) => setOpenaiModel(e.target.value)}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
+                      className={selectClassName}
                     >
                       <option value="gpt-4o">gpt-4o (Alta performance)</option>
                       <option value="gpt-4o-mini">gpt-4o-mini (Rápido e econômico)</option>
@@ -405,34 +431,34 @@ export default function AiConfigTab() {
             {/* Anthropic Config */}
             {activeProvider === "anthropic" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-[#FF5A00]">
+                <div className="flex items-center gap-2 text-primary">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações da Anthropic (Claude)</span>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API (Claude Key)</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Chave de API (Claude Key)</Label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
                         <Key className="w-4 h-4" />
                       </div>
-                      <input
+                      <Input
                         type="password"
                         placeholder="sk-ant-..."
                         value={anthropicKey}
                         onChange={(e) => setAnthropicKey(e.target.value)}
-                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
+                        className="pl-9 text-xs font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Modelo Ativo</Label>
                     <select
                       value={anthropicModel}
                       onChange={(e) => setAnthropicModel(e.target.value)}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
+                      className={selectClassName}
                     >
                       <option value="claude-sonnet-5">claude-sonnet-5 (Equilíbrio entre custo e capacidade - Recomendado)</option>
                       <option value="claude-opus-5">claude-opus-5 (Máxima capacidade de raciocínio)</option>
@@ -446,34 +472,34 @@ export default function AiConfigTab() {
             {/* DeepSeek Config */}
             {activeProvider === "deepseek" && (
               <div className="space-y-4 animate-fade-in">
-                <div className="flex items-center gap-2 text-[#FF5A00]">
+                <div className="flex items-center gap-2 text-primary">
                   <Sparkles className="w-4 h-4" />
                   <span className="font-bold text-xs uppercase tracking-wide">Configurações do DeepSeek</span>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Chave de API (DeepSeek Key)</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Chave de API (DeepSeek Key)</Label>
                     <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#9CA3AF]">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
                         <Key className="w-4 h-4" />
                       </div>
-                      <input
+                      <Input
                         type="password"
                         placeholder="sk-..."
                         value={deepseekKey}
                         onChange={(e) => setDeepseekKey(e.target.value)}
-                        className="w-full bg-white border border-[#D1D5DB] rounded-lg pl-9 pr-3 py-2 text-xs text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-mono"
+                        className="pl-9 text-xs font-mono"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-[#374151] uppercase tracking-wider block">Modelo Ativo</label>
+                    <Label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Modelo Ativo</Label>
                     <select
                       value={deepseekModel}
                       onChange={(e) => setDeepseekModel(e.target.value)}
-                      className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-1 focus:ring-[#FF5A00] font-medium"
+                      className={selectClassName}
                     >
                       <option value="deepseek-chat">deepseek-chat (DeepSeek V3)</option>
                       <option value="deepseek-reasoner">deepseek-reasoner (DeepSeek R1 com raciocínio profundo)</option>
@@ -483,30 +509,31 @@ export default function AiConfigTab() {
               </div>
             )}
 
-          </div>
+          </CardContent>
 
-          <hr className="border-[#E5E7EB]" />
+          <Separator />
 
           {/* Form Actions */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <CardContent className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               {saveSuccess ? (
-                <div className="text-emerald-600 font-semibold text-xs flex items-center gap-1.5 animate-bounce">
+                <div className="text-success font-semibold text-xs flex items-center gap-1.5 animate-bounce">
                   <CheckCircle className="w-4 h-4" />
                   Configurações salvas e ativas!
                 </div>
               ) : (
-                <p className="text-[10px] text-[#6B7280] max-w-sm leading-normal">
+                <p className="text-[10px] text-muted-foreground max-w-sm leading-normal">
                   *As chaves são armazenadas localmente no seu navegador e usadas apenas nas requisições diretas de IA.
                 </p>
               )}
             </div>
 
             <div className="flex items-center gap-3 w-full sm:w-auto">
-              <button
+              <Button
                 type="submit"
                 disabled={saving}
-                className="flex-1 sm:flex-none px-5 py-2.5 bg-[#FF5A00] hover:bg-[#E65000] text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer select-none"
+                size="lg"
+                className="flex-1 sm:flex-none text-xs select-none"
               >
                 {saving ? (
                   <>
@@ -519,13 +546,15 @@ export default function AiConfigTab() {
                     Salvar Configurações
                   </>
                 )}
-              </button>
+              </Button>
 
-              <button
+              <Button
                 type="button"
                 onClick={handleTestAi}
                 disabled={testing}
-                className="flex-1 sm:flex-none px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer select-none disabled:opacity-60"
+                size="lg"
+                variant="outline"
+                className="flex-1 sm:flex-none text-xs border-success/40 bg-success/10 text-success hover:bg-success/20 hover:text-success select-none"
               >
                 {testing ? (
                   <>
@@ -538,88 +567,97 @@ export default function AiConfigTab() {
                     Testar IA Agora
                   </>
                 )}
-              </button>
+              </Button>
             </div>
-          </div>
+          </CardContent>
 
           {/* Test Result Banner */}
           {testResult && (
-            <div className={`mt-3 p-3 rounded-xl text-xs font-medium flex items-start gap-2 border ${
-              testResult.ok 
-                ? "bg-emerald-50 border-emerald-200 text-emerald-800" 
-                : "bg-red-50 border-red-200 text-red-800"
-            }`}>
-              {testResult.ok 
-                ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
-                : <XCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
-              }
-              <span>{testResult.message}</span>
-            </div>
+            <CardContent>
+              <div
+                className={cn(
+                  "p-3 rounded-xl text-xs font-medium flex items-start gap-2 border",
+                  testResult.ok
+                    ? "bg-success/10 border-success/30 text-success"
+                    : "bg-destructive/10 border-destructive/30 text-destructive"
+                )}
+              >
+                {testResult.ok
+                  ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5 text-success" />
+                  : <XCircle className="w-4 h-4 shrink-0 mt-0.5 text-destructive" />
+                }
+                <span>{testResult.message}</span>
+              </div>
+            </CardContent>
           )}
 
         </form>
 
         {/* Sidebar Info/QuickLinks (Right side) */}
         <div className="space-y-6">
-          
+
           {/* Status Panel */}
-          <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 space-y-4 shadow-xs">
-            <h4 className="font-bold text-[#111827] text-xs uppercase tracking-wide">Status da Conexão</h4>
-            
-            <div className="space-y-3">
-              {[
-                { name: "Google Gemini", key: geminiKey, active: activeProvider === "gemini" },
-                { name: "OpenAI ChatGPT", key: openaiKey, active: activeProvider === "openai" },
-                { name: "Anthropic Claude", key: anthropicKey, active: activeProvider === "anthropic" },
-                { name: "DeepSeek", key: deepseekKey, active: activeProvider === "deepseek" }
-              ].map((prov) => {
-                const hasKey = prov.key && prov.key.length > 5;
-                return (
-                  <div key={prov.name} className="flex items-center justify-between text-xs border-b border-[#E5E7EB] pb-2 last:border-0 last:pb-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${prov.active ? "bg-[#FF5A00]" : "bg-gray-300"}`} />
-                      <span className="font-semibold text-[#374151]">{prov.name}</span>
-                      {prov.active && (
-                        <span className="text-[8px] bg-[#FFF0E5] text-[#FF5A00] font-bold px-1.5 py-0.2 rounded border border-[#FFD6C2]">
-                          ATIVO
+          <Card className="py-5">
+            <CardContent className="space-y-4">
+              <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">Status da Conexão</h4>
+
+              <div className="space-y-3">
+                {[
+                  { name: "Google Gemini", key: geminiKey, active: activeProvider === "gemini" },
+                  { name: "OpenAI ChatGPT", key: openaiKey, active: activeProvider === "openai" },
+                  { name: "Anthropic Claude", key: anthropicKey, active: activeProvider === "anthropic" },
+                  { name: "DeepSeek", key: deepseekKey, active: activeProvider === "deepseek" }
+                ].map((prov) => {
+                  const hasKey = prov.key && prov.key.length > 5;
+                  return (
+                    <div key={prov.name} className="flex items-center justify-between text-xs border-b border-border pb-2 last:border-0 last:pb-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn("w-1.5 h-1.5 rounded-full", prov.active ? "bg-primary" : "bg-muted-foreground/30")} />
+                        <span className="font-semibold text-foreground">{prov.name}</span>
+                        {prov.active && (
+                          <Badge className="text-[8px] px-1.5 py-0 h-auto leading-4">
+                            ATIVO
+                          </Badge>
+                        )}
+                      </div>
+                      {hasKey ? (
+                        <span className="text-success font-bold text-[10px] flex items-center gap-1">
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          Configurada
                         </span>
+                      ) : (
+                        <span className="text-muted-foreground text-[10px]">Não informada</span>
                       )}
                     </div>
-                    {hasKey ? (
-                      <span className="text-emerald-600 font-bold text-[10px] flex items-center gap-1">
-                        <CheckCircle className="w-3.5 h-3.5" />
-                        Configurada
-                      </span>
-                    ) : (
-                      <span className="text-[#9CA3AF] text-[10px]">Não informada</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Quick instructions / Help */}
-          <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 space-y-3.5 shadow-xs">
-            <h4 className="font-bold text-[#111827] text-xs uppercase tracking-wide flex items-center gap-1.5">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-              Como obter as chaves?
-            </h4>
-            <div className="space-y-2.5 text-xs text-[#6B7280] leading-relaxed">
-              <p>
-                <strong>Google Gemini Key:</strong> Obtenha gratuitamente no portal do <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">Google AI Studio <ExternalLink className="w-2.5 h-2.5" /></a>.
-              </p>
-              <p>
-                <strong>OpenAI API Key:</strong> Acesse seu painel de desenvolvedor no site da <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">OpenAI <ExternalLink className="w-2.5 h-2.5" /></a>.
-              </p>
-              <p>
-                <strong>Claude Key:</strong> Gerencie suas chaves no Console do desenvolvedor da <a href="https://console.anthropic.com/" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">Anthropic <ExternalLink className="w-2.5 h-2.5" /></a>.
-              </p>
-              <p>
-                <strong>DeepSeek Key:</strong> Acesse o portal da <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer" className="text-[#FF5A00] hover:underline inline-flex items-center gap-0.5">DeepSeek API <ExternalLink className="w-2.5 h-2.5" /></a>.
-              </p>
-            </div>
-          </div>
+          <Card className="py-5">
+            <CardContent className="space-y-3.5">
+              <h4 className="font-bold text-foreground text-xs uppercase tracking-wide flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-warning" />
+                Como obter as chaves?
+              </h4>
+              <div className="space-y-2.5 text-xs text-muted-foreground leading-relaxed">
+                <p>
+                  <strong>Google Gemini Key:</strong> Obtenha gratuitamente no portal do <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">Google AI Studio <ExternalLink className="w-2.5 h-2.5" /></a>.
+                </p>
+                <p>
+                  <strong>OpenAI API Key:</strong> Acesse seu painel de desenvolvedor no site da <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">OpenAI <ExternalLink className="w-2.5 h-2.5" /></a>.
+                </p>
+                <p>
+                  <strong>Claude Key:</strong> Gerencie suas chaves no Console do desenvolvedor da <a href="https://console.anthropic.com/" target="_blank" rel="noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">Anthropic <ExternalLink className="w-2.5 h-2.5" /></a>.
+                </p>
+                <p>
+                  <strong>DeepSeek Key:</strong> Acesse o portal da <a href="https://platform.deepseek.com/" target="_blank" rel="noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">DeepSeek API <ExternalLink className="w-2.5 h-2.5" /></a>.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
 
         </div>
 

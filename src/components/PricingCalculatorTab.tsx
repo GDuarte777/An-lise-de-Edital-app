@@ -2,18 +2,32 @@ import React, { useState, useEffect } from "react";
 import { 
   Calculator, Landmark, MapPin, Calendar, Coins, TrendingUp, AlertTriangle, CheckCircle, 
   HelpCircle, ChevronRight, Save, ClipboardList, Info, FileSpreadsheet, Trash2, Plus, Folder, Percent, Tag, ShoppingBag, Truck, BadgePercent,
-  Sparkles, BrainCircuit, Upload, FileText, Lightbulb, Zap, ShieldCheck, Sliders, RefreshCw, ArrowRight, UploadCloud, Check, X
+  Sparkles, BrainCircuit, Upload, FileText, Lightbulb, Zap, ShieldCheck, Sliders, RefreshCw, ArrowRight, UploadCloud, Check
 } from "lucide-react";
 import { EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
 import { apiFetch, formatAiError } from "../utils/aiClientHelper";
-import { 
-  fetchSimulacoesFromSupabase, 
-  saveSimulacaoToSupabase, 
-  deleteSimulacaoFromSupabase, 
-  subscribeToSupabaseTable 
+import {
+  fetchSimulacoesFromSupabase,
+  saveSimulacaoToSupabase,
+  deleteSimulacaoFromSupabase,
+  subscribeToSupabaseTable
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Card } from "./ui/card";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Textarea } from "./ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "./ui/dialog";
 
 interface PricingCalculatorTabProps {
   companyData: any;
@@ -651,27 +665,27 @@ Retorne o JSON no seguinte formato:
     if (margemLucroPercentual < 0) {
       return {
         label: "Danos Financeiros / Prejuízo",
-        color: "text-rose-400 bg-rose-500/15 border-rose-500/20",
+        color: "text-destructive bg-destructive/15 border-destructive/20",
         message: "O valor ganho não cobre os custos operacionais do lote. Operação altamente perigosa!"
       };
     }
     if (margemLucroPercentual <= 8) {
       return {
         label: "Margem Crítica",
-        color: "text-amber-800 bg-amber-50 border-amber-200",
+        color: "text-warning bg-warning/15 border-warning/30",
         message: "A margem de lucro está abaixo dos níveis saudáveis de 10%. Custos adicionais de expedição podem liquidar o lucro."
       };
     }
     if (margemLucroPercentual <= 22) {
       return {
         label: "Margem Positiva / Viável",
-        color: "text-blue-800 bg-blue-50 border-blue-200",
+        color: "text-primary bg-primary/10 border-primary/20",
         message: "Excelente. A simulação mostra viabilidade financeira positiva com margem dentro dos limites previstos."
       };
     }
     return {
       label: "Margem Altamente Lucrativa",
-      color: "text-emerald-800 bg-emerald-50 border-emerald-200",
+      color: "text-success bg-success/15 border-success/30",
       message: "Operação espetacular! Fornecimento de altíssima rentabilidade para a empresa."
     };
   };
@@ -715,26 +729,26 @@ Status da Simulação: ${marginAnalysis.label}
   };
 
   return (
-    <div id="pricing-calculator-tab" className="space-y-6 text-[#111827] animate-fade-in select-text max-w-7xl mx-auto">
-      
+    <div id="pricing-calculator-tab" className="space-y-6 text-foreground animate-fade-in select-text max-w-7xl mx-auto">
+
       {/* TOP CONTROLS & HEADER */}
-      <div className="bg-white border border-[#E5E7EB] rounded-2xl p-4 md:p-5 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-        
+      <Card className="flex-col md:flex-row items-stretch md:items-center justify-between gap-4 px-4 md:px-5 py-4 md:py-5">
+
         {/* Title & Edital Selector */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="bg-[#FF5A00] p-2.5 rounded-xl text-white shrink-0 shadow-xs">
+          <div className="bg-primary p-2.5 rounded-xl text-primary-foreground shrink-0">
             <Calculator className="w-6 h-6" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="font-extrabold text-[#111827] text-base md:text-lg">Calculadora de Precificação</h2>
+              <h2 className="font-extrabold text-foreground text-base md:text-lg">Calculadora de Precificação</h2>
               {activeEdital && (
-                <span className="bg-[#FF5A00]/10 text-[#FF5A00] border border-[#FF5A00]/20 text-[10px] font-bold px-2 py-0.5 rounded-full truncate max-w-[200px] font-mono">
+                <Badge variant="outline" className="text-[10px] font-bold truncate max-w-[200px] font-mono rounded-full">
                   {activeEdital.identificacaoCertame?.orgaoComprador || activeEdital.identificacaoCertame?.identificacaoNumerica || "Edital Ativo"}
-                </span>
+                </Badge>
               )}
             </div>
-            <p className="text-[#6B7280] text-xs mt-0.5">
+            <p className="text-muted-foreground text-xs mt-0.5">
               Calculador rápido de custos, tributos, margem e valor de lance ideal
             </p>
           </div>
@@ -746,7 +760,7 @@ Status da Simulação: ${marginAnalysis.label}
             <select
               value={selectedEditalId}
               onChange={(e) => handleEditalSelect(e.target.value)}
-              className="bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00] cursor-pointer max-w-[220px]"
+              className="bg-background border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring cursor-pointer max-w-[220px]"
             >
               <option value="">-- Puxar Edital do Histórico --</option>
               {history.map((item) => (
@@ -757,49 +771,54 @@ Status da Simulação: ${marginAnalysis.label}
             </select>
           )}
 
-          <button
+          <Button
             onClick={handleAiEstimate}
             disabled={isEstimatingAi}
-            className="bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white font-bold text-xs py-2 px-3.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs disabled:opacity-50"
+            size="sm"
+            className="font-bold rounded-xl"
             title="IA calcula custo estimado, frete e impostos para este item"
           >
-            {isEstimatingAi ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-amber-200" />}
+            {isEstimatingAi ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             <span>Preencher com IA</span>
-          </button>
+          </Button>
 
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setShowQuoteModal(true)}
-            className="bg-white hover:bg-[#F3F4F6] border border-[#D1D5DB] text-[#374151] font-bold text-xs py-2 px-3.5 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+            className="font-bold rounded-xl"
             title="Importar cotação do fornecedor em texto ou arquivo"
           >
-            <UploadCloud className="w-3.5 h-3.5 text-emerald-600" />
+            <UploadCloud className="w-3.5 h-3.5 text-success" />
             <span>Importar Cotação</span>
-          </button>
+          </Button>
 
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleAiStrategicAnalysis}
             disabled={isAnalyzingStrategy}
-            className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold text-xs py-2 px-3.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+            className="font-bold rounded-xl border-success/30 text-success hover:bg-success/10 hover:text-success"
             title="Análise estratégica de risco e limite de Stop-Loss"
           >
-            {isAnalyzingStrategy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BrainCircuit className="w-3.5 h-3.5 text-emerald-600" />}
+            {isAnalyzingStrategy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <BrainCircuit className="w-3.5 h-3.5" />}
             <span>Stop-Loss IA</span>
-          </button>
+          </Button>
         </div>
 
-      </div>
+      </Card>
 
       {/* AI Feedback Banner (Compact) */}
       {aiReasoning && (
-        <div className="bg-[#FF5A00]/10 border border-[#FF5A00]/20 rounded-xl p-3 text-xs text-[#C74400] flex items-start gap-2.5 animate-in fade-in">
-          <Lightbulb className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+        <div className="bg-primary/5 border border-primary/20 rounded-xl p-3 text-xs text-foreground flex items-start gap-2.5 animate-in fade-in">
+          <Lightbulb className="w-4 h-4 text-warning shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <span className="font-bold text-[#111827]">Raciocínio da IA:</span> {aiReasoning}
+            <span className="font-bold text-foreground">Raciocínio da IA:</span> {aiReasoning}
             {aiTips && aiTips.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-1">
                 {aiTips.map((tip, idx) => (
-                  <span key={idx} className="bg-white border border-[#E5E7EB] px-2 py-0.5 rounded text-[10px] text-[#374151] flex items-center gap-1 font-medium">
-                    <Zap className="w-3 h-3 text-amber-500 shrink-0" />
+                  <span key={idx} className="bg-card border border-border px-2 py-0.5 rounded text-[10px] text-foreground flex items-center gap-1 font-medium">
+                    <Zap className="w-3 h-3 text-warning shrink-0" />
                     {tip}
                   </span>
                 ))}
@@ -813,32 +832,32 @@ Status da Simulação: ${marginAnalysis.label}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
         {/* LEFT COLUMN: ENTRADAS DE CUSTO */}
-        <div className="lg:col-span-6 bg-white border border-[#E5E7EB] rounded-2xl p-5 md:p-6 space-y-5 shadow-xs">
-          <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-3">
-            <h3 className="font-bold text-[#111827] text-sm uppercase tracking-wide font-mono flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-600" />
+        <Card className="lg:col-span-6 gap-5 px-5 md:px-6 py-5 md:py-6">
+          <div className="flex items-center justify-between border-b border-border pb-3">
+            <h3 className="font-bold text-foreground text-sm uppercase tracking-wide font-mono flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-destructive" />
               1. Custos & Tributos do Lote
             </h3>
-            <span className="text-[10px] text-[#6B7280] font-mono font-semibold">Entradas</span>
+            <span className="text-[10px] text-muted-foreground font-mono font-semibold">Entradas</span>
           </div>
 
           <div className="space-y-4">
             {/* Custo Unitário */}
             <div>
-              <label className="block text-xs font-semibold text-[#374151] mb-1 flex items-center justify-between">
+              <Label className="w-full justify-between text-xs font-semibold text-foreground mb-1">
                 <span>Custo Unitário de Compra (Fornecedor)</span>
-                <span className="text-[10px] text-[#6B7280]">Nota Fiscal / Fábrica</span>
-              </label>
+                <span className="text-[10px] text-muted-foreground font-normal">Nota Fiscal / Fábrica</span>
+              </Label>
               <div className="relative">
-                <span className="absolute left-3 top-2.5 text-xs text-[#6B7280] font-bold font-mono">R$</span>
-                <input
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-bold font-mono">R$</span>
+                <Input
                   type="number"
                   step="0.01"
                   min="0"
                   value={custoUnitario || ""}
                   onChange={(e) => setCustoUnitario(parseFloat(e.target.value) || 0)}
                   placeholder="0,00"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl pl-9 pr-3 py-2.5 text-sm text-[#111827] font-bold font-mono focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition"
+                  className="rounded-xl pl-9 pr-3 text-sm text-foreground font-bold font-mono"
                 />
               </div>
             </div>
@@ -846,32 +865,32 @@ Status da Simulação: ${marginAnalysis.label}
             {/* Quantidade & Valor Máximo em 2 Colunas */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-[#374151] mb-1">
+                <Label className="block text-xs font-semibold text-foreground mb-1">
                   Quantidade de Itens
-                </label>
-                <input
+                </Label>
+                <Input
                   type="number"
                   min="1"
                   value={quantidade || ""}
                   onChange={(e) => setQuantidade(parseInt(e.target.value) || 0)}
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] font-bold font-mono focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition"
+                  className="rounded-xl text-xs text-foreground font-bold font-mono"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#374151] mb-1">
+                <Label className="block text-xs font-semibold text-foreground mb-1">
                   Valor Máximo Edital (Un.)
-                </label>
+                </Label>
                 <div className="relative">
-                  <span className="absolute left-2.5 top-2 text-xs text-[#6B7280] font-mono">R$</span>
-                  <input
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-mono">R$</span>
+                  <Input
                     type="number"
                     step="0.01"
                     min="0"
                     value={valorMaximo || ""}
                     onChange={(e) => setValorMaximo(parseFloat(e.target.value) || 0)}
                     placeholder="0,00"
-                    className="w-full bg-white border border-[#D1D5DB] rounded-xl pl-8 pr-2 py-2 text-xs text-[#111827] font-semibold font-mono focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition"
+                    className="rounded-xl pl-8 pr-2 text-xs text-foreground font-semibold font-mono"
                   />
                 </div>
               </div>
@@ -880,37 +899,37 @@ Status da Simulação: ${marginAnalysis.label}
             {/* Frete & Tributos em 2 Colunas */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-[#374151] mb-1">
+                <Label className="block text-xs font-semibold text-foreground mb-1">
                   Frete Total (R$)
-                </label>
+                </Label>
                 <div className="relative">
-                  <span className="absolute left-2.5 top-2 text-xs text-[#6B7280] font-mono">R$</span>
-                  <input
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-mono">R$</span>
+                  <Input
                     type="number"
                     step="0.01"
                     min="0"
                     value={valorFreteTotal || ""}
                     onChange={(e) => setValorFreteTotal(parseFloat(e.target.value) || 0)}
                     placeholder="0,00"
-                    className="w-full bg-white border border-[#D1D5DB] rounded-xl pl-8 pr-2 py-2 text-xs text-[#111827] font-semibold font-mono focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition"
+                    className="rounded-xl pl-8 pr-2 text-xs text-foreground font-semibold font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[#374151] mb-1">
+                <Label className="block text-xs font-semibold text-foreground mb-1">
                   Alíquota Tributos (%)
-                </label>
+                </Label>
                 <div className="relative">
-                  <span className="absolute right-3 top-2 text-xs text-[#6B7280] font-bold font-mono">%</span>
-                  <input
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-bold font-mono">%</span>
+                  <Input
                     type="number"
                     step="0.1"
                     min="0"
                     value={aliquotaImposto || ""}
                     onChange={(e) => setAliquotaImposto(parseFloat(e.target.value) || 0)}
                     placeholder="6.0"
-                    className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-2 text-xs text-[#111827] font-semibold font-mono focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition"
+                    className="rounded-xl px-3 text-xs text-foreground font-semibold font-mono"
                   />
                 </div>
               </div>
@@ -918,332 +937,346 @@ Status da Simulação: ${marginAnalysis.label}
 
             {/* Outras Despesas */}
             <div>
-              <label className="block text-xs font-semibold text-[#374151] mb-1">
+              <Label className="block text-xs font-semibold text-foreground mb-1">
                 Outras Despesas Diretas / Rateio (R$)
-              </label>
+              </Label>
               <div className="relative">
-                <span className="absolute left-3 top-2 text-xs text-[#6B7280] font-mono">R$</span>
-                <input
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-mono">R$</span>
+                <Input
                   type="number"
                   step="0.01"
                   min="0"
                   value={outrasDespesasTotais || ""}
                   onChange={(e) => setOutrasDespesasTotais(parseFloat(e.target.value) || 0)}
                   placeholder="0,00"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl pl-9 pr-3 py-2 text-xs text-[#111827] font-semibold font-mono focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition"
+                  className="rounded-xl pl-9 pr-3 text-xs text-foreground font-semibold font-mono"
                 />
               </div>
             </div>
           </div>
-        </div>
+        </Card>
 
         {/* RIGHT COLUMN: PREÇO DE VENDA E RESULTADOS */}
-        <div className="lg:col-span-6 bg-white border border-[#E5E7EB] rounded-2xl p-5 md:p-6 space-y-5 shadow-xs flex flex-col justify-between">
+        <Card className="lg:col-span-6 gap-5 px-5 md:px-6 py-5 md:py-6 justify-between">
           <div>
-            <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-3">
-              <h3 className="font-bold text-[#111827] text-sm uppercase tracking-wide font-mono flex items-center gap-2">
-                <Coins className="w-4 h-4 text-emerald-600" />
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h3 className="font-bold text-foreground text-sm uppercase tracking-wide font-mono flex items-center gap-2">
+                <Coins className="w-4 h-4 text-success" />
                 2. Lance Pretendido & Lucratividade
               </h3>
-              <span className="text-[10px] text-emerald-700 font-mono font-bold">Saídas</span>
+              <span className="text-[10px] text-success font-mono font-bold">Saídas</span>
             </div>
 
             <div className="space-y-4 pt-1">
               {/* Main Price Output / Input */}
-              <div className="bg-[#F9FAFB] p-4 rounded-xl border border-[#E5E7EB] space-y-2">
-                <label className="block text-xs font-bold text-[#111827] uppercase tracking-wider flex items-center justify-between font-mono">
+              <div className="bg-muted p-4 rounded-xl border border-border space-y-2">
+                <Label className="w-full justify-between text-xs font-bold text-foreground uppercase tracking-wider font-mono">
                   <span>Valor Ganho / Preço de Venda (Unitário)</span>
-                  <span className="text-[10px] text-[#6B7280] font-mono font-normal">Edição em Tempo Real</span>
-                </label>
+                  <span className="text-[10px] text-muted-foreground font-mono font-normal">Edição em Tempo Real</span>
+                </Label>
                 <div className="relative">
-                  <span className="absolute left-3.5 top-2.5 text-base text-[#FF5A00] font-black font-mono">R$</span>
-                  <input
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base text-primary font-black font-mono">R$</span>
+                  <Input
                     type="number"
                     step="0.01"
                     min="0"
                     value={valorGanhoUnitario || ""}
                     onChange={(e) => setValorGanhoUnitario(parseFloat(e.target.value) || 0)}
                     placeholder="0,00"
-                    className="w-full bg-white border border-[#D1D5DB] text-[#111827] rounded-xl pl-11 pr-4 py-2.5 text-lg font-black font-mono focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition"
+                    className="bg-card text-foreground rounded-xl pl-11 pr-4 text-lg font-black font-mono h-11"
                   />
                 </div>
 
                 {/* 1-Click Margin Solver Presets */}
-                <div className="pt-2 border-t border-[#E5E7EB] space-y-1.5">
-                  <span className="block text-[10px] text-[#6B7280] font-mono flex items-center gap-1 font-bold">
-                    <Sliders className="w-3 h-3 text-[#FF5A00]" />
+                <div className="pt-2 border-t border-border space-y-1.5">
+                  <span className="block text-[10px] text-muted-foreground font-mono flex items-center gap-1 font-bold">
+                    <Sliders className="w-3 h-3 text-primary" />
                     Definir Lance por Margem Desejada (1-Clique):
                   </span>
                   <div className="grid grid-cols-4 gap-1.5 text-[10px]">
-                    <button
+                    <Button
                       type="button"
+                      variant="secondary"
                       onClick={() => applyTargetMargin(18)}
-                      className="bg-gray-100 hover:bg-[#111827] hover:text-white text-[#374151] border border-[#E5E7EB] py-1.5 rounded-lg font-bold transition cursor-pointer text-center"
+                      className="h-auto py-1.5 px-1 rounded-lg font-bold text-[10px]"
                     >
                       18% Margem
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => applyTargetMargin(12)}
-                      className="bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-800 border border-blue-200 py-1.5 rounded-lg font-bold transition cursor-pointer text-center"
+                      className="h-auto py-1.5 px-1 rounded-lg font-bold text-[10px] text-primary border-primary/30 hover:bg-primary hover:text-primary-foreground"
                     >
                       12% Margem
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => applyTargetMargin(7)}
-                      className="bg-amber-50 hover:bg-amber-600 hover:text-white text-amber-800 border border-amber-200 py-1.5 rounded-lg font-bold transition cursor-pointer text-center"
+                      className="h-auto py-1.5 px-1 rounded-lg font-bold text-[10px] text-warning border-warning/40 hover:bg-warning hover:text-warning-foreground"
                     >
                       7% Margem
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => applyTargetMargin(2)}
-                      className="bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-800 border border-rose-200 py-1.5 rounded-lg font-bold transition cursor-pointer text-center"
+                      className="h-auto py-1.5 px-1 rounded-lg font-bold text-[10px] text-destructive border-destructive/40 hover:bg-destructive hover:text-white"
                     >
                       Stop-Loss (2%)
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
 
               {/* Results Summary Box */}
               <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-[#F9FAFB] p-3 rounded-xl border border-[#E5E7EB] space-y-0.5">
-                  <span className="block text-[9px] text-[#6B7280] font-mono uppercase font-semibold">Lucro / Unid.</span>
-                  <span className={`block text-sm font-black font-mono ${lucroPorUnidadeCalculado < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                <div className="bg-muted p-3 rounded-xl border border-border space-y-0.5">
+                  <span className="block text-[9px] text-muted-foreground font-mono uppercase font-semibold">Lucro / Unid.</span>
+                  <span className={`block text-sm font-black font-mono ${lucroPorUnidadeCalculado < 0 ? "text-destructive" : "text-success"}`}>
                     R$ {lucroPorUnidadeCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
 
-                <div className="bg-[#F9FAFB] p-3 rounded-xl border border-[#FF5A00]/30 space-y-0.5">
-                  <span className="block text-[9px] text-[#FF5A00] font-mono font-bold uppercase">LUCRO TOTAL</span>
-                  <span className={`block text-base font-black font-mono ${lucroTotalCalculado < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                <div className="bg-muted p-3 rounded-xl border border-primary/30 space-y-0.5">
+                  <span className="block text-[9px] text-primary font-mono font-bold uppercase">LUCRO TOTAL</span>
+                  <span className={`block text-base font-black font-mono ${lucroTotalCalculado < 0 ? "text-destructive" : "text-success"}`}>
                     R$ {lucroTotalCalculado.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                   </span>
                 </div>
 
-                <div className="bg-[#F9FAFB] p-3 rounded-xl border border-[#E5E7EB] space-y-0.5">
-                  <span className="block text-[9px] text-[#6B7280] font-mono uppercase font-semibold">Margem %</span>
-                  <span className={`block text-sm font-black font-mono ${margemLucroPercentual < 0 ? "text-rose-600" : margemLucroPercentual <= 8 ? "text-amber-600" : "text-emerald-700"}`}>
+                <div className="bg-muted p-3 rounded-xl border border-border space-y-0.5">
+                  <span className="block text-[9px] text-muted-foreground font-mono uppercase font-semibold">Margem %</span>
+                  <span className={`block text-sm font-black font-mono ${margemLucroPercentual < 0 ? "text-destructive" : margemLucroPercentual <= 8 ? "text-warning" : "text-success"}`}>
                     {margemLucroPercentual.toFixed(1)} %
                   </span>
                 </div>
               </div>
 
               {/* Quick Metrics Bar */}
-              <div className="bg-[#F9FAFB] p-3 rounded-xl border border-[#E5E7EB] text-[11px] flex items-center justify-between text-[#374151]">
+              <div className="bg-muted p-3 rounded-xl border border-border text-[11px] flex items-center justify-between text-foreground">
                 <div>
-                  <span className="text-[#6B7280] text-[10px]">Faturamento Total: </span>
-                  <span className="font-mono font-bold text-[#111827]">R$ {faturamentoGanhoTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
+                  <span className="text-muted-foreground text-[10px]">Faturamento Total: </span>
+                  <span className="font-mono font-bold text-foreground">R$ {faturamentoGanhoTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
                 </div>
                 <div>
-                  <span className="text-[#6B7280] text-[10px]">Desconto: </span>
-                  <span className="font-mono font-bold text-[#FF5A00]">{descontoPercentual.toFixed(1)}%</span>
+                  <span className="text-muted-foreground text-[10px]">Desconto: </span>
+                  <span className="font-mono font-bold text-primary">{descontoPercentual.toFixed(1)}%</span>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Action Row */}
-          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[#F3F4F6]">
-            <button
+          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border">
+            <Button
+              variant="outline"
               onClick={handleSaveSimulation}
-              className="bg-white hover:bg-[#F3F4F6] border border-[#D1D5DB] text-[#374151] font-bold text-xs py-2.5 px-4 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+              className="font-bold rounded-xl"
             >
-              <Save className="w-3.5 h-3.5 text-[#6B7280]" />
+              <Save className="w-3.5 h-3.5" />
               <span>Salvar Cenário</span>
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={handleSyncCalculationToGoogle}
-              className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+              className="font-bold rounded-xl border-success/30 bg-success text-success-foreground hover:bg-success/90"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>Exportar Google</span>
-            </button>
+            </Button>
           </div>
-        </div>
+        </Card>
 
       </div>
 
       {/* AI STRATEGY RESULT PANEL (IF ACTIVE) */}
       {aiStrategyResult && (
-        <div className="bg-white border border-[#E5E7EB] rounded-2xl p-4 md:p-5 space-y-3 shadow-xs animate-in fade-in">
-          <div className="flex items-center justify-between border-b border-[#F3F4F6] pb-2.5">
+        <Card className="px-4 md:px-5 py-4 md:py-5 gap-3 animate-in fade-in">
+          <div className="flex items-center justify-between border-b border-border pb-2.5">
             <div className="flex items-center gap-2">
-              <BrainCircuit className="w-5 h-5 text-[#FF5A00]" />
-              <h4 className="font-extrabold text-[#111827] text-xs uppercase tracking-wide font-mono">
+              <BrainCircuit className="w-5 h-5 text-primary" />
+              <h4 className="font-extrabold text-foreground text-xs uppercase tracking-wide font-mono">
                 Diagnóstico de Pregão & Limite Stop-Loss
               </h4>
             </div>
             <div className="flex items-center gap-2">
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                aiStrategyResult.nivelRisco === "Baixo" ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
-                aiStrategyResult.nivelRisco === "Médio" ? "bg-blue-50 text-blue-800 border-blue-200" :
-                "bg-amber-50 text-amber-800 border-amber-200"
-              }`}>
+              <Badge
+                variant={
+                  aiStrategyResult.nivelRisco === "Baixo" ? "success" :
+                  aiStrategyResult.nivelRisco === "Médio" ? "warning" :
+                  "destructive"
+                }
+                className="rounded-full font-bold"
+              >
                 Risco: {aiStrategyResult.nivelRisco}
-              </span>
-              <span className="text-[10px] bg-[#FF5A00]/10 text-[#FF5A00] font-mono font-bold px-2 py-0.5 rounded border border-[#FF5A00]/20">
+              </Badge>
+              <Badge variant="outline" className="font-mono font-bold text-primary border-primary/20 bg-primary/10">
                 Score: {aiStrategyResult.scoreCompetitividade}/100
-              </span>
+              </Badge>
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="bg-rose-50 p-3 rounded-xl border border-rose-200 text-center">
-              <span className="block text-[9px] text-rose-800 font-mono font-bold uppercase">Stop-Loss Limit (Lance Mínimo Seguro)</span>
-              <span className="block text-lg font-black text-rose-900 font-mono mt-0.5">
+            <div className="bg-destructive/10 p-3 rounded-xl border border-destructive/20 text-center">
+              <span className="block text-[9px] text-destructive font-mono font-bold uppercase">Stop-Loss Limit (Lance Mínimo Seguro)</span>
+              <span className="block text-lg font-black text-destructive font-mono mt-0.5">
                 R$ {aiStrategyResult.stopLossUnitario.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
 
-            <div className="bg-[#F9FAFB] p-3 rounded-xl border border-[#E5E7EB]">
-              <span className="block text-[9px] text-[#FF5A00] font-mono font-bold uppercase">Recomendação Tática</span>
-              <p className="text-xs text-[#374151] leading-tight mt-0.5">{aiStrategyResult.estrategiaDisputa}</p>
+            <div className="bg-muted p-3 rounded-xl border border-border">
+              <span className="block text-[9px] text-primary font-mono font-bold uppercase">Recomendação Tática</span>
+              <p className="text-xs text-foreground leading-tight mt-0.5">{aiStrategyResult.estrategiaDisputa}</p>
             </div>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* COLLAPSIBLE ACCORDION: DADOS CADASTRAIS DO PREGÃO (OPCIONAL) */}
-      <div className="bg-white border border-[#E5E7EB] rounded-2xl overflow-hidden shadow-xs">
-        <button
+      <Card className="p-0 gap-0 overflow-hidden">
+        <Button
+          variant="ghost"
           onClick={() => setShowDetails(!showDetails)}
-          className="w-full px-5 py-3.5 flex items-center justify-between text-xs font-bold text-[#374151] hover:text-[#111827] hover:bg-[#F9FAFB] transition cursor-pointer"
+          className="w-full h-auto justify-between px-5 py-3.5 rounded-none text-xs font-bold text-muted-foreground hover:text-foreground"
         >
-          <div className="flex items-center gap-2">
-            <Folder className="w-4 h-4 text-[#FF5A00]" />
+          <span className="flex items-center gap-2">
+            <Folder className="w-4 h-4 text-primary" />
             <span>Dados Cadastrais do Pregão / Processo (Opcional)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-[#6B7280] font-normal">
+          </span>
+          <span className="flex items-center gap-2">
+            <span className="text-[10px] text-muted-foreground font-normal">
               {showDetails ? "Ocultar Formulário" : "Expandir Informações de Identificação"}
             </span>
             <ChevronRight className={`w-4 h-4 transition-transform ${showDetails ? "rotate-90" : ""}`} />
-          </div>
-        </button>
+          </span>
+        </Button>
 
         {showDetails && (
-          <div className="p-5 border-t border-[#E5E7EB] space-y-4 bg-[#F9FAFB] animate-in fade-in">
+          <div className="p-5 border-t border-border space-y-4 bg-muted/40 animate-in fade-in">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
-                <label className="block text-[10px] text-[#6B7280] mb-1 font-semibold">Órgão Comprador</label>
-                <input
+                <Label className="block text-[10px] text-muted-foreground mb-1 font-semibold">Órgão Comprador</Label>
+                <Input
                   type="text"
                   value={orgaoComprador}
                   onChange={(e) => setOrgaoComprador(e.target.value)}
                   placeholder="ex: Tribunal Regional"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                  className="rounded-xl text-xs"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] text-[#6B7280] mb-1 font-semibold">Item / Descrição do Produto</label>
-                <input
+                <Label className="block text-[10px] text-muted-foreground mb-1 font-semibold">Item / Descrição do Produto</Label>
+                <Input
                   type="text"
                   value={descricaoProduto}
                   onChange={(e) => setDescricaoProduto(e.target.value)}
                   placeholder="ex: Cadeira Giratória"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                  className="rounded-xl text-xs"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] text-[#6B7280] mb-1 font-semibold">Número Pregão / Código</label>
-                <input
+                <Label className="block text-[10px] text-muted-foreground mb-1 font-semibold">Número Pregão / Código</Label>
+                <Input
                   type="text"
                   value={identificacaoNumerica}
                   onChange={(e) => setIdentificacaoNumerica(e.target.value)}
                   placeholder="Nº Pregão"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                  className="rounded-xl text-xs"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] text-[#6B7280] mb-1 font-semibold">Pasta do Processo</label>
-                <input
+                <Label className="block text-[10px] text-muted-foreground mb-1 font-semibold">Pasta do Processo</Label>
+                <Input
                   type="text"
                   value={pastaProcesso}
                   onChange={(e) => setPastaProcesso(e.target.value)}
                   placeholder="Pasta"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                  className="rounded-xl text-xs"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] text-[#6B7280] mb-1 font-semibold">Nº do Processo</label>
-                <input
+                <Label className="block text-[10px] text-muted-foreground mb-1 font-semibold">Nº do Processo</Label>
+                <Input
                   type="text"
                   value={numeroProcesso}
                   onChange={(e) => setNumeroProcesso(e.target.value)}
                   placeholder="Número Processo"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                  className="rounded-xl text-xs"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] text-[#6B7280] mb-1 font-semibold">Local / Endereço de Entrega</label>
-                <input
+                <Label className="block text-[10px] text-muted-foreground mb-1 font-semibold">Local / Endereço de Entrega</Label>
+                <Input
                   type="text"
                   value={enderecoEntrega}
                   onChange={(e) => setEnderecoEntrega(e.target.value)}
                   placeholder="Endereço de Entrega"
-                  className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                  className="rounded-xl text-xs"
                 />
               </div>
             </div>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* COLLAPSED / EXPANDABLE SAVED SIMULATIONS */}
       {simulations.length > 0 && (
-        <div className="bg-white border border-[#E5E7EB] rounded-2xl overflow-hidden shadow-xs">
-          <button
+        <Card className="p-0 gap-0 overflow-hidden">
+          <Button
+            variant="ghost"
             onClick={() => setShowSavedSimulations(!showSavedSimulations)}
-            className="w-full px-5 py-3.5 flex items-center justify-between text-xs font-bold text-[#374151] hover:text-[#111827] hover:bg-[#F9FAFB] transition cursor-pointer"
+            className="w-full h-auto justify-between px-5 py-3.5 rounded-none text-xs font-bold text-muted-foreground hover:text-foreground"
           >
-            <div className="flex items-center gap-2">
-              <ClipboardList className="w-4 h-4 text-[#FF5A00]" />
+            <span className="flex items-center gap-2">
+              <ClipboardList className="w-4 h-4 text-primary" />
               <span>Simulações Salvas no Histórico ({simulations.length})</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-[#6B7280] font-normal">
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground font-normal">
                 {showSavedSimulations ? "Ocultar Histórico" : "Ver Cenários Salvos"}
               </span>
               <ChevronRight className={`w-4 h-4 transition-transform ${showSavedSimulations ? "rotate-90" : ""}`} />
-            </div>
-          </button>
+            </span>
+          </Button>
 
           {showSavedSimulations && (
-            <div className="p-5 border-t border-[#E5E7EB] space-y-3 bg-[#F9FAFB] animate-in fade-in">
+            <div className="p-5 border-t border-border space-y-3 bg-muted/40 animate-in fade-in">
               <div className="flex items-center justify-between pb-2">
-                <span className="text-xs font-semibold text-[#6B7280]">Cenários Gravados:</span>
+                <span className="text-xs font-semibold text-muted-foreground">Cenários Gravados:</span>
                 {showConfirmClearSimulations ? (
                   <div className="flex items-center gap-2">
-                    <button
+                    <Button
+                      variant="destructive"
+                      size="sm"
                       onClick={() => {
                         setSimulations([]);
                         localStorage.removeItem("aip_pricing_simulations");
                         setShowConfirmClearSimulations(false);
                       }}
-                      className="text-[10px] text-rose-800 hover:text-rose-900 font-bold bg-rose-100 px-2 py-1 rounded border border-rose-200 cursor-pointer"
+                      className="h-auto py-1 px-2 text-[10px] font-bold"
                     >
                       Confirmar Limpeza
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => setShowConfirmClearSimulations(false)}
-                      className="text-[10px] text-[#374151] hover:text-[#111827] bg-white px-2 py-1 rounded border border-[#D1D5DB] cursor-pointer"
+                      className="h-auto py-1 px-2 text-[10px]"
                     >
                       Cancelar
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   <button
                     onClick={() => setShowConfirmClearSimulations(true)}
-                    className="text-[10px] text-rose-600 hover:text-rose-800 font-medium cursor-pointer"
+                    className="text-[10px] text-destructive hover:text-destructive/80 font-medium cursor-pointer"
                   >
                     Limpar Histórico de Simulações
                   </button>
@@ -1259,38 +1292,40 @@ Status da Simulação: ${marginAnalysis.label}
                   const margin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
 
                   return (
-                    <div key={sim.id} className="bg-white border border-[#E5E7EB] rounded-xl p-3.5 space-y-2 relative shadow-xs">
+                    <Card key={sim.id} className="p-3.5 gap-2 relative">
                       <div className="flex items-start justify-between">
                         <div>
-                          <h5 className="font-bold text-[#111827] text-xs">{sim.title}</h5>
-                          <p className="text-[10px] text-[#6B7280] truncate max-w-[240px]">{sim.orgaoComprador || sim.descricaoProduto || "Simulação"}</p>
+                          <h5 className="font-bold text-foreground text-xs">{sim.title}</h5>
+                          <p className="text-[10px] text-muted-foreground truncate max-w-[240px]">{sim.orgaoComprador || sim.descricaoProduto || "Simulação"}</p>
                         </div>
-                        <button
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           onClick={() => {
                             deleteSimulacaoFromSupabase(sim.id).catch(e => console.warn("Erro ao deletar do Supabase:", e));
                             const updated = simulations.filter(s => s.id !== sim.id);
                             setSimulations(updated);
                             localStorage.setItem("aip_pricing_simulations", JSON.stringify(updated));
                           }}
-                          className="text-[#6B7280] hover:text-rose-600 p-1 cursor-pointer"
+                          className="h-6 w-6 text-muted-foreground hover:text-destructive"
                           title="Excluir simulação"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        </Button>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-1 text-[10px] font-mono text-center pt-1 border-t border-[#E5E7EB]">
-                        <div className="bg-[#F9FAFB] p-1.5 rounded">
-                          <span className="block text-[#6B7280] text-[8px] uppercase">Lance Un.</span>
-                          <span className="text-emerald-700 font-bold">R$ {sim.valorGanhoUnitario}</span>
+                      <div className="grid grid-cols-3 gap-1 text-[10px] font-mono text-center pt-1 border-t border-border">
+                        <div className="bg-muted p-1.5 rounded">
+                          <span className="block text-muted-foreground text-[8px] uppercase">Lance Un.</span>
+                          <span className="text-success font-bold">R$ {sim.valorGanhoUnitario}</span>
                         </div>
-                        <div className="bg-[#F9FAFB] p-1.5 rounded">
-                          <span className="block text-[#6B7280] text-[8px] uppercase">Margem</span>
-                          <span className={`font-bold ${margin < 0 ? "text-rose-600" : "text-emerald-700"}`}>{margin.toFixed(1)}%</span>
+                        <div className="bg-muted p-1.5 rounded">
+                          <span className="block text-muted-foreground text-[8px] uppercase">Margem</span>
+                          <span className={`font-bold ${margin < 0 ? "text-destructive" : "text-success"}`}>{margin.toFixed(1)}%</span>
                         </div>
-                        <div className="bg-[#F9FAFB] p-1.5 rounded">
-                          <span className="block text-[#6B7280] text-[8px] uppercase">Lucro Total</span>
-                          <span className={`font-bold ${profit < 0 ? "text-rose-600" : "text-emerald-700"}`}>R$ {profit.toFixed(0)}</span>
+                        <div className="bg-muted p-1.5 rounded">
+                          <span className="block text-muted-foreground text-[8px] uppercase">Lucro Total</span>
+                          <span className={`font-bold ${profit < 0 ? "text-destructive" : "text-success"}`}>R$ {profit.toFixed(0)}</span>
                         </div>
                       </div>
 
@@ -1312,120 +1347,110 @@ Status da Simulação: ${marginAnalysis.label}
                           setOutrasDespesasTotais(sim.outrasDespesasTotais);
                           setSimulationTitle(sim.title);
                         }}
-                        className="w-full text-center text-[#FF5A00] hover:text-[#E04F00] font-bold text-[10px] pt-1 block cursor-pointer"
+                        className="w-full text-center text-primary hover:text-primary/80 font-bold text-[10px] pt-1 block cursor-pointer"
                       >
                         Restaurar este cenário na Calculadora ↑
                       </button>
-                    </div>
+                    </Card>
                   );
                 })}
               </div>
             </div>
           )}
-        </div>
+        </Card>
       )}
 
       {/* MODAL: IMPORTAR COTAÇÃO DO FORNECEDOR COM IA */}
-      {showQuoteModal && (
-        <div className="fixed inset-0 z-[9999] bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 md:p-6 animate-in fade-in duration-150 overflow-y-auto">
-          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-xl w-full p-4 sm:p-6 space-y-4 sm:space-y-5 shadow-2xl relative my-auto max-h-[92vh] sm:max-h-[88vh] flex flex-col overflow-y-auto">
-            
-            <div className="flex items-center justify-between border-b border-[#F3F4F6] dark:border-[#27272A] pb-3.5 sm:pb-4 shrink-0">
-              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 pr-2">
-                <div className="bg-emerald-50 dark:bg-emerald-950/40 p-2 sm:p-2.5 rounded-xl text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
-                  <UploadCloud className="w-5 h-5 sm:w-6 sm:h-6" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="font-bold text-[#111827] dark:text-zinc-100 text-sm sm:text-base truncate">Importar Cotação de Fornecedor com IA</h3>
-                  <p className="text-[11px] sm:text-xs text-[#6B7280] dark:text-zinc-400 truncate">Cole o orçamento ou suba o arquivo para preenchimento automático</p>
-                </div>
+      <Dialog open={showQuoteModal} onOpenChange={setShowQuoteModal}>
+        <DialogContent className="max-w-xl max-h-[92vh] sm:max-h-[88vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 pr-6">
+              <div className="bg-success/10 p-2 sm:p-2.5 rounded-xl text-success border border-success/20 shrink-0">
+                <UploadCloud className="w-5 h-5 sm:w-6 sm:h-6" />
               </div>
-
-              <button
-                onClick={() => setShowQuoteModal(false)}
-                className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1.5 rounded-lg hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 transition cursor-pointer shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="min-w-0">
+                <DialogTitle className="text-sm sm:text-base truncate">Importar Cotação de Fornecedor com IA</DialogTitle>
+                <DialogDescription className="text-[11px] sm:text-xs truncate">Cole o orçamento ou suba o arquivo para preenchimento automático</DialogDescription>
+              </div>
             </div>
+          </DialogHeader>
 
-            <div className="space-y-4 flex-1">
-              {/* File upload prompt */}
-              <div>
-                <label className="block text-[11px] font-bold text-[#374151] dark:text-zinc-300 uppercase tracking-wider mb-2 flex items-center justify-between font-mono">
-                  <span>Anexar Arquivo de Cotação (TXT, CSV, PDF)</span>
-                  {quoteFileName && <span className="text-emerald-700 dark:text-emerald-400 font-mono text-[10px] truncate max-w-[150px]">{quoteFileName}</span>}
-                </label>
-                <div className="border-2 border-dashed border-[#D1D5DB] dark:border-zinc-700 hover:border-emerald-500 dark:hover:border-emerald-500 bg-[#F9FAFB] dark:bg-[#18181B] hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 rounded-xl p-4 text-center transition cursor-pointer relative">
-                  <input
-                    type="file"
-                    accept=".txt,.csv,.json,.pdf,.doc,.docx"
-                    onChange={handleQuoteFileUpload}
-                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  />
-                  <Upload className="w-6 h-6 text-emerald-600 dark:text-emerald-400 mx-auto mb-2" />
-                  <span className="text-xs text-[#374151] dark:text-zinc-200 font-medium block">
-                    {quoteFileName ? `Arquivo selecionado: ${quoteFileName}` : "Clique ou arraste a proposta do fornecedor aqui"}
-                  </span>
-                  <span className="text-[10px] text-[#6B7280] dark:text-zinc-400 mt-0.5 block">
-                    A IA vai ler o custo unitário, quantidade, frete e tributos
-                  </span>
-                </div>
-              </div>
-
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-[#E5E7EB] dark:border-zinc-800"></div>
-                </div>
-                <div className="relative flex justify-center text-[10px] uppercase font-mono">
-                  <span className="bg-white dark:bg-[#121212] px-2 text-[#6B7280] dark:text-zinc-400">ou cole a mensagem de texto</span>
-                </div>
-              </div>
-
-              {/* Text Area */}
-              <div>
-                <textarea
-                  rows={5}
-                  value={quoteText}
-                  onChange={(e) => setQuoteText(e.target.value)}
-                  placeholder={`Exemplo de cotação do fornecedor:\n"Cotação Fornecedor TechLtda - Item: Cadeira B2B\nPreço unitário: R$ 145,00\nQuantidade: 50 unidades\nFrete total CIF para SP: R$ 380,00\nImposto IPI: 5%"`}
-                  className="w-full bg-white dark:bg-[#18181B] border border-[#D1D5DB] dark:border-[#27272A] rounded-xl p-3 sm:p-3.5 text-xs text-[#111827] dark:text-zinc-100 placeholder-[#9CA3AF] dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[#FF5A00] transition font-sans leading-relaxed"
+          <div className="space-y-4">
+            {/* File upload prompt */}
+            <div>
+              <Label className="w-full justify-between text-[11px] font-bold text-foreground uppercase tracking-wider mb-2 font-mono">
+                <span>Anexar Arquivo de Cotação (TXT, CSV, PDF)</span>
+                {quoteFileName && <span className="text-success font-mono text-[10px] truncate max-w-[150px]">{quoteFileName}</span>}
+              </Label>
+              <div className="border-2 border-dashed border-input hover:border-success bg-muted/40 hover:bg-success/5 rounded-xl p-4 text-center transition cursor-pointer relative">
+                <input
+                  type="file"
+                  accept=".txt,.csv,.json,.pdf,.doc,.docx"
+                  onChange={handleQuoteFileUpload}
+                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                 />
+                <Upload className="w-6 h-6 text-success mx-auto mb-2" />
+                <span className="text-xs text-foreground font-medium block">
+                  {quoteFileName ? `Arquivo selecionado: ${quoteFileName}` : "Clique ou arraste a proposta do fornecedor aqui"}
+                </span>
+                <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                  A IA vai ler o custo unitário, quantidade, frete e tributos
+                </span>
               </div>
             </div>
 
-            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-3 border-t border-[#F3F4F6] dark:border-[#27272A] shrink-0">
-              <button
-                type="button"
-                onClick={() => setShowQuoteModal(false)}
-                className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-semibold text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 transition cursor-pointer text-center"
-              >
-                Cancelar
-              </button>
-
-              <button
-                type="button"
-                onClick={handleParseSupplierQuote}
-                disabled={isParsingQuote || !quoteText.trim()}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs py-2.5 px-5 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 shadow-xs disabled:opacity-50 text-center"
-              >
-                {isParsingQuote ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Processando com IA...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4 text-amber-200" />
-                    <span>Extrair e Preencher Calculadora</span>
-                  </>
-                )}
-              </button>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-border"></div>
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase font-mono">
+                <span className="bg-background px-2 text-muted-foreground">ou cole a mensagem de texto</span>
+              </div>
             </div>
 
+            {/* Text Area */}
+            <div>
+              <Textarea
+                rows={5}
+                value={quoteText}
+                onChange={(e) => setQuoteText(e.target.value)}
+                placeholder={`Exemplo de cotação do fornecedor:\n"Cotação Fornecedor TechLtda - Item: Cadeira B2B\nPreço unitário: R$ 145,00\nQuantidade: 50 unidades\nFrete total CIF para SP: R$ 380,00\nImposto IPI: 5%"`}
+                className="rounded-xl text-xs leading-relaxed"
+              />
+            </div>
           </div>
-        </div>
-      )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowQuoteModal(false)}
+              className="font-semibold text-xs rounded-xl"
+            >
+              Cancelar
+            </Button>
+
+            <Button
+              type="button"
+              onClick={handleParseSupplierQuote}
+              disabled={isParsingQuote || !quoteText.trim()}
+              className="font-bold text-xs rounded-xl bg-success text-success-foreground hover:bg-success/90"
+            >
+              {isParsingQuote ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Processando com IA...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  <span>Extrair e Preencher Calculadora</span>
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

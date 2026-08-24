@@ -13,6 +13,14 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentForServer, formatAiError } from "../utils/aiClientHelper";
+import { Button } from "./ui/button";
+import { Card } from "./ui/card";
+import { Badge } from "./ui/badge";
+import { Input } from "./ui/input";
+import { Textarea } from "./ui/textarea";
+import { Label } from "./ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "./ui/table";
 
 // Dynamic real-time date extraction for comparative analysis (timezone-safe)
 const getLocalTodayStr = (): string => {
@@ -1116,220 +1124,221 @@ Retorne exclusivamente o JSON estruturado.
       <div className="w-full min-w-0 space-y-6">
         
         {/* Company Identity Profile */}
-        <div id="company-profile" className="bg-white border border-[#E5E7EB] rounded-xl p-5 shadow-xs relative overflow-hidden group">
-          
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pb-4 border-b border-[#E5E7EB]">
+        <Card id="company-profile" className="block p-5 gap-0 relative overflow-hidden group">
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pb-4 border-b">
             <div className="flex items-center gap-3">
-              <div className="bg-[#FFF0E5] text-[#FF5A00] border border-[#FFD6C2] p-2.5 rounded-lg">
+              <div className="bg-primary/10 text-primary border border-primary/20 p-2.5 rounded-lg">
                 <Building2 className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-semibold text-[#111827] text-base">Dados Cadastrais da Empresa</h3>
-                <p className="text-[#6B7280] text-xs">Informações jurídicas para auto-preenchimento de contratos e declarações</p>
+                <h3 className="font-semibold text-foreground text-base">Dados Cadastrais da Empresa</h3>
+                <p className="text-muted-foreground text-xs">Informações jurídicas para auto-preenchimento de contratos e declarações</p>
               </div>
             </div>
-            
-            <div className="bg-[#FFF0E5] border border-[#FFD6C2] text-[#FF5A00] rounded-full px-3 py-1 text-[11px] font-semibold flex items-center gap-1.5 self-start sm:self-auto shrink-0 shadow-xs">
+
+            <div className="bg-primary/10 border border-primary/20 text-primary rounded-full px-3 py-1 text-[11px] font-semibold flex items-center gap-1.5 self-start sm:self-auto shrink-0 shadow-xs">
               <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#FF5A00] opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#FF5A00]"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
               </span>
               Auto-preenchimento por IA Ativo
             </div>
           </div>
-          
-          <div className="bg-[#FFF0E5] border border-[#FFD6C2] rounded-xl p-3.5 mb-5 text-xs text-[#374151] leading-relaxed flex items-start gap-3">
-            <span className="text-[#FF5A00] text-lg select-none">✨</span>
+
+          <div className="bg-primary/5 border border-primary/20 rounded-xl p-3.5 mb-5 text-xs text-foreground leading-relaxed flex items-start gap-3">
+            <span className="text-primary text-lg select-none">✨</span>
             <div>
-              <p className="font-semibold text-[#FF5A00] mb-0.5">Dica de Produtividade:</p>
-              Ao fazer o upload de documentos como <strong className="text-[#111827] font-medium">Contrato Social</strong>, <strong className="text-[#111827] font-medium">CNPJ</strong> ou <strong className="text-[#111827] font-medium">Inscrição Estadual</strong> na tabela abaixo, a IA irá ler o arquivo, extrair as informações oficiais da sua empresa e <strong className="text-[#FF5A00]">preencher estes campos automaticamente</strong> em tempo real!
+              <p className="font-semibold text-primary mb-0.5">Dica de Produtividade:</p>
+              Ao fazer o upload de documentos como <strong className="text-foreground font-medium">Contrato Social</strong>, <strong className="text-foreground font-medium">CNPJ</strong> ou <strong className="text-foreground font-medium">Inscrição Estadual</strong> na tabela abaixo, a IA irá ler o arquivo, extrair as informações oficiais da sua empresa e <strong className="text-primary">preencher estes campos automaticamente</strong> em tempo real!
             </div>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div>
-              <label className="block text-xs font-medium text-[#4B5563] mb-1">Razão Social / Nome da Empresa</label>
-              <textarea 
+              <Label className="block text-xs font-medium text-muted-foreground mb-1">Razão Social / Nome da Empresa</Label>
+              <Textarea
                 rows={1}
-                value={companyData.razonSocial} 
+                value={companyData.razonSocial}
                 onChange={(e) => handleCompanyChange("razonSocial", e.target.value)}
-                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 font-medium resize-none min-h-[40px] leading-relaxed"
+                className="font-medium resize-none min-h-[40px] leading-relaxed"
                 placeholder="Exemplo Ltda"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-[#4B5563] mb-1">CNPJ</label>
-              <input 
-                type="text" 
-                value={companyData.cnpj} 
+              <Label className="block text-xs font-medium text-muted-foreground mb-1">CNPJ</Label>
+              <Input
+                type="text"
+                value={companyData.cnpj}
                 onChange={(e) => handleCompanyChange("cnpj", e.target.value)}
-                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 font-mono"
+                className="font-mono"
                 placeholder="12.345.678/0001-90"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-[#4B5563] mb-1">Representante Legal (Sócio / Diretor)</label>
-              <input 
-                type="text" 
-                value={companyData.representativeName} 
+              <Label className="block text-xs font-medium text-muted-foreground mb-1">Representante Legal (Sócio / Diretor)</Label>
+              <Input
+                type="text"
+                value={companyData.representativeName}
                 onChange={(e) => handleCompanyChange("representativeName", e.target.value)}
-                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
                 placeholder="Nome do outorgado ou responsável"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-[#4B5563] mb-1">CPF do Representante</label>
-              <input 
-                type="text" 
-                value={companyData.representativeCpf} 
+              <Label className="block text-xs font-medium text-muted-foreground mb-1">CPF do Representante</Label>
+              <Input
+                type="text"
+                value={companyData.representativeCpf}
                 onChange={(e) => handleCompanyChange("representativeCpf", e.target.value)}
-                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 font-mono"
+                className="font-mono"
                 placeholder="123.456.789-00"
               />
             </div>
             <div className="md:col-span-2">
-              <label className="block text-xs font-medium text-[#4B5563] mb-1">Endereço da Empresa</label>
-              <textarea 
+              <Label className="block text-xs font-medium text-muted-foreground mb-1">Endereço da Empresa</Label>
+              <Textarea
                 rows={2}
-                value={companyData.address} 
+                value={companyData.address}
                 onChange={(e) => handleCompanyChange("address", e.target.value)}
-                className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20 resize-none min-h-[60px] leading-relaxed"
+                className="resize-none min-h-[60px] leading-relaxed"
                 placeholder="Av. Paulista, 1000 - Bela Vista, São Paulo - SP"
               />
             </div>
           </div>
-        </div>
+        </Card>
 
         {/* Certificate management */}
-        <div className="bg-white border border-[#E5E7EB] rounded-xl p-5 pr-8 md:pr-10 lg:pr-12 shadow-xs min-w-0 w-full overflow-hidden">
+        <Card className="block p-5 pr-8 md:pr-10 lg:pr-12 gap-0 min-w-0 w-full overflow-hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
-              <div className="bg-emerald-50 text-emerald-700 border border-emerald-200 p-2.5 rounded-lg font-bold">
+              <div className="bg-success/10 text-success border border-success/30 p-2.5 rounded-lg font-bold">
                 <Landmark className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-semibold text-[#111827] text-base">Certidões e Regularidade Fiscal</h3>
-                <p className="text-[#6B7280] text-xs">Gestão temporal e controle automático de vencimento de certidões públicas</p>
+                <h3 className="font-semibold text-foreground text-base">Certidões e Regularidade Fiscal</h3>
+                <p className="text-muted-foreground text-xs">Gestão temporal e controle automático de vencimento de certidões públicas</p>
               </div>
             </div>
 
-            <button
+            <Button
               onClick={() => {
                 setEditingCert(null);
                 setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
                 setShowAddForm(!showAddForm);
               }}
-              className="flex items-center justify-center gap-2 bg-[#FF5A00] hover:bg-[#E65000] text-white rounded-lg px-4 py-2 text-sm font-medium transition-all shadow-xs cursor-pointer"
+              className="cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               Nova Certidão
-            </button>
+            </Button>
           </div>
 
           {/* Add Form Accordion */}
           {showAddForm && (
-            <form onSubmit={handleAddOrEdit} className="bg-[#F9FAFB] rounded-xl border border-[#E5E7EB] p-4 mb-6 space-y-4 animate-fade-in text-xs">
-              <h4 className="font-semibold text-[#111827] text-sm flex items-center gap-2 border-b border-[#E5E7EB] pb-2">
-                <FileText className="w-4.5 h-4.5 text-[#FF5A00]" />
+            <form onSubmit={handleAddOrEdit} className="bg-muted/40 rounded-xl border p-4 mb-6 space-y-4 animate-fade-in text-xs">
+              <h4 className="font-semibold text-foreground text-sm flex items-center gap-2 border-b pb-2">
+                <FileText className="w-4.5 h-4.5 text-primary" />
                 {editingCert ? "Editar Certidão Cadastrada" : "Adicionar Nova Certidão ao Cadastro"}
               </h4>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-medium text-[#4B5563] mb-1 font-sans">Nome Oficial da Certidão / Certificado</label>
-                  <input 
-                    type="text" 
+                  <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Nome Oficial da Certidão / Certificado</Label>
+                  <Input
+                    type="text"
                     required
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     onBlur={handleNameBlur}
-                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
+                    className="bg-background"
                     placeholder="Ex: Certidão Negativa de Tributos Estaduais - SEFAZ"
                   />
-                  <p className="text-[10px] text-[#6B7280] mt-1">Ao sair deste campo ou salvar, a IA definirá a descrição automaticamente se deixada em branco.</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Ao sair deste campo ou salvar, a IA definirá a descrição automaticamente se deixada em branco.</p>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#4B5563] mb-1 font-sans">Data de Emissão (Opcional)</label>
-                  <input 
-                    type="date" 
+                  <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Data de Emissão (Opcional)</Label>
+                  <Input
+                    type="date"
                     value={formData.emissionDate}
                     onChange={(e) => setFormData({ ...formData, emissionDate: e.target.value })}
-                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
+                    className="bg-background"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-[#4B5563] mb-1 font-sans">Data de Vencimento (Opcional)</label>
-                  <input 
-                    type="date" 
+                  <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Data de Vencimento (Opcional)</Label>
+                  <Input
+                    type="date"
                     value={formData.expirationDate}
                     onChange={(e) => setFormData({ ...formData, expirationDate: e.target.value })}
-                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-rose-700 font-medium focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
+                    className="bg-background text-destructive font-medium"
                   />
                 </div>
 
                 <div className="md:col-span-2">
                   <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-medium text-[#4B5563] font-sans">Observações / Para que serve</label>
+                    <Label className="block text-xs font-medium text-muted-foreground font-sans">Observações / Para que serve</Label>
                     {formData.name && formData.name.trim() && (
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
                         onClick={() => generateNotesWithAi()}
                         disabled={isGeneratingNotes}
-                        className="text-[10px] text-[#FF5A00] hover:text-[#E65000] flex items-center gap-1 bg-[#FFF0E5] hover:bg-[#FFE3D1] px-2 py-0.5 rounded-md transition-colors cursor-pointer font-semibold"
+                        className="h-auto text-[10px] text-primary hover:text-primary/80 flex items-center gap-1 bg-primary/10 hover:bg-primary/15 px-2 py-0.5 rounded-md transition-colors cursor-pointer font-semibold"
                       >
                         <Sparkles className={`w-3 h-3 ${isGeneratingNotes ? "animate-spin" : "animate-pulse"}`} />
                         {isGeneratingNotes ? "Descrevendo..." : "Sugerir com IA"}
-                      </button>
+                      </Button>
                     )}
                   </div>
-                  <textarea 
+                  <Textarea
                     value={formData.notes}
                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    className="w-full bg-white border border-[#D1D5DB] rounded-lg px-3 py-2 text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
+                    className="bg-background"
                     rows={2}
                     placeholder="Ex: Utilizada para provar no pregão que não há débitos tributários tributos estaduais no estado sede."
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E5E7EB]">
-                <button
+              <div className="flex items-center justify-end gap-2 pt-2 border-t">
+                <Button
                   type="button"
+                  variant="outline"
                   onClick={() => setShowAddForm(false)}
-                  className="bg-white border border-[#D1D5DB] rounded-lg px-4 py-2 text-xs text-[#374151] hover:bg-[#F3F4F6] transition-colors"
+                  className="text-xs"
                 >
                   Cancelar
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="bg-[#FF5A00] hover:bg-[#E65000] text-white rounded-lg px-4 py-2 text-xs font-semibold transition-colors shadow-xs"
+                  className="text-xs font-semibold"
                 >
                   {editingCert ? "Salvar Alterações" : "Adicionar ao Cadastro"}
-                </button>
+                </Button>
               </div>
             </form>
           )}
 
           {/* Info message for automatic AI-extracted data */}
           {infoMessage && (
-            <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 px-4 py-3 rounded-xl mb-4 text-xs flex items-center gap-2.5 animate-pulse">
-              <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+            <div className="bg-success/10 border border-success/20 text-success px-4 py-3 rounded-xl mb-4 text-xs flex items-center gap-2.5 animate-pulse">
+              <CheckCircle className="w-4 h-4 shrink-0 text-success" />
               <span>{infoMessage}</span>
             </div>
           )}
 
           {/* Error message for alerts/failures */}
           {errorMessage && (
-            <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl mb-4 text-xs flex items-center justify-between gap-2.5">
+            <div className="bg-destructive/10 border border-destructive/30 text-destructive px-4 py-3 rounded-xl mb-4 text-xs flex items-center justify-between gap-2.5">
               <div className="flex items-center gap-2.5">
-                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                <AlertTriangle className="w-4 h-4 shrink-0 text-destructive" />
                 <span>{errorMessage}</span>
               </div>
-              <button 
-                onClick={() => setErrorMessage(null)} 
-                className="text-rose-700 hover:text-rose-900 text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="text-destructive hover:text-destructive/80 text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
               >
                 Fechar
               </button>
@@ -1338,20 +1347,20 @@ Retorne exclusivamente o JSON estruturado.
 
           {/* Quick Status Filters */}
           <div className="mb-4">
-            <p className="text-xs font-semibold text-[#6B7280] mb-2 uppercase tracking-wider font-mono">Organizar e Filtrar Certidões:</p>
-            <div className="flex flex-wrap gap-1.5 p-1 bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl">
+            <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider font-mono">Organizar e Filtrar Certidões:</p>
+            <div className="flex flex-wrap gap-1.5 p-1 bg-muted/40 border rounded-xl">
               <button
                 type="button"
                 onClick={() => setStatusFilter("all")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "all"
-                    ? "bg-[#111827] text-white shadow-xs"
-                    : "text-[#6B7280] hover:text-[#111827] hover:bg-white"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground hover:bg-card"
                 }`}
               >
                 <span>Todas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "all" ? "bg-white/20 text-white" : "bg-gray-200 text-[#4B5563]"
+                  statusFilter === "all" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
                 }`}>
                   {certs.length}
                 </span>
@@ -1362,14 +1371,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("expired")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "expired"
-                    ? "bg-rose-600 text-white shadow-xs"
-                    : "text-rose-700 hover:bg-rose-50"
+                    ? "bg-destructive text-white shadow-xs"
+                    : "text-destructive hover:bg-destructive/10"
                 }`}
               >
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 <span>Vencidas / Alertas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "expired" ? "bg-white/20 text-white" : "bg-rose-100 text-rose-700"
+                  statusFilter === "expired" ? "bg-white/20 text-white" : "bg-destructive/10 text-destructive"
                 }`}>
                   {certs.filter(c => c.fileUploaded && (evaluateStatus(c.expirationDate) === "expired" || c.documentMatchesRow === false)).length}
                 </span>
@@ -1380,14 +1389,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("valid")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "valid"
-                    ? "bg-emerald-600 text-white shadow-xs"
-                    : "text-emerald-700 hover:bg-emerald-50"
+                    ? "bg-success text-success-foreground shadow-xs"
+                    : "text-success hover:bg-success/10"
                 }`}
               >
                 <CheckCircle className="w-3.5 h-3.5 shrink-0" />
                 <span>Válidas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "valid" ? "bg-white/20 text-white" : "bg-emerald-100 text-emerald-700"
+                  statusFilter === "valid" ? "bg-success-foreground/20 text-success-foreground" : "bg-success/10 text-success"
                 }`}>
                   {certs.filter(c => c.fileUploaded && evaluateStatus(c.expirationDate) === "valid" && c.documentMatchesRow !== false).length}
                 </span>
@@ -1398,14 +1407,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("expiring_soon")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "expiring_soon"
-                    ? "bg-amber-600 text-white shadow-xs"
-                    : "text-amber-700 hover:bg-amber-50"
+                    ? "bg-warning text-warning-foreground shadow-xs"
+                    : "text-warning hover:bg-warning/10"
                 }`}
               >
                 <Clock className="w-3.5 h-3.5 shrink-0" />
                 <span>Vencendo</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "expiring_soon" ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700"
+                  statusFilter === "expiring_soon" ? "bg-warning-foreground/20 text-warning-foreground" : "bg-warning/10 text-warning"
                 }`}>
                   {certs.filter(c => c.fileUploaded && evaluateStatus(c.expirationDate) === "expiring_soon").length}
                 </span>
@@ -1416,14 +1425,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("mismatched")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "mismatched"
-                    ? "bg-orange-600 text-white shadow-xs"
-                    : "text-orange-700 hover:bg-orange-50"
+                    ? "bg-foreground text-background shadow-xs"
+                    : "text-foreground hover:bg-accent"
                 }`}
               >
                 <HelpCircle className="w-3.5 h-3.5 shrink-0" />
                 <span>Incompatíveis</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "mismatched" ? "bg-white/20 text-white" : "bg-orange-100 text-orange-700"
+                  statusFilter === "mismatched" ? "bg-background/20 text-background" : "bg-muted text-foreground"
                 }`}>
                   {certs.filter(c => c.fileUploaded && c.documentMatchesRow === false).length}
                 </span>
@@ -1434,14 +1443,14 @@ Retorne exclusivamente o JSON estruturado.
                 onClick={() => setStatusFilter("pending")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
                   statusFilter === "pending"
-                    ? "bg-[#374151] text-white shadow-xs"
-                    : "text-[#6B7280] hover:bg-gray-100"
+                    ? "bg-secondary text-secondary-foreground shadow-xs"
+                    : "text-muted-foreground hover:bg-accent"
                 }`}
               >
                 <FileWarning className="w-3.5 h-3.5 shrink-0" />
                 <span>Não Enviadas</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
-                  statusFilter === "pending" ? "bg-white/20 text-white" : "bg-gray-200 text-[#4B5563]"
+                  statusFilter === "pending" ? "bg-secondary-foreground/20 text-secondary-foreground" : "bg-muted text-muted-foreground"
                 }`}>
                   {certs.filter(c => !c.fileUploaded).length}
                 </span>
@@ -1451,31 +1460,31 @@ Retorne exclusivamente o JSON estruturado.
 
           {/* Search Bar */}
           <div className="relative mb-4">
-            <Search className="absolute left-3 top-2.5 h-4.5 w-4.5 text-[#9CA3AF]" />
-            <input 
-              type="text" 
-              placeholder="Buscar em minhas certidões pelo nome ou observação..." 
+            <Search className="absolute left-3 top-2.5 h-4.5 w-4.5 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Buscar em minhas certidões pelo nome ou observação..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 text-sm bg-white border border-[#D1D5DB] rounded-lg text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:border-[#FF5A00] focus:ring-2 focus:ring-[#FF5A00]/20"
+              className="pl-9 pr-4 bg-background"
             />
           </div>
 
           {hasManuallyOrdered && (
-            <div className="flex items-center justify-between bg-[#FFF0E5] border border-[#FFD6C2] text-[#FF5A00] px-3 py-2 rounded-xl mb-4 text-[11px] animate-in fade-in duration-200 font-medium">
+            <div className="flex items-center justify-between bg-primary/10 border border-primary/20 text-primary px-3 py-2 rounded-xl mb-4 text-[11px] animate-in fade-in duration-200 font-medium">
               <div className="flex items-center gap-2">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-[#FF5A00] shrink-0" />
+                <SlidersHorizontal className="w-3.5 h-3.5 text-primary shrink-0" />
                 <span>Posição personalizada ativa (ordem manual via arrastar).</span>
               </div>
-              <button 
+              <button
                 type="button"
                 onClick={() => {
                   setHasManuallyOrdered(false);
                   const uploaded = certs.filter(c => !!c.fileUploaded);
                   const empty = certs.filter(c => !c.fileUploaded);
                   setCerts([...uploaded, ...empty]);
-                }} 
-                className="text-[#FF5A00] hover:underline text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
+                }}
+                className="text-primary hover:underline text-[10px] uppercase tracking-wider font-semibold cursor-pointer"
               >
                 Organizar por anexos
               </button>
@@ -1488,7 +1497,7 @@ Retorne exclusivamente o JSON estruturado.
             {/* Mobile Card View (Hidden on medium/large screens) */}
             <div className="block md:hidden space-y-4">
               {filteredCerts.length === 0 ? (
-                <div className="p-8 text-center text-[#6B7280] text-xs bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl">
+                <div className="p-8 text-center text-muted-foreground text-xs bg-muted/40 border rounded-xl">
                   Nenhuma certidão encontrada correspondendo aos critérios de busca.
                 </div>
               ) : (
@@ -1508,35 +1517,35 @@ Retorne exclusivamente o JSON estruturado.
                       onDrop={(e) => handleRowDrop(e, index)}
                       className={`transition-all duration-250 border rounded-xl p-4.5 space-y-3.5 relative overflow-hidden text-left ${
                         isRowBeingDragged
-                          ? "opacity-40 bg-[#FFF0E5] border-dashed border-[#FF5A00]"
+                          ? "opacity-40 bg-primary/10 border-dashed border-primary"
                           : isDraggingOver
-                          ? "bg-[#FFF0E5] border-dashed border-[#FF5A00] scale-[1.01] shadow-md"
+                          ? "bg-primary/10 border-dashed border-primary scale-[1.01] shadow-md"
                           : isUploaded
-                          ? "bg-white border-[#E5E7EB] hover:border-[#D1D5DB]"
-                          : "bg-[#F9FAFB] border-[#E5E7EB]"
+                          ? "bg-card border-border hover:border-muted-foreground/30"
+                          : "bg-muted/40 border-border"
                       }`}
                     >
                       {/* Top bar with drag position and main tag info */}
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-start gap-2.5 min-w-0">
                           {/* Drag Handle button */}
-                          <div 
-                            className="flex items-center gap-1.5 bg-[#F3F4F6] border border-[#E5E7EB] px-2 py-1 rounded-md text-[10px] font-mono text-[#4B5563] cursor-grab active:cursor-grabbing hover:bg-[#E5E7EB] shrink-0"
+                          <div
+                            className="flex items-center gap-1.5 bg-muted border px-2 py-1 rounded-md text-[10px] font-mono text-muted-foreground cursor-grab active:cursor-grabbing hover:bg-muted/70 shrink-0"
                             title="Arraste para reordenar"
                           >
-                            <GripVertical className="w-3.5 h-3.5 text-[#9CA3AF] shrink-0" />
+                            <GripVertical className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                             <span>#{index + 1}</span>
                           </div>
-                          
+
                           <div className="min-w-0">
                             <h4 className={`font-semibold leading-snug text-xs sm:text-sm ${
-                              isDraggingOver ? "text-[#FF5A00] animate-pulse" :
-                              isUploaded ? "text-[#111827]" : "text-[#4B5563]"
+                              isDraggingOver ? "text-primary animate-pulse" :
+                              isUploaded ? "text-foreground" : "text-muted-foreground"
                             }`}>
                               {isDraggingOver ? "✨ Solte o documento aqui!" : cert.name}
                             </h4>
                             {cert.notes && !isDraggingOver && (
-                              <p className="text-[#6B7280] text-[11px] mt-1 leading-normal">{cert.notes}</p>
+                              <p className="text-muted-foreground text-[11px] mt-1 leading-normal">{cert.notes}</p>
                             )}
                           </div>
                         </div>
@@ -1545,19 +1554,19 @@ Retorne exclusivamente o JSON estruturado.
                       {/* Attached Document Detail */}
                       {isUploaded && cert.fileName && !isDraggingOver && (
                         <div className="space-y-1.5 pt-0.5">
-                          <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-[10.5px] text-emerald-800 font-mono truncate">
-                            <FileText className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <div className="flex items-center gap-2 bg-success/10 border border-success/30 rounded-lg p-2.5 text-[10.5px] text-success font-mono truncate">
+                            <FileText className="w-3.5 h-3.5 text-success shrink-0" />
                             <span className="truncate">{cert.fileName}</span>
                           </div>
                           {cert.documentMatchesRow === false && cert.validationFeedback && (
-                            <div className="text-[11px] text-orange-800 bg-orange-50 border border-orange-200 rounded-lg p-2.5 flex flex-col gap-2 leading-normal">
+                            <div className="text-[11px] text-warning bg-warning/10 border border-warning/40 rounded-lg p-2.5 flex flex-col gap-2 leading-normal">
                               <div className="flex items-start gap-2">
-                                <AlertTriangle className="w-3.5 h-3.5 text-orange-600 shrink-0 mt-0.5" />
+                                <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />
                                 <span>{cert.validationFeedback}</span>
                               </div>
                               <button
                                 onClick={() => handleManualApprove(cert.id)}
-                                className="text-[10px] w-full text-center font-semibold text-emerald-700 hover:bg-emerald-100 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 transition-colors cursor-pointer mt-1"
+                                className="text-[10px] w-full text-center font-semibold text-success hover:bg-success/20 bg-success/10 px-2.5 py-1 rounded-lg border border-success/40 transition-colors cursor-pointer mt-1"
                               >
                                 ✓ Forçar aprovação deste documento
                               </button>
@@ -1567,41 +1576,41 @@ Retorne exclusivamente o JSON estruturado.
                       )}
 
                       {/* Status badges, expiration date, actions bar */}
-                      <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#E5E7EB]">
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t">
                         {/* Status indicators */}
                         <div className="flex items-center gap-2">
                           {isAnalyzing ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-[#FFF0E5] text-[#FF5A00] px-2.5 py-0.5 text-[11px] font-semibold border border-[#FFD6C2] animate-pulse">
+                            <Badge variant="outline" className="gap-1 text-primary border-primary/30 bg-primary/10 animate-pulse">
                               <Loader2 className="w-3 h-3 animate-spin" />
                               Lendo...
-                            </span>
+                            </Badge>
                           ) : !isUploaded ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 text-[#6B7280] px-2.5 py-0.5 text-[11px] font-semibold border border-gray-200">
+                            <Badge variant="secondary">
                               Pendente
-                            </span>
+                            </Badge>
                           ) : (
                             <>
                               {cert.documentMatchesRow === false ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 text-orange-700 px-2.5 py-0.5 text-[11px] font-semibold border border-orange-200">
-                                  <AlertTriangle className="w-3 h-3 text-orange-600" />
+                                <Badge variant="outline" className="gap-1">
+                                  <AlertTriangle className="w-3 h-3" />
                                   Tipo Errado
-                                </span>
+                                </Badge>
                               ) : (
                                 <>
                                   {status === "expired" && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 text-rose-700 px-2.5 py-0.5 text-[11px] font-semibold border border-rose-200">
+                                    <Badge variant="destructive">
                                       Vencida
-                                    </span>
+                                    </Badge>
                                   )}
                                   {status === "expiring_soon" && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-700 px-2.5 py-0.5 text-[11px] font-semibold border border-amber-200">
+                                    <Badge variant="warning">
                                       Vencendo
-                                    </span>
+                                    </Badge>
                                   )}
                                   {status === "valid" && (
-                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 px-2.5 py-0.5 text-[11px] font-semibold border border-emerald-200">
+                                    <Badge variant="success">
                                       Válida
-                                    </span>
+                                    </Badge>
                                   )}
                                 </>
                               )}
@@ -1610,19 +1619,19 @@ Retorne exclusivamente o JSON estruturado.
                         </div>
 
                         {/* Expiration date metadata */}
-                        <div className="flex items-center gap-1 text-[11px] font-mono text-[#6B7280]">
-                          <span className="text-[#9CA3AF]">Vencimento:</span>
-                          <span className={isUploaded && status === "expired" ? "text-rose-600 font-bold" : isUploaded && status === "expiring_soon" ? "text-amber-600 font-semibold" : "text-[#374151]"}>
+                        <div className="flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
+                          <span className="text-muted-foreground/70">Vencimento:</span>
+                          <span className={isUploaded && status === "expired" ? "text-destructive font-bold" : isUploaded && status === "expiring_soon" ? "text-warning font-semibold" : "text-foreground"}>
                             {isAnalyzing ? "-" : !isUploaded ? "Pendente" : cert.expirationDate ? new Date(cert.expirationDate).getUTCDate() ? new Date(cert.expirationDate).getUTCDate().toString().padStart(2, '0') + '/' + (new Date(cert.expirationDate).getUTCMonth() + 1).toString().padStart(2, '0') + '/' + new Date(cert.expirationDate).getUTCFullYear() : new Date(cert.expirationDate).toLocaleDateString("pt-BR") : "Sem Vencimento"}
                           </span>
                         </div>
 
                         {/* Unified Action Button list */}
-                        <div className="w-full sm:w-auto flex items-center justify-end gap-2 pt-2.5 sm:pt-0 border-t sm:border-t-0 border-[#E5E7EB]">
+                        <div className="w-full sm:w-auto flex items-center justify-end gap-2 pt-2.5 sm:pt-0 border-t sm:border-t-0">
                           {isAnalyzing ? (
-                            <span className="text-[11px] text-[#FF5A00] animate-pulse font-medium">Processando arquivo...</span>
+                            <span className="text-[11px] text-primary animate-pulse font-medium">Processando arquivo...</span>
                           ) : !isUploaded ? (
-                            <label className="w-full sm:w-auto flex items-center justify-center gap-1.5 bg-[#FFF0E5] hover:bg-[#FFE3D1] border border-[#FFD6C2] text-[#FF5A00] font-semibold rounded-lg px-3.5 py-2 text-[11px] transition duration-150 cursor-pointer shadow-xs">
+                            <label className="w-full sm:w-auto flex items-center justify-center gap-1.5 bg-primary/10 hover:bg-primary/15 border border-primary/30 text-primary font-semibold rounded-lg px-3.5 py-2 text-[11px] transition duration-150 cursor-pointer shadow-xs">
                               <FileUp className="w-3.5 h-3.5" />
                               <span>Fazer Upload IA</span>
                               <input
@@ -1634,20 +1643,24 @@ Retorne exclusivamente o JSON estruturado.
                             </label>
                           ) : (
                             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                              <button
+                              <Button
+                                variant="outline"
+                                size="sm"
                                 onClick={() => startEdit(cert)}
-                                className="flex items-center justify-center gap-1 border border-[#D1D5DB] hover:bg-[#F3F4F6] text-[#374151] px-3 py-1.5 rounded-lg transition duration-150 cursor-pointer text-[11px]"
+                                className="gap-1 text-[11px] h-auto px-3 py-1.5"
                               >
                                 <Edit2 className="w-3 h-3" />
                                 <span>Editar</span>
-                              </button>
-                              <button
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
                                 onClick={() => handleDeleteAttachment(cert.id)}
-                                className="flex items-center justify-center gap-1 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition duration-150 cursor-pointer text-[11px]"
+                                className="gap-1 text-[11px] h-auto px-3 py-1.5 bg-destructive/10 border-destructive/30 text-destructive hover:bg-destructive/20 hover:text-destructive"
                               >
                                 <Trash2 className="w-3 h-3" />
                                 <span>Excluir</span>
-                              </button>
+                              </Button>
                             </div>
                           )}
                         </div>
@@ -1659,24 +1672,24 @@ Retorne exclusivamente o JSON estruturado.
             </div>
 
             {/* Desktop Table View (Hidden on mobile/tablet) */}
-            <div className="hidden md:block overflow-x-auto rounded-xl border border-[#E5E7EB] w-full bg-white shadow-xs">
-              <table className="w-full min-w-[700px] text-left text-sm whitespace-normal table-fixed">
-                <thead className="bg-[#F9FAFB] text-[#4B5563] border-b border-[#E5E7EB] text-xs uppercase tracking-wider font-semibold">
-                  <tr>
-                    <th className="p-2.5 w-[50px] text-center whitespace-nowrap shrink-0">Pos.</th>
-                    <th className="p-2.5">Nome do Documento / Propósito</th>
-                    <th className="p-2.5 w-[110px] text-center whitespace-nowrap shrink-0">Status</th>
-                    <th className="p-2.5 w-[100px] text-center whitespace-nowrap shrink-0">Vencimento</th>
-                    <th className="p-2.5 pl-2.5 pr-4 w-[130px] text-center whitespace-nowrap shrink-0">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E5E7EB]">
+            <div className="hidden md:block rounded-xl border w-full bg-card shadow-xs overflow-hidden">
+              <Table className="min-w-[700px] text-left text-sm whitespace-normal table-fixed">
+                <TableHeader className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wider font-semibold [&_tr]:border-b">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="p-2.5 h-auto w-[50px] text-center whitespace-nowrap shrink-0">Pos.</TableHead>
+                    <TableHead className="p-2.5 h-auto whitespace-normal">Nome do Documento / Propósito</TableHead>
+                    <TableHead className="p-2.5 h-auto w-[110px] text-center whitespace-nowrap shrink-0">Status</TableHead>
+                    <TableHead className="p-2.5 h-auto w-[100px] text-center whitespace-nowrap shrink-0">Vencimento</TableHead>
+                    <TableHead className="p-2.5 pl-2.5 pr-4 h-auto w-[130px] text-center whitespace-nowrap shrink-0">Ações</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="divide-y">
                   {filteredCerts.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-8 text-center text-[#6B7280] text-xs">
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={5} className="p-8 text-center text-muted-foreground text-xs whitespace-normal">
                         Nenhuma certidão encontrada correspondendo aos critérios de busca.
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ) : (
                     filteredCerts.map((cert, index) => {
                       const status = evaluateStatus(cert.expirationDate);
@@ -1684,68 +1697,68 @@ Retorne exclusivamente o JSON estruturado.
                       const isAnalyzing = analyzingId === cert.id;
                       const isDraggingOver = dragOverId === cert.id;
                       const isRowBeingDragged = rowDraggingIndex === index;
-                      
+
                       return (
-                        <tr 
-                          key={cert.id} 
+                        <TableRow
+                          key={cert.id}
                           draggable={true}
                           onDragStart={(e) => handleRowDragStart(e, index)}
                           onDragOver={(e) => handleRowDragOver(e, index)}
                           onDrop={(e) => handleRowDrop(e, index)}
                           className={`transition-all duration-200 relative ${
                             isRowBeingDragged
-                              ? "opacity-40 bg-[#FFF0E5] border-2 border-dashed border-[#FF5A00]"
-                              : isDraggingOver 
-                              ? "bg-[#FFF0E5] border-y-2 border-dashed border-[#FF5A00] scale-[1.005] shadow-sm" 
-                              : isUploaded 
-                              ? "bg-white hover:bg-[#F9FAFB]" 
-                              : "bg-[#FAFAFA] hover:bg-[#F3F4F6]"
+                              ? "opacity-40 bg-primary/10 border-2 border-dashed border-primary hover:bg-primary/10"
+                              : isDraggingOver
+                              ? "bg-primary/10 border-y-2 border-dashed border-primary scale-[1.005] shadow-sm hover:bg-primary/10"
+                              : isUploaded
+                              ? "bg-card hover:bg-muted/40"
+                              : "bg-muted/20 hover:bg-muted/40"
                           }`}
                         >
                           {/* Drag Handle Column */}
-                          <td className="p-2.5 w-[50px] text-center cursor-grab active:cursor-grabbing hover:bg-[#F3F4F6] transition-colors group/drag" title="Clique e arraste para reordenar esta certidão">
-                            <div className="flex items-center justify-center text-[#9CA3AF] group-hover/drag:text-[#FF5A00]">
+                          <TableCell className="p-2.5 w-[50px] text-center cursor-grab active:cursor-grabbing hover:bg-muted/60 transition-colors group/drag" title="Clique e arraste para reordenar esta certidão">
+                            <div className="flex items-center justify-center text-muted-foreground group-hover/drag:text-primary">
                               <GripVertical className="w-4.5 h-4.5 shrink-0" />
                             </div>
-                          </td>
+                          </TableCell>
 
-                          <td className="p-2.5 min-w-0">
+                          <TableCell className="p-2.5 min-w-0 whitespace-normal">
                             <div className="flex items-start gap-2">
                               <FileText className={`w-4 items-start shrink-0 mt-0.5 ${
-                                isDraggingOver ? "text-[#FF5A00] animate-bounce" :
-                                !isUploaded ? "text-[#9CA3AF]" :
-                                cert.documentMatchesRow === false ? "text-orange-600" :
-                                status === "expired" ? "text-rose-600" :
-                                status === "expiring_soon" ? "text-amber-600" : "text-emerald-600"
+                                isDraggingOver ? "text-primary animate-bounce" :
+                                !isUploaded ? "text-muted-foreground" :
+                                cert.documentMatchesRow === false ? "text-foreground" :
+                                status === "expired" ? "text-destructive" :
+                                status === "expiring_soon" ? "text-warning" : "text-success"
                               }`} />
                               <div className="min-w-0">
                                 <p className={`font-medium leading-tight text-xs md:text-sm truncate ${
-                                  isDraggingOver ? "text-[#FF5A00] font-semibold" :
-                                  isUploaded ? "text-[#111827]" : "text-[#6B7280] font-normal"
+                                  isDraggingOver ? "text-primary font-semibold" :
+                                  isUploaded ? "text-foreground" : "text-muted-foreground font-normal"
                                 }`}>
                                   {isDraggingOver ? "✨ Solte o documento aqui!" : cert.name}
                                 </p>
                                 {isDraggingOver ? (
-                                  <p className="text-[#FF5A00] font-normal text-[10px] mt-0.5 animate-pulse font-sans">
+                                  <p className="text-primary font-normal text-[10px] mt-0.5 animate-pulse font-sans">
                                     Aceita PDF, imagens ou txt.
                                   </p>
                                 ) : (
-                                  cert.notes && <p className="text-[#6B7280] font-normal text-[11px] mt-0.5 md:leading-normal truncate">{cert.notes}</p>
+                                  cert.notes && <p className="text-muted-foreground font-normal text-[11px] mt-0.5 md:leading-normal truncate">{cert.notes}</p>
                                 )}
                                 {isUploaded && cert.fileName && !isDraggingOver && (
                                   <div className="mt-1 space-y-1">
-                                    <p className="text-[10px] text-emerald-800 font-mono flex items-center gap-1 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 w-max truncate max-w-full">
+                                    <p className="text-[10px] text-success font-mono flex items-center gap-1 bg-success/10 border border-success/30 rounded px-1.5 py-0.5 w-max truncate max-w-full">
                                       <span>📄 {cert.fileName}</span>
                                     </p>
                                     {cert.documentMatchesRow === false && cert.validationFeedback && (
-                                      <div className="text-[10px] text-orange-800 bg-orange-50 border border-orange-200 rounded-lg p-1.5 flex flex-col gap-1.5 leading-normal max-w-full">
+                                      <div className="text-[10px] text-warning bg-warning/10 border border-warning/40 rounded-lg p-1.5 flex flex-col gap-1.5 leading-normal max-w-full">
                                         <div className="flex items-start gap-1">
-                                          <AlertTriangle className="w-3 h-3 text-orange-600 shrink-0 mt-0.5 animate-pulse" />
+                                          <AlertTriangle className="w-3 h-3 text-warning shrink-0 mt-0.5 animate-pulse" />
                                           <span>{cert.validationFeedback}</span>
                                         </div>
                                         <button
                                           onClick={() => handleManualApprove(cert.id)}
-                                          className="text-[9px] w-max font-semibold text-emerald-700 hover:bg-emerald-100 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 transition-colors cursor-pointer mt-0.5"
+                                          className="text-[9px] w-max font-semibold text-success hover:bg-success/20 bg-success/10 px-2 py-0.5 rounded border border-success/40 transition-colors cursor-pointer mt-0.5"
                                           title="Ignorar incompatibilidade identificada pela IA e aprovar o documento"
                                         >
                                           ✓ Forçar aprovação deste documento
@@ -1756,75 +1769,75 @@ Retorne exclusivamente o JSON estruturado.
                                 )}
                               </div>
                             </div>
-                          </td>
-                          
-                          <td className="p-2.5 w-[110px] text-center">
+                          </TableCell>
+
+                          <TableCell className="p-2.5 w-[110px] text-center">
                             {isAnalyzing ? (
-                              <span className="inline-flex items-center gap-0.5 rounded-full bg-[#FFF0E5] text-[#FF5A00] px-1.5 py-0.5 text-[10px] font-semibold border border-[#FFD6C2] animate-pulse">
+                              <Badge variant="outline" className="gap-0.5 text-[10px] text-primary border-primary/30 bg-primary/10 animate-pulse">
                                 <Loader2 className="w-3 h-3 shrink-0 animate-spin" />
                                 Lendo...
-                              </span>
+                              </Badge>
                             ) : !isUploaded ? (
-                              <span className="inline-flex items-center gap-0.5 rounded-full bg-gray-100 text-[#6B7280] px-1.5 py-0.5 text-[10px] font-semibold border border-gray-200">
+                              <Badge variant="secondary" className="text-[10px]">
                                 Pendente
-                              </span>
+                              </Badge>
                             ) : (
                               <>
                                 {cert.documentMatchesRow === false ? (
-                                  <span className="inline-flex items-center gap-0.5 rounded-full bg-orange-50 text-orange-700 px-1.5 py-0.5 text-[10px] font-semibold border border-orange-200" title={cert.validationFeedback}>
-                                    <AlertTriangle className="w-3 h-3 shrink-0 text-orange-600" />
+                                  <Badge variant="outline" className="gap-0.5 text-[10px]" title={cert.validationFeedback}>
+                                    <AlertTriangle className="w-3 h-3 shrink-0" />
                                     Incompatível
-                                  </span>
+                                  </Badge>
                                 ) : (
                                   <>
                                     {status === "expired" && (
-                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-50 text-rose-700 px-1.5 py-0.5 text-[10px] font-semibold border border-rose-200">
+                                      <Badge variant="destructive" className="gap-0.5 text-[10px]">
                                         <AlertTriangle className="w-3 h-3 shrink-0" />
                                         Vencida
-                                      </span>
+                                      </Badge>
                                     )}
                                     {status === "expiring_soon" && (
-                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 text-amber-700 px-1.5 py-0.5 text-[10px] font-semibold border border-amber-200">
+                                      <Badge variant="warning" className="gap-0.5 text-[10px]">
                                         <Clock className="w-3 h-3 shrink-0 animate-pulse" />
                                         Vencendo
-                                      </span>
+                                      </Badge>
                                     )}
                                     {status === "valid" && (
-                                      <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 px-1.5 py-0.5 text-[10px] font-semibold border border-emerald-200">
+                                      <Badge variant="success" className="gap-0.5 text-[10px]">
                                         <CheckCircle className="w-3 h-3 shrink-0" />
                                         Válida
-                                      </span>
+                                      </Badge>
                                     )}
                                   </>
                                 )}
                               </>
                             )}
-                          </td>
+                          </TableCell>
 
-                          <td className="p-2.5 w-[100px] text-center whitespace-nowrap">
+                          <TableCell className="p-2.5 w-[100px] text-center whitespace-nowrap">
                             {isAnalyzing ? (
-                              <span className="text-[#9CA3AF] text-xs font-mono">-</span>
+                              <span className="text-muted-foreground text-xs font-mono">-</span>
                             ) : !isUploaded ? (
-                              <span className="text-[#9CA3AF] text-[11px] font-mono font-normal">Pendente</span>
+                              <span className="text-muted-foreground text-[11px] font-mono font-normal">Pendente</span>
                             ) : (
                               <span className={`text-[11px] font-medium font-mono ${
-                                status === "expired" ? "text-rose-600 font-bold" :
-                                status === "expiring_soon" ? "text-amber-600 font-semibold" : "text-[#374151]"
+                                status === "expired" ? "text-destructive font-bold" :
+                                status === "expiring_soon" ? "text-warning font-semibold" : "text-foreground"
                               }`}>
                                 {cert.expirationDate ? new Date(cert.expirationDate).getUTCDate() ? new Date(cert.expirationDate).getUTCDate().toString().padStart(2, '0') + '/' + (new Date(cert.expirationDate).getUTCMonth() + 1).toString().padStart(2, '0') + '/' + new Date(cert.expirationDate).getUTCFullYear() : new Date(cert.expirationDate).toLocaleDateString("pt-BR") : "Sem Venc."}
                               </span>
                             )}
-                          </td>
+                          </TableCell>
 
-                          <td className="p-2.5 pl-2.5 pr-4 w-[130px] text-center whitespace-nowrap">
+                          <TableCell className="p-2.5 pl-2.5 pr-4 w-[130px] text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1">
                               {isAnalyzing ? (
-                                <span className="text-[10px] text-[#FF5A00] font-medium animate-pulse">Lendo...</span>
+                                <span className="text-[10px] text-primary font-medium animate-pulse">Lendo...</span>
                               ) : !isUploaded ? (
-                                <label className="flex items-center justify-center gap-1 bg-[#FFF0E5] hover:bg-[#FFE3D1] border border-[#FFD6C2] text-[#FF5A00] font-semibold rounded px-1.5 py-1 text-[10px] transition duration-150 cursor-pointer shadow-xs">
+                                <label className="flex items-center justify-center gap-1 bg-primary/10 hover:bg-primary/15 border border-primary/30 text-primary font-semibold rounded px-1.5 py-1 text-[10px] transition duration-150 cursor-pointer shadow-xs">
                                   <FileUp className="w-3 h-3" />
                                   <span>Upload</span>
-                                  <input 
+                                  <input
                                     type="file"
                                     className="hidden"
                                     accept=".pdf,.png,.jpg,.jpeg,.txt"
@@ -1833,73 +1846,74 @@ Retorne exclusivamente o JSON estruturado.
                                 </label>
                               ) : (
                                 <div className="flex items-center gap-1">
-                                  <button
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
                                     onClick={() => startEdit(cert)}
-                                    className="text-[#6B7280] hover:text-[#FF5A00] p-1 hover:bg-[#F3F4F6] rounded transition-colors cursor-pointer"
+                                    className="h-7 w-7 text-muted-foreground hover:text-primary"
                                     title="Editar data ou informações de vencimento"
                                   >
                                     <Edit2 className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
                                     onClick={() => handleDeleteAttachment(cert.id)}
-                                    className="text-[#6B7280] hover:text-rose-600 p-1 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                                    className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                                     title="Remover arquivo carregado"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                                  </Button>
                                 </div>
                               )}
                             </div>
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       );
                     })
                   )}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
 
           </div>
           
           {/* Note */}
-          <div className="flex items-center gap-2 text-xs text-[#6B7280] mt-4 leading-normal">
-            <span className="shrink-0 bg-[#F3F4F6] border border-[#E5E7EB] text-[#374151] w-4 h-4 rounded-full flex items-center justify-center font-bold">!</span>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-4 leading-normal">
+            <span className="shrink-0 bg-muted border text-foreground w-4 h-4 rounded-full flex items-center justify-center font-bold">!</span>
             <span>A análise temporal de vigência é calculada dinamicamente com base na data do sistema consolidada em <strong>18 de Junho de 2026</strong>.</span>
           </div>
 
-        </div>
+        </Card>
       </div>
 
-      {confirmDialog && (
-        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 overflow-y-auto">
-          <div className="bg-white dark:bg-[#18181B] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-sm w-full p-5 sm:p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200 my-auto">
-            <h3 className="text-sm font-semibold text-[#111827] dark:text-zinc-100 mb-2 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-              <span>{confirmDialog.title}</span>
-            </h3>
-            <p className="text-xs text-[#4B5563] dark:text-zinc-300 mb-5 leading-relaxed">
-              {confirmDialog.message}
-            </p>
-            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3">
-              <button
-                onClick={() => setConfirmDialog(null)}
-                className="w-full sm:w-auto px-4 py-2 text-xs font-semibold text-[#374151] dark:text-zinc-300 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/50 rounded-xl transition-all cursor-pointer border border-[#D1D5DB] dark:border-zinc-700 text-center"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={() => {
-                  confirmDialog.onConfirm();
-                  setConfirmDialog(null);
-                }}
-                className="w-full sm:w-auto px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl transition-all cursor-pointer shadow-xs text-center"
-              >
-                Confirmar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Dialog open={!!confirmDialog} onOpenChange={(open) => { if (!open) setConfirmDialog(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
+              <span>{confirmDialog?.title}</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs leading-relaxed">
+              {confirmDialog?.message}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDialog(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                confirmDialog?.onConfirm();
+                setConfirmDialog(null);
+              }}
+            >
+              Confirmar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

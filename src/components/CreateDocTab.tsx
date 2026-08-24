@@ -59,12 +59,32 @@ import {
 import { CompanyData, EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
 import { apiFetch, validateApiKeyFormat, formatAiError, getActiveAiConfig } from "../utils/aiClientHelper";
-import { 
-  syncDocumentToSupabase, 
-  fetchDocumentosFromSupabase, 
-  subscribeToSupabaseTable 
+import {
+  syncDocumentToSupabase,
+  fetchDocumentosFromSupabase,
+  subscribeToSupabaseTable
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
+import { Button } from "./ui/button";
+import { Card } from "./ui/card";
+import { Badge } from "./ui/badge";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Checkbox } from "./ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "./ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from "./ui/dropdown-menu";
 
 interface CreateDocTabProps {
   companyData: CompanyData;
@@ -723,7 +743,7 @@ REGRAS RÍGIDAS DE GERAÇÃO:
       const data = await response.json();
       if (data.reply) {
         setDocumentContent(data.reply);
-        confetti({ particleCount: 40, spread: 60, colors: ["#6366f1", "#10b981"] });
+        confetti({ particleCount: 40, spread: 60 });
       }
     } catch (err: any) {
       console.error("Erro na geração com o Agente IA:", err);
@@ -930,168 +950,179 @@ REGRAS RÍGIDAS DE GERAÇÃO:
     <div className="space-y-6 animate-fade-in pb-16">
       
       {/* UNIFIED MINIMALIST CONTROL PANEL */}
-      <div className="bg-slate-900 border border-white/10 rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
+      <Card className="p-4 sm:p-5 gap-4">
         {/* Top Row: Title + Main Action Buttons */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400 shrink-0">
+            <div className="p-2 bg-primary/10 border border-primary/20 rounded-xl text-primary shrink-0">
               <FileEdit className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-white tracking-tight">Estúdio Criar Documentos</h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                <h2 className="text-base font-bold text-foreground tracking-tight">Estúdio Criar Documentos</h2>
+                <Badge variant="secondary" className="text-[10px] font-bold rounded-full">
                   IA Assessor
-                </span>
+                </Badge>
               </div>
-              <p className="text-slate-400 text-xs mt-0.5">
+              <p className="text-muted-foreground text-xs mt-0.5">
                 Crie e adeque documentos oficiais com preenchimento automático pelo Agente IA.
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <button
+            <Button
               onClick={handleNewDocument}
-              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+              variant="outline"
+              size="sm"
+              className="cursor-pointer"
               title="Criar novo documento limpo"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Novo</span>
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={() => setShowDraftsModal(true)}
-              className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+              variant="outline"
+              size="sm"
+              className="cursor-pointer"
             >
-              <FileCode className="w-3.5 h-3.5 text-indigo-400" />
+              <FileCode className="w-3.5 h-3.5" />
               <span>Rascunhos ({draftsList.length})</span>
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={handleSaveDraft}
-              className="px-3 py-1.5 bg-white hover:bg-[#F3F4F6] text-[#374151] border border-[#D1D5DB] rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+              variant="outline"
+              size="sm"
+              className="cursor-pointer"
             >
-              {savedSuccess ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Save className="w-3.5 h-3.5 text-[#6B7280]" />}
+              {savedSuccess ? <Check className="w-3.5 h-3.5 text-success" /> : <Save className="w-3.5 h-3.5" />}
               <span>{savedSuccess ? "Salvo!" : "Salvar Rascunho"}</span>
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={() => handleAiAutoFill()}
               disabled={isGenerating}
-              className="px-4 py-2 bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50 transition-all shrink-0"
+              className="cursor-pointer shrink-0"
             >
               {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
               <span>{isGenerating ? "Preenchendo..." : "Preencher com IA"}</span>
-            </button>
+            </Button>
           </div>
         </div>
 
         {/* Bottom Row: Minimalist Controls Strip (Modelo, Edital, Empresa) */}
-        <div className="pt-3 border-t border-[#F3F4F6] flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="pt-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
             {/* 1. Modelo Selector Button */}
-            <button
+            <Button
               onClick={() => setShowTemplateModal(true)}
-              className="px-3 py-1.5 bg-white hover:bg-[#F9FAFB] border border-[#D1D5DB] hover:border-[#FF5A00]/50 rounded-xl text-xs font-semibold text-[#111827] flex items-center gap-2 transition-all cursor-pointer truncate max-w-xs shadow-2xs"
+              variant="outline"
+              size="sm"
+              className="cursor-pointer truncate max-w-xs justify-start"
               title="Trocar Modelo de Documento"
             >
-              <span className="text-[#FF5A00] font-bold uppercase text-[10px] shrink-0 font-mono">Modelo:</span>
+              <span className="text-primary font-bold uppercase text-[10px] shrink-0 font-mono">Modelo:</span>
               <span className="truncate">{selectedTemplate.badgeText} — {selectedTemplate.title}</span>
-              <ChevronDown className="w-3.5 h-3.5 text-[#6B7280] shrink-0" />
-            </button>
+              <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            </Button>
 
             {/* 2. Edital Source Dropdown */}
-            <div className="relative inline-flex items-center">
-              <select
-                value={editalSourceMode === "analyzed" ? `analyzed_${selectedEditalIndex}` : "new"}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === "new") {
-                    setEditalSourceMode("new");
-                  } else if (val.startsWith("analyzed_")) {
-                    setEditalSourceMode("analyzed");
-                    const idx = parseInt(val.replace("analyzed_", ""), 10);
-                    setSelectedEditalIndex(idx);
-                  }
-                }}
-                className="bg-white hover:bg-[#F9FAFB] border border-[#D1D5DB] hover:border-[#FF5A00]/50 rounded-xl px-3 py-1.5 text-xs font-semibold text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00] cursor-pointer max-w-xs shadow-2xs"
-              >
+            <Select
+              value={editalSourceMode === "analyzed" ? `analyzed_${selectedEditalIndex}` : "new"}
+              onValueChange={(val) => {
+                if (val === "new") {
+                  setEditalSourceMode("new");
+                } else if (val.startsWith("analyzed_")) {
+                  setEditalSourceMode("analyzed");
+                  const idx = parseInt(val.replace("analyzed_", ""), 10);
+                  setSelectedEditalIndex(idx);
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="text-xs font-semibold max-w-xs cursor-pointer">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
                 {analyzedEditais.length > 0 ? (
                   analyzedEditais.map((ed, idx) => (
-                    <option key={idx} value={`analyzed_${idx}`} className="bg-white text-[#111827]">
+                    <SelectItem key={idx} value={`analyzed_${idx}`}>
                       Edital: {ed.identificacaoCertame?.identificacaoNumerica || `Análise #${idx + 1}`} ({ed.identificacaoCertame?.orgaoComprador?.slice(0, 20) || "Histórico"})
-                    </option>
+                    </SelectItem>
                   ))
                 ) : (
-                  <option value="analyzed_0" disabled className="bg-white text-[#9CA3AF]">
+                  <SelectItem value="analyzed_0" disabled>
                     Edital: Nenhum no Histórico
-                  </option>
+                  </SelectItem>
                 )}
-                <option value="new" className="bg-white text-[#FF5A00] font-bold">
+                <SelectItem value="new" className="text-primary font-bold">
                   + Anexar / Upload de Novo Edital
-                </option>
-              </select>
-            </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
 
             {/* 3. Empresa Context Toggle Checkbox */}
-            <label className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 cursor-pointer transition-all ${
-              useCompanyContext ? "bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold" : "bg-white border-[#D1D5DB] text-[#6B7280]"
-            }`}>
-              <input
-                type="checkbox"
+            <Label
+              className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 cursor-pointer transition-all font-normal ${
+                useCompanyContext ? "bg-success/10 border-success/30 text-success font-semibold" : "bg-transparent border-input text-muted-foreground"
+              }`}
+            >
+              <Checkbox
                 checked={useCompanyContext}
-                onChange={(e) => setUseCompanyContext(e.target.checked)}
-                className="rounded border-[#D1D5DB] bg-white text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
+                onCheckedChange={(checked) => setUseCompanyContext(checked === true)}
               />
               <Building2 className="w-3.5 h-3.5 shrink-0" />
               <span className="text-xs truncate max-w-[180px]">
                 {companyData.razonSocial ? companyData.razonSocial : "Dados da Empresa"}
               </span>
-            </label>
+            </Label>
           </div>
 
           {/* Quick Upload action when 'new' edital is selected */}
           {editalSourceMode === "new" && (
             <div className="flex items-center gap-2 shrink-0">
-              <label className="px-3 py-1 bg-[#FF5A00]/10 hover:bg-[#FF5A00]/20 border border-[#FF5A00]/20 rounded-lg text-[11px] font-semibold text-[#FF5A00] flex items-center gap-1.5 cursor-pointer transition-all">
+              <label className="px-3 py-1 bg-primary/10 hover:bg-primary/20 border border-primary/20 rounded-lg text-[11px] font-semibold text-primary flex items-center gap-1.5 cursor-pointer transition-all">
                 <FileUp className="w-3.5 h-3.5" />
                 <span>{newEditalFileName || "Anexar Arquivo (.pdf / .txt)"}</span>
                 <input type="file" accept=".txt,.pdf,.doc,.docx" onChange={handleNewEditalFileUpload} className="hidden" />
               </label>
               {newEditalText && (
-                <span className="text-[10px] text-emerald-700 font-bold">✓ Carregado</span>
+                <span className="text-[10px] text-success font-bold">✓ Carregado</span>
               )}
             </div>
           )}
         </div>
-      </div>
+      </Card>
 
       {/* TEMPLATE SWITCHER MODAL / POPUP */}
       {showTemplateModal && (
-        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 animate-fade-in overflow-y-auto">
-          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl max-w-3xl w-full max-h-[92vh] sm:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden my-auto">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 animate-fade-in overflow-y-auto">
+          <Card className="max-w-3xl w-full max-h-[92vh] sm:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden my-auto p-0 gap-0">
             {/* Modal Header */}
-            <div className="p-3.5 sm:p-4 border-b border-[#F3F4F6] dark:border-[#27272A] flex items-center justify-between bg-white dark:bg-[#18181B] shrink-0">
+            <div className="p-3.5 sm:p-4 border-b border-border flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                <div className="bg-[#FFF0E5] dark:bg-[#2A170A] p-2 rounded-xl border border-[#FFD6C2] dark:border-[#4A2410] shrink-0">
-                  <Layers className="w-5 h-5 text-[#FF5A00]" />
+                <div className="bg-primary/10 p-2 rounded-xl border border-primary/20 shrink-0">
+                  <Layers className="w-5 h-5 text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <h3 className="font-bold text-[#111827] dark:text-zinc-100 text-sm sm:text-base truncate">Selecione o Modelo de Documento</h3>
-                  <p className="text-[#6B7280] dark:text-zinc-400 text-[11px] sm:text-xs truncate">Escolha o modelo base para carregar no papel timbrado</p>
+                  <h3 className="font-bold text-foreground text-sm sm:text-base truncate">Selecione o Modelo de Documento</h3>
+                  <p className="text-muted-foreground text-[11px] sm:text-xs truncate">Escolha o modelo base para carregar no papel timbrado</p>
                 </div>
               </div>
-              <button
+              <Button
                 onClick={() => setShowTemplateModal(false)}
-                className="p-1.5 text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer shrink-0"
+                variant="ghost"
+                size="icon"
+                className="cursor-pointer shrink-0"
               >
                 <X className="w-5 h-5" />
-              </button>
+              </Button>
             </div>
 
             {/* Filter & Search Bar */}
-            <div className="p-4 border-b border-[#F3F4F6] bg-[#F9FAFB] space-y-3">
+            <div className="p-4 border-b border-border bg-muted/40 space-y-3">
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto pb-1">
                   {[
@@ -1101,35 +1132,33 @@ REGRAS RÍGIDAS DE GERAÇÃO:
                     { id: "recursos", label: "Recursos" },
                     { id: "atestados", label: "Atestados" }
                   ].map(cat => (
-                    <button
+                    <Button
                       key={cat.id}
                       onClick={() => setActiveCategory(cat.id)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
-                        activeCategory === cat.id
-                          ? "bg-[#FF5A00] text-white shadow-xs"
-                          : "bg-white text-[#6B7280] hover:text-[#111827] hover:bg-gray-100 border border-[#E5E7EB]"
-                      }`}
+                      variant={activeCategory === cat.id ? "default" : "outline"}
+                      size="sm"
+                      className="cursor-pointer whitespace-nowrap"
                     >
                       {cat.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
 
                 <div className="relative w-full sm:w-56 shrink-0">
-                  <Search className="w-3.5 h-3.5 text-[#6B7280] absolute left-3 top-2.5" />
-                  <input
+                  <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Input
                     type="text"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Buscar modelo..."
-                    className="w-full bg-white border border-[#D1D5DB] rounded-xl pl-8 pr-3 py-1.5 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                    className="pl-8 text-xs h-8"
                   />
                 </div>
               </div>
             </div>
 
             {/* Templates Scrollable List */}
-            <div className="p-4 overflow-y-auto space-y-2.5 max-h-[50vh] bg-white">
+            <div className="p-4 overflow-y-auto space-y-2.5 max-h-[50vh]">
               {filteredTemplates.map(tpl => {
                 const isSelected = selectedTemplate.id === tpl.id;
                 return (
@@ -1141,217 +1170,215 @@ REGRAS RÍGIDAS DE GERAÇÃO:
                     }}
                     className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 group ${
                       isSelected
-                        ? "bg-[#FF5A00]/5 border-[#FF5A00] shadow-2xs"
-                        : "bg-white border-[#E5E7EB] hover:border-[#FF5A00]/40 hover:bg-[#F9FAFB]"
+                        ? "bg-primary/5 border-primary shadow-2xs"
+                        : "bg-card border-border hover:border-primary/40 hover:bg-muted/40"
                     }`}
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                          isSelected ? "bg-[#FF5A00]/15 text-[#FF5A00] border border-[#FF5A00]/30" : "bg-gray-100 text-[#6B7280]"
-                        }`}>
+                        <Badge variant={isSelected ? "default" : "secondary"} className="text-[10px]">
                           {tpl.badgeText}
-                        </span>
-                        <span className="text-[10px] text-[#6B7280] capitalize font-medium">{tpl.category}</span>
+                        </Badge>
+                        <span className="text-[10px] text-muted-foreground capitalize font-medium">{tpl.category}</span>
                       </div>
-                      <h4 className="font-bold text-[#111827] text-sm group-hover:text-[#FF5A00] transition-colors truncate">
+                      <h4 className="font-bold text-foreground text-sm group-hover:text-primary transition-colors truncate">
                         {tpl.title}
                       </h4>
-                      <p className="text-[#6B7280] text-xs line-clamp-1 mt-0.5">
+                      <p className="text-muted-foreground text-xs line-clamp-1 mt-0.5">
                         {tpl.description}
                       </p>
                     </div>
 
-                    <button className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all ${
-                      isSelected ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-[#FF5A00] text-white group-hover:bg-[#E04F00]"
-                    }`}>
+                    <Badge variant={isSelected ? "success" : "default"} className="shrink-0 text-xs font-bold">
                       {isSelected ? "Ativo" : "Selecionar"}
-                    </button>
+                    </Badge>
                   </div>
                 );
               })}
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {/* DOCUMENT STUDIO - DIRECT A4 PAPER EDITOR (GOOGLE DOCS STYLE) */}
-      <div className="bg-white border border-[#E5E7EB] rounded-2xl p-5 space-y-4 shadow-xs">
-        
+      <Card className="p-5 gap-4">
+
         {/* Title & Top Toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-[#F3F4F6]">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-border">
           <div className="flex-1">
-            <label className="text-[10px] font-bold text-[#6B7280] uppercase tracking-wider block mb-1 font-mono">Título do Documento</label>
-            <input
+            <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block mb-1 font-mono">Título do Documento</Label>
+            <Input
               type="text"
               value={docTitle}
               onChange={(e) => setDocTitle(e.target.value)}
-              className="w-full bg-white border border-[#D1D5DB] rounded-xl px-3.5 py-2 text-sm font-bold text-[#111827] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+              className="w-full text-sm font-bold"
             />
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
             {/* Fullscreen Button */}
-            <button
+            <Button
               onClick={() => setIsFullscreenDocs(true)}
-              className="px-3.5 py-2 bg-[#FF5A00]/10 hover:bg-[#FF5A00]/20 text-[#FF5A00] border border-[#FF5A00]/20 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+              variant="outline"
+              className="cursor-pointer text-primary border-primary/20 bg-primary/10 hover:bg-primary/20 hover:text-primary"
             >
               <Maximize2 className="w-4 h-4" />
               <span>Editar em Tela Cheia (Página Inteira)</span>
-            </button>
+            </Button>
 
             {/* DOWNLOAD BUTTON DROPDOWN */}
-            <div className="relative">
-              <button
-                onClick={() => setShowDownloadMenu(!showDownloadMenu)}
-                className="px-4 py-2 bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-all"
-              >
-                <Download className="w-4 h-4" />
-                <span>Baixar Documento</span>
-                <ChevronDown className="w-3.5 h-3.5" />
-              </button>
+            <DropdownMenu open={showDownloadMenu} onOpenChange={setShowDownloadMenu}>
+              <DropdownMenuTrigger asChild>
+                <Button className="cursor-pointer">
+                  <Download className="w-4 h-4" />
+                  <span>Baixar Documento</span>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
 
-              {/* Download Menu Dropdown Modal */}
-              {showDownloadMenu && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-[#E5E7EB] rounded-2xl shadow-xl p-2 z-50 animate-fade-in space-y-1">
-                  <button
-                    onClick={handleDownloadPdf}
-                    className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-[#374151] hover:bg-rose-50 hover:text-rose-900 flex items-center gap-2.5 transition-colors cursor-pointer"
-                  >
-                    <Printer className="w-4 h-4 text-rose-600" />
-                    <div>
-                      <span className="block font-bold">Baixar como PDF (.pdf)</span>
-                      <span className="text-[10px] text-[#6B7280]">Formatação A4 Oficial para Impressão</span>
-                    </div>
-                  </button>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuItem onClick={handleDownloadPdf} className="cursor-pointer">
+                  <Printer className="w-4 h-4 text-destructive" />
+                  <div>
+                    <span className="block font-bold">Baixar como PDF (.pdf)</span>
+                    <span className="text-[10px] text-muted-foreground">Formatação A4 Oficial para Impressão</span>
+                  </div>
+                </DropdownMenuItem>
 
-                  <button
-                    onClick={handleDownloadWord}
-                    className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-[#374151] hover:bg-blue-50 hover:text-blue-900 flex items-center gap-2.5 transition-colors cursor-pointer"
-                  >
-                    <FileText className="w-4 h-4 text-blue-600" />
-                    <div>
-                      <span className="block font-bold">Baixar para Word (.docx)</span>
-                      <span className="text-[10px] text-[#6B7280]">Editável no Microsoft Word</span>
-                    </div>
-                  </button>
+                <DropdownMenuItem onClick={handleDownloadWord} className="cursor-pointer">
+                  <FileText className="w-4 h-4 text-primary" />
+                  <div>
+                    <span className="block font-bold">Baixar para Word (.docx)</span>
+                    <span className="text-[10px] text-muted-foreground">Editável no Microsoft Word</span>
+                  </div>
+                </DropdownMenuItem>
 
-                  <button
-                    onClick={handleDownloadMarkdown}
-                    className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold text-[#374151] hover:bg-orange-50 hover:text-[#FF5A00] flex items-center gap-2.5 transition-colors cursor-pointer"
-                  >
-                    <FileCode className="w-4 h-4 text-[#FF5A00]" />
-                    <div>
-                      <span className="block font-bold">Baixar em Markdown (.md)</span>
-                      <span className="text-[10px] text-[#6B7280]">Marcação técnica de texto</span>
-                    </div>
-                  </button>
+                <DropdownMenuItem onClick={handleDownloadMarkdown} className="cursor-pointer">
+                  <FileCode className="w-4 h-4 text-primary" />
+                  <div>
+                    <span className="block font-bold">Baixar em Markdown (.md)</span>
+                    <span className="text-[10px] text-muted-foreground">Marcação técnica de texto</span>
+                  </div>
+                </DropdownMenuItem>
 
-                  <div className="h-px bg-[#E5E7EB] my-1"></div>
+                <DropdownMenuSeparator />
 
-                  <button
-                    onClick={handleCopyText}
-                    className="w-full text-left px-3 py-2 rounded-xl text-xs font-semibold text-[#374151] hover:bg-[#F3F4F6] flex items-center gap-2.5 transition-colors cursor-pointer"
-                  >
-                    <Copy className="w-4 h-4 text-[#6B7280]" />
-                    <span>Copiar Texto Formatado</span>
-                  </button>
-                </div>
-              )}
-            </div>
+                <DropdownMenuItem onClick={handleCopyText} className="cursor-pointer">
+                  <Copy className="w-4 h-4 text-muted-foreground" />
+                  <span>Copiar Texto Formatado</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-            <button
+            <Button
               onClick={handleGoogleDriveSync}
               disabled={isSyncing}
-              className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+              variant="outline"
+              className="cursor-pointer text-success border-success/30 bg-success/10 hover:bg-success/20 hover:text-success"
             >
               <HardDriveDownload className="w-4 h-4" />
               <span>Drive</span>
-            </button>
+            </Button>
           </div>
         </div>
 
         {/* GOOGLE DOCS STYLE FORMATTING TOOLBAR */}
-        <div className="bg-[#F9FAFB] p-2.5 rounded-xl border border-[#E5E7EB] flex flex-wrap items-center justify-between gap-2 text-[#374151] text-xs">
+        <div className="bg-muted/40 p-2.5 rounded-xl border border-border flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex flex-wrap items-center gap-1">
-            
-            <button
+
+            <Button
               onClick={() => handleInsertVariable("\n# TÍTULO DO DOCUMENTO\n")}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8"
               title="Título H1"
             >
               <Heading1 className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={() => handleInsertVariable("\n## SUBTÍTULO\n")}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8"
               title="Subtítulo H2"
             >
               <Heading2 className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={() => handleInsertVariable("\n### SEÇÃO TÉCNICA\n")}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8"
               title="Seção H3"
             >
               <Heading3 className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <div className="w-px h-4 bg-[#E5E7EB] mx-1"></div>
+            <div className="w-px h-4 bg-border mx-1"></div>
 
-            <button
+            <Button
               onClick={() => handleInsertVariable("**Texto em Negrito**")}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer font-bold"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8 font-bold"
               title="Negrito (**)"
             >
               <Bold className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={() => handleInsertVariable("*Texto em Itálico*")}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer italic"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8 italic"
               title="Itálico (*)"
             >
               <Italic className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <div className="w-px h-4 bg-[#E5E7EB] mx-1"></div>
+            <div className="w-px h-4 bg-border mx-1"></div>
 
-            <button
+            <Button
               onClick={() => handleInsertVariable("\n- Item 1\n- Item 2\n")}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8"
               title="Lista com Marcadores"
             >
               <List className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={() => handleInsertVariable("\n1. Primeiro item\n2. Segundo item\n")}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8"
               title="Lista Numerada"
             >
               <ListOrdered className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={handleInsertTable}
-              className="p-1.5 hover:bg-[#E5E7EB] rounded-lg text-[#374151] hover:text-[#111827] transition-colors cursor-pointer"
+              variant="ghost"
+              size="icon"
+              className="cursor-pointer size-8"
               title="Inserir Tabela de Preços"
             >
               <Table className="w-4 h-4" />
-            </button>
+            </Button>
 
-            <div className="w-px h-4 bg-[#E5E7EB] mx-1"></div>
+            <div className="w-px h-4 bg-border mx-1"></div>
 
             {/* Quick Variables */}
             <div className="relative group">
-              <button className="px-2.5 py-1 bg-white hover:bg-[#F3F4F6] rounded-lg text-[11px] font-semibold text-[#FF5A00] border border-[#FF5A00]/30 flex items-center gap-1 cursor-pointer">
+              <Button variant="outline" size="sm" className="cursor-pointer text-primary border-primary/30 bg-transparent hover:bg-primary/10 hover:text-primary">
                 <span>+ Variável Dinâmica</span>
-              </button>
-              
-              <div className="absolute top-full left-0 mt-1 w-56 bg-white border border-[#E5E7EB] rounded-xl shadow-xl p-1.5 hidden group-hover:block z-50 space-y-0.5">
+              </Button>
+
+              <div className="absolute top-full left-0 mt-1 w-56 bg-popover text-popover-foreground border border-border rounded-xl shadow-xl p-1.5 hidden group-hover:block z-50 space-y-0.5">
                 {[
                   { label: "Razão Social", val: "{RazaoSocial}" },
                   { label: "CNPJ da Empresa", val: "{CNPJ}" },
@@ -1365,9 +1392,9 @@ REGRAS RÍGIDAS DE GERAÇÃO:
                   <button
                     key={v.val}
                     onClick={() => handleInsertVariable(v.val)}
-                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs hover:bg-orange-50 hover:text-[#FF5A00] text-[#374151] transition-colors block"
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs hover:bg-accent hover:text-accent-foreground transition-colors block cursor-pointer"
                   >
-                    {v.label} <span className="text-[10px] text-[#6B7280] font-mono">({v.val})</span>
+                    {v.label} <span className="text-[10px] text-muted-foreground font-mono">({v.val})</span>
                   </button>
                 ))}
               </div>
@@ -1376,27 +1403,28 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 
           <div className="flex items-center gap-2">
             {/* Copiloto Agente IA */}
-            <button
+            <Button
               onClick={() => setShowAiAssist(!showAiAssist)}
-              className="px-3 py-1 bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer transition-all"
+              size="sm"
+              className="cursor-pointer"
             >
               <Wand2 className="w-3.5 h-3.5" />
               <span>Copiloto Agente IA</span>
-            </button>
+            </Button>
           </div>
         </div>
 
         {/* INLINE AGENTE IA COPILOT DRAWER */}
         {showAiAssist && (
-          <div className="bg-orange-50/60 border border-[#FF5A00]/20 rounded-xl p-4 space-y-3 animate-fade-in shadow-2xs">
+          <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 space-y-3 animate-fade-in shadow-2xs">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Bot className="w-4 h-4 text-[#FF5A00]" />
-                <span className="text-xs font-bold text-[#111827]">Ajude-me a Escrever (Agente IA)</span>
+                <Bot className="w-4 h-4 text-primary" />
+                <span className="text-xs font-bold text-foreground">Ajude-me a Escrever (Agente IA)</span>
               </div>
-              <button onClick={() => setShowAiAssist(false)} className="text-[#6B7280] hover:text-[#111827]">
+              <Button onClick={() => setShowAiAssist(false)} variant="ghost" size="icon" className="cursor-pointer size-6 text-muted-foreground hover:text-foreground">
                 <X className="w-4 h-4" />
-              </button>
+              </Button>
             </div>
 
             <div className="flex flex-wrap gap-1.5 text-[11px]">
@@ -1407,42 +1435,44 @@ REGRAS RÍGIDAS DE GERAÇÃO:
                 "📊 Inserir quadro de valores e dados bancários",
                 "✂️ Resumir mantendo clareza técnica"
               ].map(chip => (
-                <button
+                <Button
                   key={chip}
                   onClick={() => handleAiAutoFill(chip)}
-                  className="px-2.5 py-1 bg-white hover:bg-orange-100/80 text-[#374151] border border-[#FF5A00]/30 rounded-lg transition-colors cursor-pointer"
+                  variant="outline"
+                  size="sm"
+                  className="cursor-pointer text-[11px] h-auto py-1 px-2.5 border-primary/30 font-normal"
                 >
                   {chip}
-                </button>
+                </Button>
               ))}
             </div>
 
             <div className="flex gap-2">
-              <input
+              <Input
                 type="text"
                 value={aiAssistPrompt}
                 onChange={(e) => setAiAssistPrompt(e.target.value)}
                 placeholder="Ex: Reescreva a introdução reforçando que nossa garantia é de 24 meses..."
-                className="flex-1 bg-white border border-[#D1D5DB] rounded-xl px-3.5 py-2 text-xs text-[#111827] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#FF5A00]"
+                className="flex-1 text-xs"
               />
-              <button
+              <Button
                 onClick={() => handleAiAutoFill(aiAssistPrompt)}
                 disabled={isGenerating || !aiAssistPrompt}
-                className="px-4 py-2 bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white font-bold text-xs rounded-xl flex items-center gap-1.5 disabled:opacity-50 transition-all cursor-pointer"
+                className="cursor-pointer"
               >
                 {isGenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                 <span>Executar</span>
-              </button>
+              </Button>
             </div>
           </div>
         )}
 
         {/* DIRECT A4 PAPEL TIMBRADO EDITOR (GOOGLE DOCS / WORD STAGE) */}
-        <div className="bg-[#F3F4F6] p-4 md:p-8 rounded-2xl border border-[#E5E7EB] min-h-[750px] overflow-y-auto flex flex-col items-center">
-          
+        <div className="bg-muted/40 p-4 md:p-8 rounded-2xl border border-border min-h-[750px] overflow-y-auto flex flex-col items-center">
+
           <div className="w-full max-w-[210mm] flex items-center justify-between mb-4 px-1 gap-2 flex-wrap">
-            <div className="text-[#6B7280] text-xs flex items-center gap-2">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <div className="text-muted-foreground text-xs flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span>
               <span>Papel Timbrado Oficial • A4 (210mm x 297mm) • Edição Direta no Documento</span>
             </div>
           </div>
@@ -1494,16 +1524,16 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 
         </div>
 
-      </div>
+      </Card>
 
       {/* FULLSCREEN GOOGLE DOCS CANVAS MODAL */}
       {isFullscreenDocs && (
-        <div className="fixed inset-0 z-[9999] bg-[#F3F4F6] dark:bg-[#121212] flex flex-col animate-fade-in overflow-hidden">
-          
+        <div className="fixed inset-0 z-[9999] bg-muted flex flex-col animate-fade-in overflow-hidden">
+
           {/* Top Bar */}
-          <div className="bg-white dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] px-4 sm:px-6 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-2xs">
+          <div className="bg-card border-b border-border px-4 sm:px-6 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-2xs">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="bg-[#FF5A00] p-2 rounded-xl text-white shrink-0">
+              <div className="bg-primary p-2 rounded-xl text-primary-foreground shrink-0">
                 <FileEdit className="w-5 h-5" />
               </div>
               <div className="min-w-0">
@@ -1511,69 +1541,76 @@ REGRAS RÍGIDAS DE GERAÇÃO:
                   type="text"
                   value={docTitle}
                   onChange={(e) => setDocTitle(e.target.value)}
-                  className="bg-transparent text-[#111827] dark:text-zinc-100 font-bold text-sm sm:text-base focus:outline-none focus:border-b-2 focus:border-[#FF5A00] truncate max-w-xs sm:max-w-md"
+                  className="bg-transparent text-foreground font-bold text-sm sm:text-base focus:outline-none focus:border-b-2 focus:border-primary truncate max-w-xs sm:max-w-md"
                 />
-                <p className="text-[#6B7280] dark:text-zinc-400 text-[10px] truncate">Modo Edição Página Inteira (Estúdio Google Docs)</p>
+                <p className="text-muted-foreground text-[10px] truncate">Modo Edição Página Inteira (Estúdio Google Docs)</p>
               </div>
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2">
-              <button
+              <Button
                 onClick={handleDownloadPdf}
-                className="px-2.5 sm:px-3 py-1.5 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                variant="outline"
+                size="sm"
+                className="cursor-pointer text-destructive border-destructive/20 bg-destructive/10 hover:bg-destructive/20 hover:text-destructive"
               >
-                <Printer className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                <Printer className="w-4 h-4" />
                 <span>PDF</span>
-              </button>
+              </Button>
 
-              <button
+              <Button
                 onClick={handleDownloadWord}
-                className="px-2.5 sm:px-3 py-1.5 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                variant="outline"
+                size="sm"
+                className="cursor-pointer text-primary border-primary/20 bg-primary/10 hover:bg-primary/20 hover:text-primary"
               >
-                <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <FileText className="w-4 h-4" />
                 <span>Word</span>
-              </button>
+              </Button>
 
-              <button
+              <Button
                 onClick={handleSaveDraft}
-                className="px-3 sm:px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+                size="sm"
+                className="cursor-pointer bg-success text-success-foreground hover:bg-success/90"
               >
                 Salvar
-              </button>
+              </Button>
 
-              <button
+              <Button
                 onClick={() => setIsFullscreenDocs(false)}
-                className="p-1.5 sm:p-2 text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white bg-[#F3F4F6] dark:bg-zinc-800 hover:bg-[#E5E7EB] dark:hover:bg-zinc-700 rounded-xl transition-colors cursor-pointer"
+                variant="secondary"
+                size="icon"
+                className="cursor-pointer"
                 title="Sair da Tela Cheia"
               >
                 <Minimize2 className="w-5 h-5" />
-              </button>
+              </Button>
             </div>
           </div>
 
           {/* Toolbar */}
-          <div className="bg-[#F9FAFB] dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] px-4 sm:px-6 py-2 flex items-center gap-2 sm:gap-3 text-xs shrink-0 overflow-x-auto text-[#374151] dark:text-zinc-300">
-            <button onClick={() => handleInsertVariable("**Texto**")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded font-bold text-[#111827] dark:text-white">
+          <div className="bg-muted/40 border-b border-border px-4 sm:px-6 py-2 flex items-center gap-2 sm:gap-3 text-xs shrink-0 overflow-x-auto text-foreground">
+            <Button onClick={() => handleInsertVariable("**Texto**")} variant="ghost" size="icon" className="cursor-pointer size-7 font-bold">
               <Bold className="w-4 h-4" />
-            </button>
-            <button onClick={() => handleInsertVariable("*Texto*")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded italic text-[#111827] dark:text-white">
+            </Button>
+            <Button onClick={() => handleInsertVariable("*Texto*")} variant="ghost" size="icon" className="cursor-pointer size-7 italic">
               <Italic className="w-4 h-4" />
-            </button>
-            <div className="w-px h-4 bg-[#E5E7EB] dark:bg-[#27272A]"></div>
-            <button onClick={() => handleInsertVariable("\n# Título\n")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded text-[#111827] dark:text-white">
+            </Button>
+            <div className="w-px h-4 bg-border"></div>
+            <Button onClick={() => handleInsertVariable("\n# Título\n")} variant="ghost" size="icon" className="cursor-pointer size-7">
               <Heading1 className="w-4 h-4" />
-            </button>
-            <button onClick={() => handleInsertVariable("\n## Subtítulo\n")} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded text-[#111827] dark:text-white">
+            </Button>
+            <Button onClick={() => handleInsertVariable("\n## Subtítulo\n")} variant="ghost" size="icon" className="cursor-pointer size-7">
               <Heading2 className="w-4 h-4" />
-            </button>
-            <div className="w-px h-4 bg-[#E5E7EB] dark:bg-[#27272A]"></div>
-            <button onClick={handleInsertTable} className="p-1.5 hover:bg-[#E5E7EB] dark:hover:bg-zinc-800 rounded text-[#111827] dark:text-white">
+            </Button>
+            <div className="w-px h-4 bg-border"></div>
+            <Button onClick={handleInsertTable} variant="ghost" size="icon" className="cursor-pointer size-7">
               <Table className="w-4 h-4" />
-            </button>
+            </Button>
           </div>
 
           {/* Fullscreen A4 Paper View */}
-          <div className="flex-1 bg-[#E5E7EB] dark:bg-[#09090B] overflow-y-auto p-3 sm:p-6 md:p-8 flex justify-center">
+          <div className="flex-1 bg-muted overflow-y-auto p-3 sm:p-6 md:p-8 flex justify-center">
             <div 
               className="official-a4-paper bg-white text-slate-900 shadow-2xl rounded-sm w-full max-w-[210mm] min-h-[297mm] p-6 sm:p-12 md:p-16 font-sans relative border border-slate-200 flex flex-col justify-between"
               style={{ backgroundColor: "#ffffff", color: "#0f172a" }}
@@ -1618,57 +1655,60 @@ REGRAS RÍGIDAS DE GERAÇÃO:
 
       {/* SAVED DRAFTS MODAL */}
       {showDraftsModal && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 dark:bg-black/80 backdrop-blur-sm animate-fade-in overflow-y-auto">
-          <div className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl w-full max-w-xl p-4 sm:p-6 space-y-4 shadow-2xl my-auto">
-            <div className="flex items-center justify-between border-b border-[#F3F4F6] dark:border-[#27272A] pb-3">
-              <h3 className="font-bold text-[#111827] dark:text-zinc-100 text-sm sm:text-base">Rascunhos Salvos</h3>
-              <button onClick={() => setShowDraftsModal(false)} className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <Card className="w-full max-w-xl p-4 sm:p-6 space-y-4 shadow-2xl my-auto gap-0">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h3 className="font-bold text-foreground text-sm sm:text-base">Rascunhos Salvos</h3>
+              <Button onClick={() => setShowDraftsModal(false)} variant="ghost" size="icon" className="cursor-pointer size-8">
                 <X className="w-5 h-5" />
-              </button>
+              </Button>
             </div>
 
             {draftsList.length === 0 ? (
-              <p className="text-[#6B7280] dark:text-zinc-400 text-xs text-center py-8">Nenhum rascunho salvo ainda.</p>
+              <p className="text-muted-foreground text-xs text-center py-8">Nenhum rascunho salvo ainda.</p>
             ) : (
-              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-80 overflow-y-auto pr-1 pt-3">
                 {draftsList.map(draft => (
                   <div
                     key={draft.id}
-                    className="p-3 bg-[#F9FAFB] dark:bg-[#18181B] border border-[#E5E7EB] dark:border-[#27272A] rounded-xl flex items-center justify-between gap-3 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800/80 transition-colors"
+                    className="p-3 bg-muted/40 border border-border rounded-xl flex items-center justify-between gap-3 hover:bg-muted transition-colors"
                   >
                     <div className="min-w-0">
-                      <h4 className="font-bold text-[#111827] dark:text-zinc-100 text-xs truncate">{draft.title}</h4>
-                      <p className="text-[10px] text-[#6B7280] dark:text-zinc-400">{draft.date}</p>
+                      <h4 className="font-bold text-foreground text-xs truncate">{draft.title}</h4>
+                      <p className="text-[10px] text-muted-foreground">{draft.date}</p>
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      <button
+                      <Button
                         onClick={() => {
                           setDocTitle(draft.title);
                           setDocumentContent(draft.content);
                           setShowDraftsModal(false);
                         }}
-                        className="px-3 py-1 bg-[#FF5A00] text-white rounded-lg text-xs font-semibold hover:bg-[#E04F00] transition-colors cursor-pointer"
+                        size="sm"
+                        className="cursor-pointer"
                       >
                         Carregar
-                      </button>
+                      </Button>
 
-                      <button
+                      <Button
                         onClick={() => {
                           const updated = draftsList.filter(d => d.id !== draft.id);
                           setDraftsList(updated);
                           localStorage.setItem("aip_created_docs_drafts", JSON.stringify(updated));
                         }}
-                        className="p-1 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded cursor-pointer"
+                        variant="ghost"
+                        size="icon"
+                        className="cursor-pointer size-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
+          </Card>
         </div>
       )}
 
