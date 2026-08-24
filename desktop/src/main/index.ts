@@ -112,7 +112,10 @@ ipcMain.handle("plataforma:sair", async () => auth.sair());
 // --- Compras.gov.br ---------------------------------------------------------
 ipcMain.handle("comprasnet:entrar", async () => {
   obterDescobridor(); // começa a observar antes de o portal abrir
-  return abrirLogin(janelaPrincipal?.id);
+  // Liga também o observador de DOM nesta janela: o operador costuma continuar
+  // navegando pelo portal aqui mesmo (painel de compras, listas de disputa) depois
+  // de logar, sem passar pelos botões "Abrir sala"/"Abrir portal".
+  return abrirLogin(janelaPrincipal?.id, ligarObservador);
 });
 ipcMain.handle("comprasnet:status", async () => verificarSessao());
 ipcMain.handle("comprasnet:sair", async () => sairComprasnet());
