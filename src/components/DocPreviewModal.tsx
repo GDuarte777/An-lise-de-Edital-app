@@ -7,6 +7,8 @@ import {
 } from "lucide-react";
 import { addSyncedItem } from "../utils/googleSync";
 import confetti from "canvas-confetti";
+import { Button } from "./ui/button";
+import { Textarea } from "./ui/textarea";
 
 function cleanMarkdownText(text: string | undefined): string {
   if (!text) return "";
@@ -408,40 +410,40 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-2 sm:p-4 md:p-6 font-sans animate-fade-in select-none overflow-y-auto">
-      <div id="preview-modal" className="bg-white dark:bg-[#121212] border border-[#E5E7EB] dark:border-[#27272A] rounded-2xl w-full max-w-5xl h-[92vh] sm:h-[88vh] flex flex-col shadow-2xl overflow-hidden select-text my-auto">
-        
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-2 sm:p-4 md:p-6 font-sans animate-fade-in select-none overflow-y-auto">
+      <div id="preview-modal" className="bg-card text-card-foreground border border-border rounded-2xl w-full max-w-5xl h-[92vh] sm:h-[88vh] flex flex-col shadow-2xl overflow-hidden select-text my-auto">
+
         {/* Header */}
-        <div className="bg-white dark:bg-[#18181B] text-[#111827] dark:text-zinc-100 p-3.5 sm:p-4 flex items-center justify-between border-b border-[#F3F4F6] dark:border-[#27272A] shrink-0">
+        <div className="bg-card text-card-foreground p-3.5 sm:p-4 flex items-center justify-between border-b border-border shrink-0">
           <div className="flex items-center gap-2.5 min-w-0 pr-2">
-            <div className="bg-[#FF5A00]/10 text-[#FF5A00] border border-[#FF5A00]/20 p-2 rounded-xl shrink-0">
+            <div className="bg-primary/10 text-primary border border-primary/20 p-2 rounded-xl shrink-0">
               <FileText className="w-5 h-5 animate-pulse" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-xs sm:text-base leading-snug text-[#111827] dark:text-zinc-100 truncate">{title}</h3>
-              <p className="text-[10px] text-[#6B7280] dark:text-zinc-400 font-medium truncate">Minuta sugerida do documento oficial</p>
+              <h3 className="font-bold text-xs sm:text-base leading-snug text-foreground truncate">{title}</h3>
+              <p className="text-[10px] text-muted-foreground font-medium truncate">Minuta sugerida do documento oficial</p>
             </div>
           </div>
 
-          <button
+          <Button
             onClick={onClose}
-            className="text-[#6B7280] dark:text-zinc-400 hover:text-[#111827] dark:hover:text-white p-1.5 hover:bg-[#F3F4F6] dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer shrink-0"
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-foreground shrink-0"
           >
             <X className="w-5 h-5" />
-          </button>
+          </Button>
         </div>
 
         {/* Toolbar menu */}
-        <div className="bg-[#F9FAFB] dark:bg-[#18181B] border-b border-[#E5E7EB] dark:border-[#27272A] p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-2 shrink-0 text-[#374151] select-none">
+        <div className="bg-muted/50 border-b border-border p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-2 shrink-0 text-foreground select-none">
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            
-            <button
+
+            <Button
               onClick={() => setIsEditing(!isEditing)}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
-                isEditing 
-                  ? "bg-[#FF5A00] border-[#FF5A00] text-white shadow-xs" 
-                  : "bg-white dark:bg-[#27272A] border-[#D1D5DB] dark:border-[#3F3F46] hover:bg-[#F3F4F6] dark:hover:bg-zinc-700 text-[#374151] dark:text-zinc-200"
-              }`}
+              variant={isEditing ? "default" : "outline"}
+              size="sm"
+              className="text-xs font-semibold"
             >
               {isEditing ? (
                 <>
@@ -454,27 +456,29 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
                   <span>Editar Markdown</span>
                 </>
               )}
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={handlePrint}
-              className="px-2.5 sm:px-3 py-1.5 bg-white dark:bg-[#27272A] hover:bg-[#F3F4F6] dark:hover:bg-zinc-700 border border-[#D1D5DB] dark:border-[#3F3F46] rounded-lg text-xs font-semibold text-[#374151] dark:text-zinc-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              variant="outline"
+              size="sm"
+              className="text-xs font-semibold"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Imprimir / PDF</span>
-            </button>
+            </Button>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            
+
             {/* Real or Simulated Google Sync */}
-            <button
+            <Button
               onClick={handleGoogleDriveSync}
               disabled={isSyncing}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
-                syncDone 
-                  ? "bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300" 
-                  : "bg-[#FF5A00] hover:bg-[#E04F00] active:bg-[#C74400] text-white shadow-xs"
+              variant={syncDone ? "outline" : "default"}
+              size="sm"
+              className={`text-xs font-semibold ${
+                syncDone ? "border-success/30 bg-success/10 text-success hover:bg-success/15" : ""
               }`}
             >
               {isSyncing ? (
@@ -493,39 +497,43 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
                   <span>Google Drive</span>
                 </>
               )}
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={handleDownloadHtml}
-              className="px-2.5 sm:px-3 py-1.5 bg-[#FF5A00]/10 hover:bg-[#FF5A00]/20 border border-[#FF5A00]/20 rounded-lg text-xs font-semibold text-[#FF5A00] flex items-center gap-1.5 transition-colors cursor-pointer"
+              variant="outline"
+              size="sm"
+              className="text-xs font-semibold bg-primary/10 hover:bg-primary/20 border-primary/20 text-primary"
               title="Baixar proposta formatada como arquivo HTML para abrir e imprimir no navegador"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>HTML</span>
-            </button>
+            </Button>
 
-            <button
+            <Button
               onClick={handleDownload}
-              className="px-2.5 sm:px-3 py-1.5 bg-white dark:bg-[#27272A] hover:bg-[#F3F4F6] dark:hover:bg-zinc-700 border border-[#D1D5DB] dark:border-[#3F3F46] rounded-lg text-xs font-medium text-[#374151] dark:text-zinc-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              variant="outline"
+              size="sm"
+              className="text-xs font-medium"
               title="Baixar código fonte em Markdown"
             >
               <HardDriveDownload className="w-3.5 h-3.5" />
               <span>.md</span>
-            </button>
+            </Button>
           </div>
         </div>
 
         {/* Content Viewer pane */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8 bg-[#F3F4F6] dark:bg-[#09090B]">
-          <div 
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8 bg-muted">
+          <div
             className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-4 sm:p-8 md:p-14 shadow-xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
             style={{ backgroundColor: "#ffffff", color: "#0f172a" }}
           >
             {isEditing ? (
-              <textarea
+              <Textarea
                 value={markdownText}
                 onChange={(e) => setMarkdownText(e.target.value)}
-                className="w-full h-full min-h-[500px] bg-white text-slate-900 font-sans text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-[#FF5A00] border border-slate-300 p-4 rounded-lg selection:bg-orange-100"
+                className="w-full h-full min-h-[500px] bg-white text-slate-900 font-sans text-xs leading-relaxed focus-visible:ring-2 focus-visible:ring-primary border-slate-300 p-4 rounded-lg selection:bg-orange-100"
                 style={{ backgroundColor: "#ffffff", color: "#0f172a", lineHeight: "1.7" }}
                 placeholder="Escreva aqui seu modelo estruturado..."
               />
@@ -538,9 +546,9 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
         </div>
 
         {/* Sync Indicator footer */}
-        <div className="bg-white border-t border-[#E5E7EB] px-4 py-3 shrink-0 flex items-center justify-between text-[11px] text-[#6B7280]">
+        <div className="bg-card border-t border-border px-4 py-3 shrink-0 flex items-center justify-between text-[11px] text-muted-foreground">
           <span className="flex items-center gap-1">
-            <Database className="w-3.5 h-3.5 text-[#FF5A00]" />
+            <Database className="w-3.5 h-3.5 text-primary" />
             Integrado ao Google Sheets e Drive automaticamente.
           </span>
           <span className="font-mono text-[10px]">UTF-8 Codification</span>
