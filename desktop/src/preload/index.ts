@@ -15,6 +15,8 @@ export interface Usuario {
 export interface StatusSessao {
   autenticado: boolean;
   cookiesEncontrados: number;
+  /** Em que a verificação se apoiou — a interface mostra isso em vez de só dizer "não". */
+  evidencia: string;
 }
 
 export interface EndpointAprendido {
@@ -39,6 +41,32 @@ export interface Disputa {
   descricao: string;
   situacao: string;
   emFaseDeLances: boolean;
+  origem: "tela" | "api";
+}
+
+/** O que o robô enxerga dentro da sala, antes de qualquer lance valer dinheiro. */
+export interface ConferenciaSala {
+  diagnostico: {
+    url: string;
+    titulo: string;
+    escopoEncontrado: boolean;
+    textoEscopo: string;
+    campoLance: string | null;
+    botaoEnvio: string | null;
+    entradasVisiveis: number;
+    botoesVisiveis: number;
+    valoresNaTela: number[];
+  };
+  leitura: {
+    ok: boolean;
+    menorLance: number | null;
+    nossoLance: number | null;
+    aberto: boolean;
+    evidencia: string;
+    motivo?: string;
+  };
+  ensaio: { ok: boolean; etapa: string; mensagem: string } | null;
+  seletores: { campo?: string; botao?: string; aprendidoEm?: string };
 }
 
 export interface ApiLanceBot {
@@ -49,7 +77,7 @@ export interface ApiLanceBot {
   };
   comprasnet: {
     entrar(): Promise<StatusSessao>;
-    status(): Promise<StatusSessao>;
+    status(forcar?: boolean): Promise<StatusSessao>;
     sair(): Promise<void>;
     abrirSala(pregaoId?: string): Promise<number>;
     abrirPainel(): Promise<number>;
@@ -62,6 +90,9 @@ export interface ApiLanceBot {
   };
   disputas: {
     listar(): Promise<Disputa[]>;
+  };
+  sala: {
+    conferir(ref: { pregaoId: string; itemNum: string }, valorEnsaio?: number): Promise<ConferenciaSala>;
   };
   robo: {
     iniciar(cfg: unknown): Promise<{ iniciado: boolean; portal: string; ehSimulacao: boolean }>;
@@ -85,7 +116,7 @@ const api: ApiLanceBot = {
   },
   comprasnet: {
     entrar: () => ipcRenderer.invoke("comprasnet:entrar"),
-    status: () => ipcRenderer.invoke("comprasnet:status"),
+    status: (forcar) => ipcRenderer.invoke("comprasnet:status", forcar),
     sair: () => ipcRenderer.invoke("comprasnet:sair"),
     abrirSala: (pregaoId) => ipcRenderer.invoke("comprasnet:abrirSala", pregaoId),
     abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel")
@@ -98,6 +129,9 @@ const api: ApiLanceBot = {
   },
   disputas: {
     listar: () => ipcRenderer.invoke("disputas:listar")
+  },
+  sala: {
+    conferir: (ref, valorEnsaio) => ipcRenderer.invoke("sala:conferir", ref, valorEnsaio)
   },
   robo: {
     iniciar: (cfg) => ipcRenderer.invoke("robo:iniciar", cfg),

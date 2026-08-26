@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ApiLanceBot, Calibracao, Disputa, Usuario } from "../preload/index.js";
+import type { ApiLanceBot, Calibracao, ConferenciaSala, Disputa, Usuario } from "../preload/index.js";
 
 declare global {
   interface Window {
@@ -139,7 +139,12 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [disputas, setDisputas] = useState<Disputa[]>([]);
   const [selecionada, setSelecionada] = useState<Disputa | null>(null);
   const [erro, setErro] = useState("");
+  const [evidencia, setEvidencia] = useState("");
   const [observadas, setObservadas] = useState<Array<{ metodo: string; url: string; status: number }> | null>(null);
+  const [soEmLances, setSoEmLances] = useState(true);
+  const [conferencia, setConferencia] = useState<ConferenciaSala | null>(null);
+  const [conferindo, setConferindo] = useState(false);
+  const [carregandoDisputas, setCarregandoDisputas] = useState(false);
 
   const [piso, setPiso] = useState("");
   const [decremento, setDecremento] = useState("1");
@@ -152,7 +157,12 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const fim = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    void api().comprasnet.status().then((s) => setConectado(s.autenticado));
+    void api()
+      .comprasnet.status()
+      .then((s) => {
+        setConectado(s.autenticado);
+        setEvidencia(s.evidencia);
+      });
     void api().calibracao.estado().then(setCalib);
 
     const off = [
@@ -167,31 +177,57 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     fim.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
+  const carregarDisputas = useCallback(async () => {
+    setErro("");
+    setCarregandoDisputas(true);
+    try {
+      setDisputas(await api().disputas.listar());
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCarregandoDisputas(false);
+    }
+  }, []);
+
   const conectar = useCallback(async () => {
     setErro("");
     try {
+      // A janela do portal se fecha sozinha quando o login é reconhecido; esta promessa
+      // só resolve depois disso, então já dá para buscar as disputas em seguida.
       const s = await api().comprasnet.entrar();
       setConectado(s.autenticado);
+      setEvidencia(s.evidencia);
       if (!s.autenticado) {
-        setErro(
-          "Ainda não há sessão. Refaça o login: escolha o perfil, entre com sua conta gov.br e só então feche a janela do portal."
-        );
+        setErro(`Ainda não há sessão do gov.br. ${s.evidencia}`);
+      } else {
+        void carregarDisputas();
       }
       void api().calibracao.estado().then(setCalib);
     } catch (e) {
       // Sem isto, uma falha ao abrir a janela de login não deixava rastro na tela.
       setErro(`Não foi possível abrir o login do gov.br: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, []);
+  }, [carregarDisputas]);
 
-  const carregarDisputas = useCallback(async () => {
+  const conferir = useCallback(async () => {
+    if (!selecionada) return setErro("Escolha uma disputa na lista ao lado.");
     setErro("");
+    setConferindo(true);
+    setConferencia(null);
     try {
-      setDisputas(await api().disputas.listar());
+      const valorEnsaio = Number(String(piso).replace(",", "."));
+      setConferencia(
+        await api().sala.conferir(
+          { pregaoId: selecionada.pregaoId, itemNum: selecionada.itemNum },
+          Number.isFinite(valorEnsaio) && valorEnsaio > 0 ? valorEnsaio : undefined
+        )
+      );
     } catch (e) {
       setErro(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConferindo(false);
     }
-  }, []);
+  }, [selecionada, piso]);
 
   const iniciar = useCallback(async () => {
     setErro("");
@@ -213,6 +249,8 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
   const rodando = estadoRobo === "rodando";
   const pronto = calib?.pronto ?? false;
+  const emLances = disputas.filter((d) => d.emFaseDeLances);
+  const visiveis = soEmLances ? emLances : disputas;
 
   return (
     <div className="app">
@@ -247,9 +285,12 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
             <p className="muted">
               O login abre a página oficial do gov.br. Sua senha não passa por este aplicativo, e certificado
-              digital funciona normalmente. <strong>Feche a janela do portal quando terminar de entrar</strong> —
-              o aplicativo não a fecha sozinha para não interromper o login.
+              digital funciona normalmente. <strong>A janela se fecha sozinha</strong> assim que o aplicativo
+              reconhece que você entrou — se quiser continuar navegando por ela, clique em “Manter aberta” no
+              aviso que aparece antes do fechamento.
             </p>
+
+            {evidencia && <p className="faint">{evidencia}</p>}
 
             <div className="row tight">
               <button className="btn" onClick={() => void conectar()}>
@@ -265,12 +306,17 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
           <section className="card">
             <div className="card-head">
-              <h2 className="card-title">Calibração</h2>
-              <span className={`pill ${pronto ? "ok" : "warn"}`}>
+              <h2 className="card-title">Calibração (opcional)</h2>
+              <span className={`pill ${pronto ? "ok" : "idle"}`}>
                 <span className="dot" />
-                {pronto ? "pronta" : "em andamento"}
+                {pronto ? "aprendida" : "não aprendida"}
               </span>
             </div>
+
+            <p className="muted">
+              O robô dá lances operando a própria sala de disputa, então <strong>não depende disto</strong>.
+              O que o aplicativo aprende observando o portal serve só para ler as disputas mais rápido.
+            </p>
 
             <div className="steps">
               <Passo feito={Boolean(calib?.listaDisputas)} texto="Reconhecer o painel de disputas" />
@@ -280,8 +326,8 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
             <p className="faint">
               {pronto
-                ? "O aplicativo aprendeu o necessário para operar em produção."
-                : "Navegue pelo portal e abra a sala de disputa: o aplicativo aprende sozinho, sem exportar nada. O envio de lance é reconhecido quando você manda um lance manualmente uma vez."}
+                ? "O aplicativo reconheceu os endereços que o portal usa."
+                : "Navegue pelo portal: o aplicativo aprende sozinho, sem exportar nada. Nada aqui bloqueia a operação do robô."}
             </p>
 
             <button
@@ -319,21 +365,32 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
           <section className="card flex">
             <div className="card-head">
               <h2 className="card-title">Suas disputas</h2>
-              <button className="btn ghost" onClick={() => void carregarDisputas()} disabled={!conectado}>
-                Atualizar
+              <button className="btn ghost" onClick={() => void carregarDisputas()} disabled={!conectado || carregandoDisputas}>
+                {carregandoDisputas ? "Lendo o portal…" : "Atualizar"}
               </button>
             </div>
 
-            {disputas.length === 0 ? (
+            <label className="row tight faint" style={{ cursor: "pointer" }}>
+              <input type="checkbox" checked={soEmLances} onChange={(e) => setSoEmLances(e.target.checked)} />
+              Mostrar só as que estão em fase de lances ({emLances.length} de {disputas.length})
+            </label>
+
+            {visiveis.length === 0 ? (
               <div className="empty">
-                <p className="muted">Nenhuma disputa carregada.</p>
+                <p className="muted">
+                  {disputas.length === 0 ? "Nenhuma disputa carregada." : "Nenhuma disputa em fase de lances agora."}
+                </p>
                 <p className="faint">
-                  {conectado ? "Clique em Atualizar." : "Entre no gov.br primeiro."}
+                  {!conectado
+                    ? "Entre no gov.br primeiro."
+                    : disputas.length === 0
+                      ? "Clique em Atualizar — o aplicativo lê as páginas do fornecedor na sua sessão."
+                      : "Desmarque o filtro para ver todas."}
                 </p>
               </div>
             ) : (
               <div className="list">
-                {disputas.map((d) => (
+                {visiveis.map((d) => (
                   <div
                     key={`${d.pregaoId}-${d.itemNum}`}
                     className="dispute"
@@ -363,9 +420,14 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
             <div className="card-head">
               <h2 className="card-title">Configuração da disputa</h2>
               {selecionada && (
-                <button className="btn ghost" onClick={() => void api().comprasnet.abrirSala(selecionada.pregaoId)}>
-                  Abrir sala
-                </button>
+                <div className="row tight">
+                  <button className="btn ghost" onClick={() => void api().comprasnet.abrirSala(selecionada.pregaoId)}>
+                    Abrir sala
+                  </button>
+                  <button className="btn ghost" onClick={() => void conferir()} disabled={conferindo}>
+                    {conferindo ? "Conferindo…" : "Conferir sala"}
+                  </button>
+                </div>
               )}
             </div>
 
@@ -419,11 +481,15 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
             {modo === "real" && (
               <p className="muted" style={{ color: "var(--warn)" }}>
-                Produção envia lances reais em seu nome. O robô para sozinho antes de cruzar o piso.
+                Produção envia lances reais em seu nome: o robô digita o valor e clica no botão da própria sala
+                de disputa. Ele para sozinho antes de cruzar o piso, e também para se o portal não confirmar
+                um envio. Use <strong>Conferir sala</strong> antes de ativar.
               </p>
             )}
 
             {erro && <p className="err">{erro}</p>}
+
+            {conferencia && <PainelConferencia c={conferencia} />}
 
             <div className="row spread">
               <div className="row tight">
@@ -434,7 +500,9 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                   Parar
                 </button>
               </div>
-              {modo === "real" && !pronto && <span className="faint">Calibração ainda incompleta</span>}
+              {modo === "real" && !conferencia && (
+                <span className="faint">Confira a sala antes de ativar em produção</span>
+              )}
             </div>
           </section>
 
@@ -471,6 +539,49 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 }
 
 /* ------------------------------------------------------------------ Peças */
+
+function PainelConferencia({ c }: { c: ConferenciaSala }) {
+  const { diagnostico: d, leitura: l, ensaio } = c;
+  const podeOperar = Boolean(d.campoLance && d.botaoEnvio && l.ok);
+
+  return (
+    <div className="log" style={{ maxHeight: 260 }}>
+      <div className="log-line">
+        <span className="log-time">sala</span>
+        <span className="log-msg" data-n={podeOperar ? "sucesso" : "alerta"}>
+          {podeOperar
+            ? "O robô enxerga o item, o campo de lance e o botão de envio."
+            : "Faltam controles: o robô ainda não consegue operar este item."}
+        </span>
+      </div>
+      <Linha rotulo="item na tela" valor={d.escopoEncontrado ? "encontrado" : "NÃO encontrado"} />
+      <Linha rotulo="campo de lance" valor={d.campoLance ?? "NÃO encontrado"} />
+      <Linha rotulo="botão de envio" valor={d.botaoEnvio ?? "NÃO encontrado"} />
+      <Linha
+        rotulo="menor lance lido"
+        valor={l.menorLance === null ? (l.motivo ?? "não lido") : `R$ ${l.menorLance.toFixed(2)}`}
+      />
+      <Linha
+        rotulo="nosso lance"
+        valor={l.nossoLance === null ? "o portal não mostra" : `R$ ${l.nossoLance.toFixed(2)}`}
+      />
+      <Linha rotulo="item aberto" valor={l.aberto ? "sim" : "não — não aceita lances"} />
+      {ensaio && <Linha rotulo="ensaio de digitação" valor={ensaio.mensagem} />}
+      <Linha rotulo="trecho lido" valor={d.textoEscopo.slice(0, 220) || "—"} />
+    </div>
+  );
+}
+
+function Linha({ rotulo, valor }: { rotulo: string; valor: string }) {
+  return (
+    <div className="log-line">
+      <span className="log-time">{rotulo}</span>
+      <span className="log-msg" data-n="sistema">
+        {valor}
+      </span>
+    </div>
+  );
+}
 
 function Passo({ feito, texto }: { feito: boolean; texto: string }) {
   return (

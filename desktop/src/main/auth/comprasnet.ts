@@ -1,4 +1,6 @@
-import { app, BrowserWindow, dialog, session, type Session } from "electron";
+import { app, BrowserWindow, dialog, session, type Session, type WebContents } from "electron";
+
+import { autenticadoPor, type Sondagem } from "./reconhecimento.js";
 
 /**
  * Login no Compras.gov.br.
@@ -13,6 +15,11 @@ import { app, BrowserWindow, dialog, session, type Session } from "electron";
  *    privada nunca sai do token;
  *  - a sessão resultante fica na partition persistente do app; os cookies são anexados
  *    pelo próprio navegador nas chamadas do robô, sem cópia nem transporte.
+ *
+ * O que mudou em relação à versão anterior: a janela deixou de ser "um navegador que o
+ * operador fecha na mão". Agora o aplicativo reconhece quando o login terminou de fato
+ * — página do portal, sem campo de senha, com identidade e opção de sair na tela — e
+ * fecha a janela sozinho, avisando antes e deixando o operador cancelar o fechamento.
  *
  * Se algum dia este arquivo passar a ler campos de formulário, o desenho foi quebrado.
  */
@@ -30,7 +37,7 @@ const PARTITION = "persist:comprasnet";
 const URL_LOGIN = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
 const URL_LOGIN_ALTERNATIVA = "https://sala-disputa.comprasnet.gov.br/";
 
-const URL_SALA_DISPUTA = "https://sala-disputa.comprasnet.gov.br/";
+export const URL_SALA_DISPUTA = "https://sala-disputa.comprasnet.gov.br/";
 
 /**
  * Domínios onde procuramos sessão. O `gov.br` genérico ficou de fora de propósito:
@@ -68,6 +75,10 @@ export function sessaoComprasnet(): Session {
   return ses;
 }
 
+export function partitionComprasnet(): string {
+  return PARTITION;
+}
+
 /**
  * Habilita login por certificado digital A1/A3.
  *
@@ -100,43 +111,182 @@ export interface StatusSessao {
   verificadoEm: Date;
   /** Quantidade de cookies encontrados — diagnóstico, nunca os valores. */
   cookiesEncontrados: number;
+  /** Em que a decisão se apoiou, para a interface poder explicar em vez de só negar. */
+  evidencia: string;
 }
 
-/**
- * Verifica se existe sessão ativa. Deliberadamente não inspeciona o conteúdo dos
- * cookies: só conta presença, para não manipular material de credencial.
- */
-export async function verificarSessao(): Promise<StatusSessao> {
-  const ses = sessaoComprasnet();
-  let sessao = 0;
+/* -------------------------------------------------------------- sondagem */
 
+/**
+ * Pergunta à própria página se ela está no estado de "usuário logado".
+ *
+ * Cookie não serve para isso: o portal cria cookie httpOnly na primeira visita, e foi
+ * exatamente por contar cookies que a versão anterior se declarava conectada sem
+ * ninguém ter entrado — e, na versão anterior a essa, fechava a janela no meio do login.
+ * A tela renderizada é o sinal honesto: quem está logado tem identidade e opção de sair,
+ * e não tem campo de senha.
+ */
+const SCRIPT_SONDA = `
+(() => {
+  const txt = ((document.body && document.body.innerText) || "").slice(0, 30000);
+  const html = document.documentElement ? document.documentElement.innerHTML.slice(0, 30000) : "";
+  const seletorSair = '[href*="logout" i],[href*="sair" i],[aria-label*="sair" i],[title*="sair" i],[data-testid*="logout" i]';
+  return {
+    url: location.href.slice(0, 300),
+    noSso: /sso\\.acesso\\.gov\\.br|acesso\\.gov\\.br\\/(login|autorizar)/i.test(location.href),
+    noPortal: /(^|\\.)(comprasnet|compras)\\.gov\\.br$/i.test(location.host),
+    temSenha: Boolean(document.querySelector('input[type="password"]')),
+    temSair: /\\b(sair|logout|encerrar sess[aã]o|desconectar)\\b/i.test(txt) || Boolean(document.querySelector(seletorSair)),
+    temIdentidade: /\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}/.test(txt) || /\\d{2}\\.\\d{3}\\.\\d{3}\\/\\d{4}-\\d{2}/.test(txt) ||
+                   /(logado como|usu[aá]rio:|bem[- ]vindo|ol[aá],)/i.test(txt) || /perfil-usuario|nome-usuario/i.test(html),
+    escolhendoPerfil: /(escolha|selecione|informe)[^.]{0,30}perfil|meus perfis|selecionar perfil|qual perfil/i.test(txt),
+    tamanho: txt.length,
+    manterAberta: Boolean(window.__lancebotManter)
+  };
+})()
+`;
+
+async function sondar(conteudo: WebContents): Promise<Sondagem | null> {
+  try {
+    return (await conteudo.executeJavaScript(SCRIPT_SONDA, true)) as Sondagem;
+  } catch {
+    return null;
+  }
+}
+
+async function contarCookiesDeSessao(): Promise<number> {
+  const ses = sessaoComprasnet();
+  let total = 0;
   for (const domain of DOMINIOS_SESSAO) {
     const cookies = await ses.cookies.get({ domain });
     for (const c of cookies) {
       if (COOKIE_IGNORADO.test(c.name)) continue;
-      // Cookie de sessão é httpOnly na prática, ou tem nome que o identifica como tal.
-      if (c.httpOnly || COOKIE_DE_SESSAO.test(c.name)) sessao++;
+      if (c.httpOnly || COOKIE_DE_SESSAO.test(c.name)) total++;
     }
   }
-
-  // Um único cookie httpOnly não distingue visitante de usuário logado: o portal cria
-  // sessão anônima na primeira visita. Exigir vários reduz o falso positivo, mas nem
-  // isso é prova — por isso a interface fala em "sessão detectada", e não em "conectado".
-  return { autenticado: sessao >= 3, verificadoEm: new Date(), cookiesEncontrados: sessao };
+  return total;
 }
 
+let cache: { status: StatusSessao; em: number } | null = null;
+const VALIDADE_CACHE_MS = 15000;
+
 /**
- * Abre a janela de login oficial e resolve quando o operador fecha a janela.
- * O retorno diz apenas se, ao final, existe sessão — não o que foi digitado.
+ * Verifica se existe sessão ativa carregando o portal numa janela oculta e olhando o
+ * que ele renderiza. É mais caro que contar cookies e é a única forma de a resposta
+ * significar alguma coisa.
+ *
+ * Deliberadamente não inspeciona o conteúdo dos cookies: só conta presença, como
+ * diagnóstico.
+ */
+export async function verificarSessao(forcar = false): Promise<StatusSessao> {
+  if (!forcar && cache && Date.now() - cache.em < VALIDADE_CACHE_MS) return cache.status;
+
+  const cookies = await contarCookiesDeSessao();
+
+  // Sem nenhum cookie do portal não há o que sondar: é sessão inexistente, não expirada.
+  if (cookies === 0) {
+    const status: StatusSessao = {
+      autenticado: false,
+      verificadoEm: new Date(),
+      cookiesEncontrados: 0,
+      evidencia: "Nenhum cookie do portal — ninguém entrou nesta máquina ainda."
+    };
+    cache = { status, em: Date.now() };
+    return status;
+  }
+
+  const janela = new BrowserWindow({
+    show: false,
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      partition: PARTITION,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      offscreen: false
+    }
+  });
+
+  try {
+    await janela.loadURL(URL_SALA_DISPUTA);
+    // A sala é uma SPA: sondar antes de desenhar daria "não logado" por engano.
+    let ultima: Sondagem | null = null;
+    for (let i = 0; i < 12; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      ultima = await sondar(janela.webContents);
+      if (autenticadoPor(ultima)) break;
+      if (ultima?.noSso || ultima?.temSenha) break; // redirecionou para o login: conclusivo
+    }
+
+    const autenticado = autenticadoPor(ultima);
+    const status: StatusSessao = {
+      autenticado,
+      verificadoEm: new Date(),
+      cookiesEncontrados: cookies,
+      evidencia: !ultima
+        ? "O portal não respondeu à verificação."
+        : autenticado
+          ? `Sessão ativa em ${new URL(ultima.url).host}.`
+          : ultima.noSso || ultima.temSenha
+            ? "O portal redirecionou para a tela de login: a sessão expirou ou nunca existiu."
+            : "O portal abriu, mas sem sinal de usuário autenticado."
+    };
+    cache = { status, em: Date.now() };
+    return status;
+  } catch (erro) {
+    const status: StatusSessao = {
+      autenticado: false,
+      verificadoEm: new Date(),
+      cookiesEncontrados: cookies,
+      evidencia: `Falha ao verificar: ${erro instanceof Error ? erro.message : String(erro)}`
+    };
+    cache = { status, em: Date.now() };
+    return status;
+  } finally {
+    if (!janela.isDestroyed()) janela.destroy();
+  }
+}
+
+/* ------------------------------------------------------------------ login */
+
+/**
+ * Aviso dentro da própria janela do portal antes de fechá-la. Sem isto, a janela some
+ * do nada no meio de um passo que o operador ainda queria ver — e "some do nada" é
+ * exatamente o defeito que fez a versão de dois releases atrás ser revertida.
+ */
+const SCRIPT_AVISO = `
+(() => {
+  if (window.__lancebotAviso) return;
+  window.__lancebotAviso = true;
+  const cx = document.createElement("div");
+  cx.setAttribute("style", "position:fixed;z-index:2147483647;right:16px;bottom:16px;background:#0B0D12;" +
+    "color:#E9EDF5;font:14px/1.4 system-ui,sans-serif;padding:14px 16px;border-radius:10px;" +
+    "box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:320px");
+  const t = document.createElement("div");
+  t.textContent = "Login reconhecido. Fechando esta janela e devolvendo o controle ao LanceBot…";
+  const b = document.createElement("button");
+  b.textContent = "Manter aberta";
+  b.setAttribute("style", "margin-top:10px;background:#1E2635;color:#E9EDF5;border:0;border-radius:6px;" +
+    "padding:6px 10px;cursor:pointer;font:13px system-ui,sans-serif");
+  b.addEventListener("click", () => { window.__lancebotManter = true; cx.remove(); });
+  cx.appendChild(t); cx.appendChild(b);
+  document.body.appendChild(cx);
+})()
+`;
+
+/**
+ * Abre a janela de login oficial e resolve quando a autenticação é reconhecida — ou
+ * quando o operador fecha a janela na mão, o que continua valendo.
  *
  * `aoAbrirJanela` é chamado assim que a janela existe, antes de qualquer navegação.
- * É o gancho para ligar o observador em tempo real (sniffer) nesta mesma janela: o
- * operador tende a continuar navegando pelo portal aqui mesmo depois de logar — como
- * a lista de "Compras eletrônicas" —, e sem esse gancho essa navegação inteira ficava
- * fora do alcance do observador de DOM, ainda que a captura de rede (por sessão)
- * continuasse funcionando.
+ * É o gancho para ligar o observador em tempo real nesta mesma janela: o operador tende
+ * a continuar navegando pelo portal aqui mesmo depois de logar.
  */
-export async function abrirLogin(paiId?: number, aoAbrirJanela?: (idJanela: number) => void): Promise<StatusSessao> {
+export async function abrirLogin(
+  paiId?: number,
+  aoAbrirJanela?: (idJanela: number) => void
+): Promise<StatusSessao> {
   const pai = typeof paiId === "number" ? BrowserWindow.fromId(paiId) : null;
 
   const janela = new BrowserWindow({
@@ -158,8 +308,6 @@ export async function abrirLogin(paiId?: number, aoAbrirJanela?: (idJanela: numb
 
   aoAbrirJanela?.(janela.id);
 
-  // Uma falha de carregamento não pode deixar a janela em branco e sem explicação:
-  // tentamos a alternativa e, se nem ela abrir, a janela mostra o erro do Chromium.
   try {
     await janela.loadURL(URL_LOGIN);
   } catch {
@@ -170,18 +318,57 @@ export async function abrirLogin(paiId?: number, aoAbrirJanela?: (idJanela: numb
     }
   }
 
-  // A janela NÃO se fecha sozinha, de propósito.
-  //
-  // Uma versão anterior fechava a janela ao detectar navegação dentro de compras.gov.br
-  // com "sessão presente". Só que o portal cria cookie httpOnly antes de qualquer login:
-  // ao escolher o perfil de fornecedor, a regra disparava e matava a janela no meio do
-  // fluxo — o operador nunca chegava à tela de senha. Quem decide quando o login
-  // terminou é o operador, fechando a janela.
+  const abertaEm = Date.now();
+  let positivas = 0;
+  let fechandoPorNos = false;
 
   return new Promise<StatusSessao>((resolve) => {
-    janela.on("closed", () => {
-      void verificarSessao().then(resolve);
-    });
+    let resolvido = false;
+    const concluir = async () => {
+      if (resolvido) return;
+      resolvido = true;
+      clearInterval(timer);
+      resolve(await verificarSessao(true));
+    };
+
+    const timer = setInterval(() => {
+      void (async () => {
+        if (janela.isDestroyed()) return void concluir();
+
+        const s = await sondar(janela.webContents);
+        if (!s || s.manterAberta) {
+          positivas = 0;
+          return;
+        }
+
+        // Duas leituras positivas seguidas, e nunca nos primeiros segundos. É o que
+        // separa "logou" de "a SPA piscou uma tela intermediária".
+        positivas = autenticadoPor(s) ? positivas + 1 : 0;
+        if (positivas < 2 || Date.now() - abertaEm < 4000 || fechandoPorNos) return;
+
+        fechandoPorNos = true;
+        try {
+          await janela.webContents.executeJavaScript(SCRIPT_AVISO, true);
+        } catch {
+          // Aviso é cortesia; a ausência dele não impede o fechamento.
+        }
+        setTimeout(() => {
+          void (async () => {
+            const ainda = await sondar(janela.webContents);
+            if (ainda?.manterAberta) {
+              fechandoPorNos = false;
+              positivas = 0;
+              return;
+            }
+            if (!janela.isDestroyed()) janela.close();
+            await concluir();
+          })();
+        }, 2200);
+      })();
+    }, 1200);
+
+    // Fechar na mão continua encerrando o fluxo: quem manda é o operador.
+    janela.on("closed", () => void concluir());
   });
 }
 
@@ -201,15 +388,6 @@ function abrirNoPortal(titulo: string, url: string): Promise<number> {
   return janela.loadURL(url).then(() => janela.id);
 }
 
-/**
- * Abre a sala de disputa na mesma sessão. Navegar por ela é o que alimenta a
- * calibração automática: o descobridor observa as chamadas que a própria página faz.
- */
-export function abrirSalaDisputa(pregaoId?: string): Promise<number> {
-  const url = pregaoId ? `${URL_SALA_DISPUTA}?compra=${encodeURIComponent(pregaoId)}` : URL_SALA_DISPUTA;
-  return abrirNoPortal("Sala de Disputa — Compras.gov.br", url);
-}
-
 /** Abre o painel do fornecedor, de onde saem as disputas com proposta cadastrada. */
 export function abrirPainelDisputas(): Promise<number> {
   return abrirNoPortal("Minhas disputas — Compras.gov.br", URL_SALA_DISPUTA);
@@ -219,4 +397,5 @@ export function abrirPainelDisputas(): Promise<number> {
 export async function sair(): Promise<void> {
   const ses = sessaoComprasnet();
   await ses.clearStorageData({ storages: ["cookies", "localstorage", "indexdb"] });
+  cache = null;
 }

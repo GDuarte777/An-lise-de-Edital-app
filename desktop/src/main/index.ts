@@ -8,7 +8,7 @@ import {
   abrirLogin,
   abrirPainelDisputas,
   habilitarCertificadoDigital,
-  abrirSalaDisputa,
+  partitionComprasnet,
   sair as sairComprasnet,
   sessaoComprasnet,
   verificarSessao
@@ -17,15 +17,16 @@ import { DescobridorApi, type EstadoCalibracao } from "./engine/discovery.js";
 import { listarDisputas } from "./engine/disputas.js";
 import { observarSala, extrairValores, type EventoSala } from "./engine/sniffer.js";
 import { MotorLances, type ConfiguracaoRobo, type EntradaLog, type EstadoRobo } from "./engine/engine.js";
-import { ComprasnetAdapter } from "./engine/comprasnet.js";
+import { GerenciadorSalas, SalaDisputaAdapter } from "./engine/sala.js";
 import { SimulacaoAdapter } from "./engine/simulation.js";
-import type { PortalAdapter } from "./engine/portal.js";
+import type { PortalAdapter, ReferenciaItem } from "./engine/portal.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 let janelaPrincipal: BrowserWindow | null = null;
 let motor: MotorLances | null = null;
 let descobridor: DescobridorApi | null = null;
+let salas: GerenciadorSalas | null = null;
 
 const auth = new AutenticacaoPlataforma(
   SUPABASE_URL,
@@ -37,9 +38,16 @@ function emitir(canal: string, carga: unknown): void {
   janelaPrincipal?.webContents.send(canal, carga);
 }
 
+function registrar(nivel: EntradaLog["nivel"], msg: string): void {
+  emitir("robo:log", { em: new Date().toISOString(), nivel, msg });
+}
+
 /**
  * O descobridor observa o tráfego da sessão do portal desde o início, para que a
  * calibração aconteça só de o operador navegar — sem modo de captura para acionar.
+ *
+ * Desde que o robô passou a operar pela sala de disputa, a calibração deixou de ser
+ * pré-requisito para operar: ela virou um atalho de leitura, não a condição de existir.
  */
 function obterDescobridor(): DescobridorApi {
   if (!descobridor) {
@@ -51,6 +59,19 @@ function obterDescobridor(): DescobridorApi {
     void descobridor.carregar().then(() => descobridor?.ligar());
   }
   return descobridor;
+}
+
+/** Gerenciador das salas de disputa — é por ele que o lance real acontece. */
+function obterSalas(): GerenciadorSalas {
+  if (!salas) {
+    salas = new GerenciadorSalas({
+      partition: partitionComprasnet(),
+      caminhoSeletores: join(app.getPath("userData"), "seletores-sala.json"),
+      aoRegistrar: (nivel, msg) => registrar(nivel, msg)
+    });
+    void salas.carregarSeletores();
+  }
+  return salas;
 }
 
 /**
@@ -112,18 +133,21 @@ ipcMain.handle("plataforma:sair", async () => auth.sair());
 // --- Compras.gov.br ---------------------------------------------------------
 ipcMain.handle("comprasnet:entrar", async () => {
   obterDescobridor(); // começa a observar antes de o portal abrir
+  obterSalas();
   // Liga também o observador de DOM nesta janela: o operador costuma continuar
-  // navegando pelo portal aqui mesmo (painel de compras, listas de disputa) depois
-  // de logar, sem passar pelos botões "Abrir sala"/"Abrir portal".
+  // navegando pelo portal aqui mesmo depois de logar.
   return abrirLogin(janelaPrincipal?.id, ligarObservador);
 });
-ipcMain.handle("comprasnet:status", async () => verificarSessao());
-ipcMain.handle("comprasnet:sair", async () => sairComprasnet());
+ipcMain.handle("comprasnet:status", async (_e, forcar?: boolean) => verificarSessao(Boolean(forcar)));
+ipcMain.handle("comprasnet:sair", async () => {
+  obterSalas().fechar();
+  return sairComprasnet();
+});
 ipcMain.handle("comprasnet:abrirSala", async (_e, pregaoId?: string) => {
   obterDescobridor();
-  const id = await abrirSalaDisputa(pregaoId);
-  ligarObservador(id);
-  return id;
+  const janela = await obterSalas().garantir(pregaoId ?? "");
+  ligarObservador(janela.id);
+  return janela.id;
 });
 ipcMain.handle("comprasnet:abrirPainel", async () => {
   obterDescobridor();
@@ -144,7 +168,28 @@ ipcMain.handle("calibracao:esquecer", async () => {
 });
 
 // --- Disputas ---------------------------------------------------------------
-ipcMain.handle("disputas:listar", async () => listarDisputas(sessaoComprasnet(), obterDescobridor()));
+ipcMain.handle("disputas:listar", async () => listarDisputas(sessaoComprasnet(), obterDescobridor(), obterSalas()));
+
+// --- Sala de disputa --------------------------------------------------------
+/**
+ * Conferência antes de valer dinheiro: abre a sala do item, mostra o que o robô
+ * enxerga e — se um valor for informado — digita esse valor no campo do portal e
+ * confere se o campo o aceitou, SEM clicar em enviar.
+ */
+ipcMain.handle("sala:conferir", async (_e, ref: ReferenciaItem, valorEnsaio?: number) => {
+  const s = obterSalas();
+  const janela = await s.garantir(ref.pregaoId);
+  ligarObservador(janela.id);
+
+  const diagnostico = await s.diagnosticar(ref);
+  const leitura = await s.ler(ref);
+  const ensaio =
+    typeof valorEnsaio === "number" && Number.isFinite(valorEnsaio) && valorEnsaio > 0
+      ? await s.enviar(ref, valorEnsaio, true)
+      : null;
+
+  return { diagnostico, leitura, ensaio, seletores: s.seletoresAprendidos };
+});
 
 // --- Robô -------------------------------------------------------------------
 ipcMain.handle("robo:iniciar", async (_e, cfg: ConfiguracaoRobo & { modo: "real" | "simulacao" }) => {
@@ -155,17 +200,26 @@ ipcMain.handle("robo:iniciar", async (_e, cfg: ConfiguracaoRobo & { modo: "real"
   let portal: PortalAdapter;
 
   if (cfg.modo === "real") {
-    const status = await verificarSessao();
-    if (!status.autenticado) throw new Error("Entre no Compras.gov.br antes de operar em modo produção.");
+    const status = await verificarSessao(true);
+    if (!status.autenticado) {
+      throw new Error(`Entre no Compras.gov.br antes de operar em produção. ${status.evidencia}`);
+    }
 
-    const d = obterDescobridor();
-    if (!d.prontoParaProducao) {
+    const s = obterSalas();
+    const janela = await s.garantir(cfg.ref.pregaoId);
+    ligarObservador(janela.id);
+
+    // Só entra em disputa se o robô realmente enxergar os controles do item. Descobrir
+    // isso no primeiro ciclo, com o pregão correndo, seria tarde demais.
+    const diag = await s.diagnosticar(cfg.ref);
+    if (!diag.campoLance || !diag.botaoEnvio) {
       throw new Error(
-        "O aplicativo ainda não aprendeu como o portal envia lances. Abra a sala de disputa deste item " +
-          "e envie um lance manualmente uma vez — a partir daí o robô assume sozinho."
+        `Na sala aberta não encontrei ${!diag.campoLance ? "o campo de lance" : "o botão de envio"} ` +
+          `do item ${cfg.ref.itemNum}. Abra o item na sala e use "Conferir sala" para ver o que o robô enxerga.`
       );
     }
-    portal = new ComprasnetAdapter(sessaoComprasnet(), d);
+
+    portal = new SalaDisputaAdapter(s);
   } else {
     portal = new SimulacaoAdapter(cfg.valorLimiteMinimo * 1.4);
   }
