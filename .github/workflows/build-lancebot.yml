@@ -50,6 +50,12 @@ jobs:
       - name: Verificar que a interface abre
         run: npm run test:ui
 
+      # O robô só dá lance se o agente achar a linha do item, vencer a máscara de
+      # moeda e reconhecer o desfecho. Uma versão que não fazia nada disso já foi
+      # publicada porque tipos, testes de unidade e smoke da interface passavam.
+      - name: Verificar que o robô consegue dar lance
+        run: npm run test:sala
+
       - name: Gerar instalador
         run: npx electron-builder --win --publish never
 
@@ -76,9 +82,12 @@ jobs:
             Download direto:
             https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Setup.exe
 
-            A calibração com o portal é automática: basta entrar no gov.br pelo
-            aplicativo e navegar pela sala de disputa. O envio de lance é reconhecido
-            quando você manda um lance manualmente uma vez; até lá o robô opera em
-            modo simulação.
+            Entre com sua conta HORASIS, clique em "Entrar no gov.br" e faça o login
+            na janela oficial — ela se fecha sozinha quando o login é reconhecido.
+            Suas disputas carregam em seguida, com as que estão em fase de lances
+            no topo.
+
+            Antes de operar em produção, use "Conferir sala": ele mostra o que o robô
+            enxerga no item e ensaia a digitação do valor sem enviar lance nenhum.
 
             Build: ${{ github.sha }}

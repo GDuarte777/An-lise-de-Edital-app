@@ -1,7 +1,7 @@
 {
   "name": "horasis-lancebot-desktop",
   "productName": "HORASIS LanceBot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Rob\u00f4 de lances para preg\u00e3o eletr\u00f4nico, executado localmente na m\u00e1quina do operador.",
   "main": "out/main/index.js",
