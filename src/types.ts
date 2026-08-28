@@ -18,6 +18,8 @@ export interface Certificate {
   notes?: string;
   fileUploaded?: boolean;
   fileName?: string;
+  fileBase64?: string;
+  fileMimeType?: string;
   documentMatchesRow?: boolean;
   validationFeedback?: string;
 }

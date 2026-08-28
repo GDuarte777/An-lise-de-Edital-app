@@ -458,6 +458,8 @@ export async function fetchCertificatesFromSupabase(): Promise<any[]> {
       notes: item.notes,
       fileUploaded: item.file_uploaded,
       fileName: item.file_name,
+      fileBase64: item.file_base64,
+      fileMimeType: item.file_mime_type,
       documentMatchesRow: item.document_matches_row,
       validationFeedback: item.validation_feedback
     }));
@@ -483,6 +485,8 @@ export async function saveCertificateToSupabase(item: any): Promise<{ success: b
       notes: item.notes || "",
       file_uploaded: !!item.fileUploaded,
       file_name: item.fileName || "",
+      file_base64: item.fileBase64 || null,
+      file_mime_type: item.fileMimeType || null,
       document_matches_row: item.documentMatchesRow === false ? false : true,
       validation_feedback: item.validationFeedback || "",
       updated_at: new Date().toISOString()

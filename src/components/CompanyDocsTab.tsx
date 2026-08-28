@@ -9,7 +9,7 @@ import {
 import { 
   FileText, Plus, Calendar, AlertTriangle, CheckCircle, Trash2, Edit2, ShieldCheck, 
   HelpCircle, RefreshCw, Layers, CheckSquare, Search, Building2, Landmark, Clock, FileWarning,
-  FileUp, Loader2, GripVertical, SlidersHorizontal, Sparkles
+  FileUp, Loader2, GripVertical, SlidersHorizontal, Sparkles, Download
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentForServer, formatAiError } from "../utils/aiClientHelper";
@@ -423,6 +423,8 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
                 // Preserve local file reference if the db doesn't have it
                 fileUploaded: db.fileUploaded !== undefined ? !!db.fileUploaded : !!local?.fileUploaded,
                 fileName: db.fileName || local?.fileName || "",
+                fileBase64: db.fileBase64 || local?.fileBase64,
+                fileMimeType: db.fileMimeType || local?.fileMimeType,
                 status: db.expirationDate ? evaluateStatus(db.expirationDate) : (db.status || "valid")
               };
             });
@@ -532,9 +534,9 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       const reader = new FileReader();
       
       reader.onload = async (e) => {
+        const base64String = (e.target?.result as string).split(",")[1];
+        const resolvedFileType = file.type.startsWith("image/") ? "image/jpeg" : (file.type || "application/pdf");
         try {
-          const base64String = (e.target?.result as string).split(",")[1];
-          const resolvedFileType = file.type.startsWith("image/") ? "image/jpeg" : (file.type || "application/pdf");
           const prepared = await prepareAttachmentForServer({
             base64: base64String,
             name: file.name,
@@ -571,6 +573,8 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
               expirationDate,
               fileUploaded: true,
               fileName: file.name,
+              fileBase64: base64String,
+              fileMimeType: resolvedFileType,
               documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
               validationFeedback: result.validationFeedback || "Documento analisado.",
               status: expirationDate ? evaluateStatus(expirationDate) : "valid"
@@ -642,6 +646,8 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
             notes: targetCert?.notes || "",
             fileUploaded: true,
             fileName: file.name,
+            fileBase64: base64String,
+            fileMimeType: resolvedFileType,
             documentMatchesRow: undefined,
             validationFeedback: undefined,
             status: targetCert?.status || "valid"
@@ -664,14 +670,15 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       // fallback to original file if compression fails
       const reader = new FileReader();
       reader.onload = async (e) => {
+        const base64String = (e.target?.result as string).split(",")[1];
+        const resolvedFileType = file.type || "application/pdf";
         try {
-          const base64String = (e.target?.result as string).split(",")[1];
           const response = await apiFetch("/api/analyze-cert", {
             method: "POST",
             body: {
               fileBase64: base64String,
               fileName: file.name,
-              fileType: file.type || "application/pdf",
+              fileType: resolvedFileType,
               docName: certs.find(c => c.id === certId)?.name || ""
             }
           });
@@ -689,6 +696,8 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
               expirationDate,
               fileUploaded: true,
               fileName: file.name,
+              fileBase64: base64String,
+              fileMimeType: resolvedFileType,
               documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
               validationFeedback: result.validationFeedback || "Documento analisado.",
               status: expirationDate ? evaluateStatus(expirationDate) : "valid"
@@ -710,6 +719,17 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     const file = event.target.files?.[0];
     if (!file) return;
     await processCertFile(certId, file);
+  };
+
+  const handleDownloadFile = (cert: Certificate) => {
+    if (!cert.fileBase64) return;
+    const mimeType = cert.fileMimeType || "application/octet-stream";
+    const link = document.createElement("a");
+    link.href = `data:${mimeType};base64,${cert.fileBase64}`;
+    link.download = cert.fileName || `${cert.name}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleDragOver = (e: React.DragEvent, certId: string) => {
@@ -899,9 +919,11 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
             c.id === certId 
               ? { 
                   ...c, 
-                  fileUploaded: false, 
-                  fileName: undefined, 
-                  expirationDate: "", 
+                  fileUploaded: false,
+                  fileName: undefined,
+                  fileBase64: undefined,
+                  fileMimeType: undefined,
+                  expirationDate: "",
                   emissionDate: "", 
                   status: "expired" as const, 
                   documentMatchesRow: undefined, 
@@ -1643,6 +1665,18 @@ Retorne exclusivamente o JSON estruturado.
                             </label>
                           ) : (
                             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                              {cert.fileBase64 && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleDownloadFile(cert)}
+                                  className="gap-1 text-[11px] h-auto px-3 py-1.5"
+                                  title="Baixar o arquivo enviado"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  <span>Baixar</span>
+                                </Button>
+                              )}
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -1846,6 +1880,17 @@ Retorne exclusivamente o JSON estruturado.
                                 </label>
                               ) : (
                                 <div className="flex items-center gap-1">
+                                  {cert.fileBase64 && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => handleDownloadFile(cert)}
+                                      className="h-7 w-7 text-muted-foreground hover:text-primary"
+                                      title="Baixar o arquivo enviado"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                    </Button>
+                                  )}
                                   <Button
                                     variant="ghost"
                                     size="icon"
