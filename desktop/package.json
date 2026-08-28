@@ -14,7 +14,8 @@
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "tsx src/main/engine/strategy.test.ts && tsx src/main/engine/modelo-lance.test.ts && tsx src/main/engine/sniffer.test.ts && tsx src/main/auth/login.test.ts",
     "test:ui": "electron scripts/smoke-ui.cjs --no-sandbox",
-    "test:sala": "electron scripts/teste-agente-sala.cjs --no-sandbox"
+    "test:sala": "electron scripts/teste-agente-sala.cjs --no-sandbox",
+    "test:coletor": "electron scripts/teste-coletor.cjs --no-sandbox"
   },
   "dependencies": {
     "@supabase/auth-js": "^2.112.3"
