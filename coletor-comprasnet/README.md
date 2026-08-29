@@ -31,7 +31,8 @@ O arquivo é salvo na sua pasta de Downloads. Você decide se me manda.
 
 ## Instalar (4 passos, ~1 minuto)
 
-1. Baixe esta pasta `coletor-comprasnet/` para o seu computador.
+1. Baixe o `coletor-comprasnet.zip` e **descompacte** (a pasta precisa estar solta, não
+   dentro do zip — o Chrome não carrega de dentro de um arquivo compactado).
 2. No Chrome ou Edge, abra `chrome://extensions`.
 3. Ligue o **Modo do desenvolvedor** (canto superior direito).
 4. Clique em **Carregar sem compactação** e escolha a pasta `coletor-comprasnet`.
@@ -40,8 +41,15 @@ O arquivo é salvo na sua pasta de Downloads. Você decide se me manda.
 
 1. Entre no Compras.gov.br normalmente, do seu jeito de sempre — senha, 2FA, certificado.
    A extensão não participa do login.
+
+   Ela é liberada para qualquer página `gov.br` de propósito: assim o cartão aparece
+   mesmo que a tela de lances esteja num endereço que eu não previ — que é justamente
+   o erro que derrubou as tentativas anteriores.
 2. Abra um pregão **em fase de lances**, na tela onde você daria o lance.
-3. Um cartão escuro aparece no canto inferior direito.
+3. Um cartão escuro aparece no canto inferior direito. Ele mostra um contador ao vivo
+   ("N campos · N requisições vistas · tempo real: sim/não") — é assim que você confirma
+   que está capturando **antes** de clicar em coletar. Se o contador estiver zerado em
+   tudo, me avise: é sinal de que a página não é a que eu esperava.
 4. **Clique em "Atualizar" do próprio portal uma vez** — é assim que descobrimos qual
    requisição a atualização dispara.
 5. Espere uns 20 segundos sem fazer nada, para o coletor ver se a tela muda sozinha.

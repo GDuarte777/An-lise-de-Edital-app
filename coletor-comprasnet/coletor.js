@@ -297,10 +297,24 @@
       '<button class="b" id="ir">Coletar estrutura</button>' +
       '<div class="f" id="st">Nenhum dígito é gravado.</div></div>';
 
+    const st = raiz.getElementById("st");
+
+    // Mostra que o coletor está vivo ANTES de clicar. Sem isso o operador não tem como
+    // saber se a captura está acontecendo, e descobriria só depois, no arquivo vazio.
+    const atualizarPainel = () => {
+      st.textContent =
+        entradasCandidatasContagem() + " campos · " + rede.length + " requisições vistas · " +
+        "tempo real: " + (tempoReal.length > 0 ? "SIM" : "não");
+    };
+    const entradasCandidatasContagem = () =>
+      Array.prototype.filter.call(document.querySelectorAll("input,select,textarea"), visivel).length;
+    setInterval(atualizarPainel, 2000);
+    atualizarPainel();
+
     raiz.getElementById("ir").addEventListener("click", () => {
       const d = baixar();
-      raiz.getElementById("st").textContent =
-        d.campos.length + " campos · " + d.botoes.length + " botões · " +
+      st.textContent =
+        "SALVO: " + d.campos.length + " campos · " + d.botoes.length + " botões · " +
         d.rede.length + " requisições · tempo real: " + (d.temTempoReal ? "SIM" : "não");
     });
 

@@ -2,31 +2,32 @@
   "manifest_version": 3,
   "name": "Coletor HORASIS — estrutura da tela de lances",
   "version": "1.0.0",
-  "description": "Coleta a ESTRUTURA da tela de lances do Compras.gov.br (sem valores, sem CNPJ) para calibrar o LanceBot.",
+  "description": "Coleta a ESTRUTURA da tela de lances do Compras.gov.br (sem valores, sem CNPJ) para calibrar o LanceBot. Uso unico: instale, colete, desinstale.",
   "host_permissions": [
-    "https://cnetmobile.estaleiro.serpro.gov.br/*",
-    "https://*.comprasnet.gov.br/*",
-    "https://*.compras.gov.br/*"
+    "https://*.gov.br/*",
+    "https://gov.br/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://cnetmobile.estaleiro.serpro.gov.br/*",
-        "https://*.comprasnet.gov.br/*",
-        "https://*.compras.gov.br/*"
+        "https://*.gov.br/*",
+        "https://gov.br/*"
       ],
-      "js": ["gancho-pagina.js"],
+      "js": [
+        "gancho-pagina.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start",
       "all_frames": true
     },
     {
       "matches": [
-        "https://cnetmobile.estaleiro.serpro.gov.br/*",
-        "https://*.comprasnet.gov.br/*",
-        "https://*.compras.gov.br/*"
+        "https://*.gov.br/*",
+        "https://gov.br/*"
       ],
-      "js": ["coletor.js"],
+      "js": [
+        "coletor.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
