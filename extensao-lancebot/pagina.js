@@ -52,7 +52,15 @@
 
   /* ----------------------------------------------------------- rede */
 
+  const RE_RETOKEN = /sessao\/fornecedor\/retoken/i;
+
   const anotar = (metodo, url, status, corpo) => {
+    // A renovação de token é sinal de saúde, não de queda: avisa para o robô NÃO
+    // recarregar a página achando que perdeu a sessão.
+    if (RE_RETOKEN.test(url) && status >= 200 && status < 300) {
+      avisar({ tipo: "retoken", em: Date.now() });
+      return;
+    }
     if (metodo === "GET") return;
     if (!RE_LANCE.test(url)) return;
     avisar({
@@ -67,7 +75,7 @@
       const url = typeof entrada === "string" ? entrada : (entrada && entrada.url) || "";
       const metodo = String((cfg && cfg.method) || (entrada && entrada.method) || "GET").toUpperCase();
       const p = fetchOriginal.apply(this, arguments);
-      if (metodo !== "GET" && RE_LANCE.test(url)) {
+      if (metodo !== "GET" && (RE_LANCE.test(url) || RE_RETOKEN.test(url))) {
         p.then((r) => {
           const s = r.status;
           r.clone().text().then((t) => anotar(metodo, url, s, t)).catch(() => anotar(metodo, url, s, ""));
@@ -87,7 +95,7 @@
     const enviar = XHR.prototype.send;
     XHR.prototype.send = function () {
       const i = this.__lb, x = this;
-      if (i && i.metodo !== "GET" && RE_LANCE.test(i.url)) {
+      if (i && i.metodo !== "GET" && (RE_LANCE.test(i.url) || RE_RETOKEN.test(i.url))) {
         x.addEventListener("loadend", () => {
           let c = "";
           try { c = String(x.responseText || ""); } catch (e) { /* binário */ }

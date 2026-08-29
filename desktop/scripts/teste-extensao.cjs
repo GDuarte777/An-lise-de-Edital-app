@@ -47,6 +47,17 @@ const PAGINA = `<!doctype html>
         <div><span>Melhor valor (unitário)</span><span>R$ 780,00</span></div>
       </div>
     </app-card-item>
+
+    <app-card-item>
+      <div>
+        <app-identificacao-e-fase-item><div><div>3 - Em disputa</div></div></app-identificacao-e-fase-item>
+        <div><span>Melhor valor (unitário)</span><span>R$ 2.500,7500</span></div>
+        <div>
+          <input id="lance4" type="text" aria-label="Valor do lance" class="p-inputtext">
+          <button id="enviar4" type="button" aria-label="Enviar lance">Enviar lance</button>
+        </div>
+      </div>
+    </app-card-item>
   </div></p-dataview></div></app-disputa-fornecedor-itens>
 </div></div></main></app-root>
 
@@ -61,6 +72,18 @@ const PAGINA = `<!doctype html>
     var d = campo.value.replace(/\\D/g, "").slice(0, 12);
     campo.value = d ? (Number(d) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "";
   });
+  // Mascara de QUATRO casas, como o portal usa em valor unitario.
+  var campo4 = document.getElementById("lance4");
+  campo4.addEventListener("input", function () {
+    var d = campo4.value.replace(/\\D/g, "").slice(0, 12);
+    campo4.value = d ? (Number(d) / 10000).toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "";
+  });
+  document.getElementById("enviar4").addEventListener("click", function () {
+    var x = new XMLHttpRequest();
+    x.open("POST", "/comprasnet-disputa/v1/compras/900/itens/3/lances");
+    x.send(JSON.stringify({ valor: campo4.value }));
+  });
+
   var modal = document.getElementById("modal");
   document.getElementById("enviar").addEventListener("click", function () { modal.style.display = "block"; });
   document.getElementById("confirmar").addEventListener("click", function () {
@@ -142,7 +165,21 @@ app.whenReady().then(async () => {
     ok("recusa antes de clicar", ruim.ok === false && /não aceitou/.test(ruim.motivo), ruim);
     ok("nenhum lance enviado", recebido === null, recebido);
 
-    console.log("\n[5] Detecta a queda de conexao do portal");
+    console.log("\n[5] Quatro casas decimais - o formato real do portal");
+    const l3 = await rodar('(() => { const i = __lancebot.acharItem("3"); return {n:i.numero, m:i.melhorValor, a:i.aberto}; })()');
+    ok("le 2.500,7500 sem truncar", l3.m === 2500.75, l3);
+    recebido = null;
+    const env4 = await rodar('(async () => { const i = __lancebot.acharItem("3"); return await __lancebot.enviarLance(i, 2490.5); })()');
+    ok("envio com mascara de 4 casas", env4.ok === true && env4.aceito === true, env4);
+    ok("valor exato com 4 casas", recebido === '{"valor":"2.490,5000"}', recebido);
+
+    console.log("\n[6] Renovacao de token NAO e tratada como queda");
+    await rodar('window.postMessage({__lancebot:true, tipo:"retoken", em:Date.now()}, "*")');
+    await new Promise((r) => setTimeout(r, 200));
+    ok("registrou renovacao sem parar o robo",
+       (await rodar('__lancebot.estado.log.some(l => /renovou o token/.test(l.msg))')) === true);
+
+    console.log("\n[7] Detecta a queda de conexao do portal");
     ok("conexao ok antes", (await rodar("__lancebot.conexaoCaiu()")) === false);
     await rodar("window.__cairConexao()");
     ok("detecta 'Recarregar pagina'", (await rodar("__lancebot.conexaoCaiu()")) === true);

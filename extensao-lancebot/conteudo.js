@@ -39,18 +39,26 @@
 
   const texto = (el) => ((el && (el.innerText || el.textContent)) || "").replace(/\s+/g, " ").trim();
 
+  /**
+   * O portal trabalha com QUATRO casas decimais — a coleta mostrou
+   * "Valor estimado (unitário) R$ #.###,####". Ler isso com duas casas transformaria
+   * 1.234,5678 em 1234,56: erro de dinheiro silencioso, do tipo que só aparece no
+   * extrato. Por isso 2 a 4 casas, e a alternativa com milhar vem primeiro para
+   * "1250,50" não ser lido como "250,50".
+   */
   function paraNumero(t) {
-    const m = String(t == null ? "" : t).match(/\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2}|\d+/);
+    const m = String(t == null ? "" : t)
+      .match(/-?\d{1,3}(?:\.\d{3})+,\d{1,4}|-?\d+,\d{1,4}|-?\d{1,3}(?:,\d{3})+\.\d{1,4}|-?\d+\.\d{1,4}|-?\d+/);
     if (!m) return null;
     let s = m[0];
-    s = /,\d{2}$/.test(s) ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+    s = /,\d{1,4}$/.test(s) ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
   }
 
-  /** Só valor com centavos conta como dinheiro — evita ler número de item como preço. */
+  /** Só valor com casa decimal conta como dinheiro — número de item não é preço. */
   function valoresEm(t) {
-    const re = /(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2})/g;
+    const re = /(?:R\$\s*)?(\d{1,3}(?:\.\d{3})+,\d{2,4}|\d+,\d{2,4})/g;
     const saida = [];
     let m;
     while ((m = re.exec(String(t))) !== null) {
@@ -126,10 +134,14 @@
   ].join(" ");
 
   function controles(cartao, aprendido) {
+    // NUNCA sair do cartão do item. O `document.querySelector` que estava aqui como
+    // reserva fazia o seletor aprendido num item alcançar o campo de OUTRO item — o robô
+    // digitaria o lance do item 3 no campo do item 1. O teste pegou isso; em disputa
+    // real seria dinheiro no item errado.
     const dentro = (sel) => {
       if (!sel) return null;
       try {
-        const el = cartao.querySelector(sel) || document.querySelector(sel);
+        const el = cartao.querySelector(sel);
         return el && visivel(el) && habilitado(el) ? el : null;
       } catch (e) { return null; }
     };
@@ -181,10 +193,16 @@
 
   /** Preenche e CONFERE. Nenhum clique se o campo não ficou com o valor exato. */
   async function preencher(el, valor) {
+    // Duas e quatro casas: o portal usa 4 em valor unitário. A conferência depois de
+    // cada tentativa é o que torna seguro tentar vários formatos — só passa o que o
+    // campo leu de volta exatamente igual ao pedido.
     const tentativas = [
       valor.toFixed(2).replace(".", ","),
       valor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
       String(Math.round(valor * 100)),
+      valor.toFixed(4).replace(".", ","),
+      valor.toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 }),
+      String(Math.round(valor * 10000)),
       valor.toFixed(2)
     ];
     for (const t of tentativas) {
@@ -283,12 +301,17 @@
     };
   }
 
+  /**
+   * Seletor para reusar em OUTROS itens, então id fica por último: id é único de um
+   * cartão e não serve para os demais. `formcontrolname` e `aria-label` se repetem em
+   * todos os cartões, que é exatamente o que se quer aprender.
+   */
   function seletorDe(el) {
-    if (el.id && !/\d{4,}/.test(el.id)) return "#" + el.id;
     const fc = el.getAttribute("formcontrolname");
     if (fc) return el.tagName.toLowerCase() + '[formcontrolname="' + fc + '"]';
     const al = el.getAttribute("aria-label");
     if (al) return el.tagName.toLowerCase() + '[aria-label="' + al + '"]';
+    if (el.id && !/\d/.test(el.id)) return "#" + el.id;
     return el.tagName.toLowerCase();
   }
 
@@ -338,6 +361,12 @@
 
     if (d.tipo === "mudou") void ciclo("websocket");
     else if (d.tipo === "resposta-lance") estado.ultimaResposta = d;
+    else if (d.tipo === "retoken") {
+      // A coleta flagrou a sequência: GET → 401, PUT .../sessao/fornecedor/retoken → 200,
+      // GET → 200. A própria SPA renova o token. Recarregar a página aqui seria destruir
+      // uma sessão que já se consertou sozinha — e no meio de uma disputa isso custa caro.
+      registrar("sistema", "O portal renovou o token da sessão sozinho. Seguindo.");
+    }
     else if (d.tipo === "canal") {
       estado.canal = d.estado;
       if (d.estado === "fechado" || d.estado === "erro") {
