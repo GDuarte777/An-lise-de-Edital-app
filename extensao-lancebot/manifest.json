@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "HORASIS LanceBot",
+  "version": "0.3.0",
+  "description": "Robô de lances para o Compras.gov.br. Roda dentro da sua sessão, no seu navegador.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://cnetmobile.estaleiro.serpro.gov.br/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://cnetmobile.estaleiro.serpro.gov.br/*"],
+      "js": ["pagina.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://cnetmobile.estaleiro.serpro.gov.br/*"],
+      "js": ["margem.js", "conteudo.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
