@@ -61,6 +61,13 @@ const PAGINA = `<!doctype html>
   </div></p-dataview></div></app-disputa-fornecedor-itens>
 </div></div></main></app-root>
 
+<app-todos-lances><div><p-table><table>
+  <thead><tr><th>Data/hora registro</th><th>Valor do lance (unitário)</th></tr></thead>
+  <tbody>
+    <tr><td>29/08/2026 15:04:11</td><td>R$ 1.199,9000</td></tr>
+    <tr><td>29/08/2026 15:03:02</td><td>R$ 1.250,5000</td></tr>
+  </tbody></table></p-table></div></app-todos-lances>
+
 <div id="modal" role="dialog" style="display:none">
   <p>Confirma o lance?</p><button id="cancelar">Cancelar</button><button id="confirmar">Confirmar</button>
 </div>
@@ -165,7 +172,12 @@ app.whenReady().then(async () => {
     ok("recusa antes de clicar", ruim.ok === false && /não aceitou/.test(ruim.motivo), ruim);
     ok("nenhum lance enviado", recebido === null, recebido);
 
-    console.log("\n[5] Quatro casas decimais - o formato real do portal");
+    console.log("\n[5] Historico de lances - componente app-todos-lances");
+    ok("le o melhor lance do historico",
+       (await rodar("__lancebot.melhorDoHistorico()")) === 1199.9,
+       await rodar("__lancebot.melhorDoHistorico()"));
+
+    console.log("\n[6] Quatro casas decimais - o formato real do portal");
     const l3 = await rodar('(() => { const i = __lancebot.acharItem("3"); return {n:i.numero, m:i.melhorValor, a:i.aberto}; })()');
     ok("le 2.500,7500 sem truncar", l3.m === 2500.75, l3);
     recebido = null;
@@ -173,13 +185,13 @@ app.whenReady().then(async () => {
     ok("envio com mascara de 4 casas", env4.ok === true && env4.aceito === true, env4);
     ok("valor exato com 4 casas", recebido === '{"valor":"2.490,5000"}', recebido);
 
-    console.log("\n[6] Renovacao de token NAO e tratada como queda");
+    console.log("\n[7] Renovacao de token NAO e tratada como queda");
     await rodar('window.postMessage({__lancebot:true, tipo:"retoken", em:Date.now()}, "*")');
     await new Promise((r) => setTimeout(r, 200));
     ok("registrou renovacao sem parar o robo",
        (await rodar('__lancebot.estado.log.some(l => /renovou o token/.test(l.msg))')) === true);
 
-    console.log("\n[7] Detecta a queda de conexao do portal");
+    console.log("\n[8] Detecta a queda de conexao do portal");
     ok("conexao ok antes", (await rodar("__lancebot.conexaoCaiu()")) === false);
     await rodar("window.__cairConexao()");
     ok("detecta 'Recarregar pagina'", (await rodar("__lancebot.conexaoCaiu()")) === true);

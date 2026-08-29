@@ -86,7 +86,7 @@
 
   /* ------------------------------------------------- itens da disputa */
 
-  const RE_MELHOR = /melhor\s+valor|melhor\s+lance|menor\s+valor|menor\s+lance/i;
+  const RE_MELHOR = /melhor\s+valor|melhor\s+lance|menor\s+valor|menor\s+lance|valor\s+do\s+lance|valor\s+ofertado|lance\s+atual/i;
   const RE_MEU = /seu\s+lance|meu\s+lance|sua\s+oferta|seu\s+valor|minha\s+oferta/i;
   const RE_ABERTO = /em\s+disputa|aberto|recebendo|em\s+andamento/i;
   const RE_FECHADO = /encerrad|finalizad|suspens|cancelad|homologad|adjudicad|julgad|deserto|fracassad|aguardando/i;
@@ -94,12 +94,26 @@
   const cartoes = () =>
     Array.prototype.filter.call(document.querySelectorAll("app-card-item"), visivel);
 
+  /**
+   * Histórico de lances do item, no componente `app-todos-lances` — uma p-table com
+   * "Data/hora registro | Valor do lance (unitário)". É a fonte mais confiável do melhor
+   * lance vigente: são os lances de verdade, não um resumo. Fica fora do cartão (num
+   * painel do item selecionado), por isso é lido à parte e só entra como reforço.
+   */
+  function melhorDoHistorico() {
+    const painel = document.querySelector("app-todos-lances");
+    if (!painel || !visivel(painel)) return null;
+    const valores = valoresEm(texto(painel));
+    return valores.length ? Math.min.apply(null, valores) : null;
+  }
+
   function lerCartao(cartao) {
     const t = texto(cartao);
     const fase = texto(cartao.querySelector("app-identificacao-e-fase-item")) || t.slice(0, 120);
     const numero = (fase.match(/\b(\d{1,5})\b/) || [])[1] || (t.match(/\b(\d{1,5})\b/) || [])[1] || "";
 
     let melhor = valorRotulado(cartao, RE_MELHOR);
+    if (melhor === null) melhor = melhorDoHistorico();
     if (melhor === null) {
       const todos = valoresEm(t);
       melhor = todos.length ? Math.min.apply(null, todos) : null;
@@ -390,7 +404,7 @@
   } catch (e) { /* fora da extensão (teste) */ }
 
   window.__lancebot = {
-    estado, ciclo, acharItem, cartoes, lerCartao, controles, enviarLance,
+    estado, ciclo, acharItem, cartoes, lerCartao, controles, enviarLance, melhorDoHistorico,
     conexaoCaiu, registrar,
     ligar: (item, cfg) => { estado.item = String(item); estado.cfg = cfg; estado.ligado = true; registrar("sistema", `Robô ligado no item ${item}.`); void ciclo("inicio"); },
     parar: (motivo) => { estado.ligado = false; registrar("sistema", motivo || "Parado pelo operador."); }
