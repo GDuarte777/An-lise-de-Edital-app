@@ -26,17 +26,36 @@ existe login para implementar: você entra no gov.br do seu jeito e o robô herd
   que você faz na mão hoje.
 - **Sem polling**: o portal empurra por WebSocket; a mensagem é o gatilho para reler.
 
+- **Painel do operador** — no canto inferior direito da sala. Escolhe o item, o piso e o
+  decremento, liga e para. Mostra o melhor lance, o seu lance e **qual seria o próximo**,
+  antes de você ligar. Fica em Shadow DOM: o CSS do portal não o afeta, e — o que
+  importa mais — os campos dele não podem ser confundidos com o campo de lance do item,
+  porque `querySelector` não atravessa shadow root.
+
 ## O que falta
 
-- **Painel do operador** (piso, decremento, ligar/parar). Hoje só pelo console.
 - **Campo e botão de lance numa disputa ao vivo.** Nunca vi um. O robô procura dentro do
   cartão do item e **aprende** os seletores no primeiro lance que der certo, guardando
   para as próximas. Se não achar, recusa operar em vez de improvisar.
 
 ## Instalar
 
-`chrome://extensions` → Modo do desenvolvedor → Carregar sem compactação → esta pasta.
+Baixe o `HORASIS-LanceBot-Extensao.zip` da Release, descompacte numa pasta fixa e:
+`chrome://extensions` → Modo do desenvolvedor → Carregar sem compactação → essa pasta.
+(Ou aponte direto para esta pasta, se estiver com o projeto clonado.)
+
+## Usar
+
+1. Entre no gov.br normalmente e abra a sala da disputa.
+2. O painel aparece sozinho no canto inferior direito.
+3. Escolha o item, informe o **piso** (nunca oferta abaixo dele) e o **decremento**.
+4. Confira o "Próximo lance" que o painel mostra. Só então clique em **Ligar robô**.
+
+Enquanto estiver ligado, os campos ficam travados e o rodapé mostra cada lance de
+concorrente, cada envio e cada motivo de parada. Qualquer parada é definitiva: o robô não
+volta sozinho, você decide.
 
 ## Testar
 
-Na pasta `desktop/`: `npm run test:extensao` — 18 casos contra uma réplica da tela real.
+Na pasta `desktop/`: `npm run test:extensao` — 44 casos contra uma réplica da tela real,
+incluindo o painel.

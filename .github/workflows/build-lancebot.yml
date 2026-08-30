@@ -56,8 +56,20 @@ jobs:
       - name: Verificar que o robô consegue dar lance
         run: npm run test:sala
 
+      # A extensão é o que de fato dá lance no portal (o token de hCaptcha só existe
+      # dentro da página). O painel do operador e a guarda de margem são checados aqui
+      # contra uma réplica da tela real antes de qualquer publicação.
+      - name: Verificar o painel e o robô da extensão
+        run: npm run test:extensao
+
       - name: Gerar instalador
         run: npx electron-builder --win --publish never
+
+      # A extensão vai empacotada na mesma Release, para instalar sem clonar o projeto.
+      - name: Empacotar extensão
+        working-directory: .
+        shell: pwsh
+        run: Compress-Archive -Path extensao-lancebot/* -DestinationPath HORASIS-LanceBot-Extensao.zip -Force
 
       - name: Publicar artefato do build
         uses: actions/upload-artifact@v4
@@ -75,19 +87,34 @@ jobs:
           tag_name: lancebot-latest
           name: HORASIS LanceBot — instalador Windows
           make_latest: true
-          files: desktop/release/HORASIS-LanceBot-Setup.exe
+          files: |
+            desktop/release/HORASIS-LanceBot-Setup.exe
+            HORASIS-LanceBot-Extensao.zip
           body: |
-            Instalador do HORASIS LanceBot para Windows.
+            ## Extensão — é ela que dá o lance
+
+            Download:
+            https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Extensao.zip
+
+            Descompacte numa pasta fixa, abra `chrome://extensions`, ligue o
+            "Modo do desenvolvedor" e clique em "Carregar sem compactação",
+            apontando para a pasta.
+
+            Depois é só entrar no gov.br normalmente e abrir a sala da disputa: o
+            painel do robô aparece no canto inferior direito. Escolha o item, informe
+            o piso e o decremento e clique em "Ligar robô". O painel mostra o melhor
+            lance, o seu lance e qual seria o próximo — antes de você ligar qualquer
+            coisa.
+
+            O robô nunca oferta abaixo do piso, confere o valor no campo antes de
+            clicar e para sozinho se o portal não confirmar o envio.
+
+            ## Aplicativo Windows — análise de edital
 
             Download direto:
             https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Setup.exe
 
             Entre com sua conta HORASIS, clique em "Entrar no gov.br" e faça o login
             na janela oficial — ela se fecha sozinha quando o login é reconhecido.
-            Suas disputas carregam em seguida, com as que estão em fase de lances
-            no topo.
-
-            Antes de operar em produção, use "Conferir sala": ele mostra o que o robô
-            enxerga no item e ensaia a digitação do valor sem enviar lance nenhum.
 
             Build: ${{ github.sha }}

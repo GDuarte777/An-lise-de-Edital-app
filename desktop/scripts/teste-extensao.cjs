@@ -195,6 +195,103 @@ app.whenReady().then(async () => {
     ok("conexao ok antes", (await rodar("__lancebot.conexaoCaiu()")) === false);
     await rodar("window.__cairConexao()");
     ok("detecta 'Recarregar pagina'", (await rodar("__lancebot.conexaoCaiu()")) === true);
+
+    console.log("\n[9] Painel do operador");
+    await rodar(ler("painel.js"));
+    ok("painel montou", (await rodar("Boolean(window.__lancebotPainel)")) === true);
+    ok("painel vive em shadow DOM (nao vaza para a pagina)",
+       (await rodar('document.querySelector("#piso") === null && Boolean(document.getElementById("horasis-lancebot-painel"))')) === true);
+    ok("painel NAO e confundido com o campo de lance do item",
+       (await rodar('(() => { const c = __lancebot.cartoes()[0]; const r = __lancebot.controles(c, null); return r.campo && r.campo.id; })()')) === "lance");
+
+    const moeda = await rodar(`(() => { const L = __lancebotPainel.lerMoeda; return {
+      br: L("1.250,50"), simples: L("1250,50"), ponto: L("1250.50"),
+      milhar: L("1.250"), comRs: L("R$ 1.250,50"), lixo: L("abc"), vazio: L("")
+    }; })()`);
+    ok("le 1.250,50", moeda.br === 1250.5, moeda);
+    ok("le 1250,50", moeda.simples === 1250.5, moeda);
+    ok("le 1250.50", moeda.ponto === 1250.5, moeda);
+    ok("le 1.250 como mil duzentos e cinquenta", moeda.milhar === 1250, moeda);
+    ok("ignora o R$", moeda.comRs === 1250.5, moeda);
+    ok("recusa texto invalido", moeda.lixo === null && moeda.vazio === null, moeda);
+
+    const val = await rodar(`(() => { const V = __lancebotPainel.validar; return {
+      semItem:   V({item:"",  piso:"100", decremento:"1",  tipo:"fixo"}),
+      pisoRuim:  V({item:"1", piso:"abc", decremento:"1",  tipo:"fixo"}),
+      decZero:   V({item:"1", piso:"100", decremento:"0",  tipo:"fixo"}),
+      pctCheio:  V({item:"1", piso:"100", decremento:"100",tipo:"percentual"}),
+      bom:       V({item:"1", piso:"1.200,00", decremento:"0,50", tipo:"fixo"})
+    }; })()`);
+    ok("recusa sem item", val.semItem.ok === false, val.semItem);
+    ok("recusa piso invalido", val.pisoRuim.ok === false, val.pisoRuim);
+    ok("recusa decremento zero", val.decZero.ok === false, val.decZero);
+    ok("recusa percentual de 100%", val.pctCheio.ok === false, val.pctCheio);
+    ok("aceita config valida", val.bom.ok === true && val.bom.cfg.piso === 1200 && val.bom.cfg.decremento === 0.5, val.bom);
+
+    ok("lista os itens da tela no seletor",
+       (await rodar('Array.from(__lancebotPainel.raiz.getElementById("item").options).map(o => o.value).join(",")')) === "1,2,3");
+
+    const entregue = await rodar(`(async () => {
+      const P = __lancebotPainel, r = P.raiz, original = __lancebot.ligar;
+      let recebido = null;
+      __lancebot.ligar = (item, cfg) => { recebido = { item, cfg }; };
+      r.getElementById("item").value = "1";
+      r.getElementById("piso").value = "1.200,00";
+      r.getElementById("decremento").value = "0,50";
+      r.getElementById("tipo").value = "fixo";
+      r.getElementById("acao").click();
+      __lancebot.ligar = original;
+      return { recebido, erro: r.getElementById("erro").textContent };
+    })()`);
+    ok("Ligar entrega item e config ao robo",
+       entregue.recebido && entregue.recebido.item === "1" &&
+       entregue.recebido.cfg.piso === 1200 && entregue.recebido.cfg.decremento === 0.5, entregue);
+
+    const recusa = await rodar(`(() => {
+      const r = __lancebotPainel.raiz, original = __lancebot.ligar;
+      let chamou = false;
+      __lancebot.ligar = () => { chamou = true; };
+      r.getElementById("piso").value = "";
+      r.getElementById("acao").click();
+      __lancebot.ligar = original;
+      r.getElementById("piso").value = "1.200,00";
+      return { chamou, erro: r.getElementById("erro").textContent };
+    })()`);
+    ok("piso vazio NAO liga o robo", recusa.chamou === false && /Piso/.test(recusa.erro), recusa);
+
+    const parada = await rodar(`(() => {
+      const r = __lancebotPainel.raiz;
+      __lancebot.estado.ligado = true;
+      __lancebotPainel.pintar();
+      const rotulo = r.getElementById("acao").textContent;
+      r.getElementById("acao").click();
+      return { rotulo, ligado: __lancebot.estado.ligado };
+    })()`);
+    ok("botao vira 'Parar robo' com o robo ligado", /Parar/.test(parada.rotulo), parada);
+    ok("Parar desliga o robo", parada.ligado === false, parada);
+
+    const prev = await rodar(`(() => {
+      const r = __lancebotPainel.raiz;
+      r.getElementById("item").value = "1";
+      r.getElementById("piso").value = "1.000,00";
+      r.getElementById("decremento").value = "0,50";
+      __lancebotPainel.pintar();
+      return { previsto: r.getElementById("ePrevisto").textContent,
+               melhor: r.getElementById("eMelhor").textContent };
+    })()`);
+    ok("mostra o melhor lance do item", prev.melhor === "R$ 1.250,50", prev);
+    ok("mostra o proximo lance previsto", prev.previsto === "R$ 1.250,00", prev);
+
+    const trava = await rodar(`(() => {
+      const r = __lancebotPainel.raiz;
+      r.getElementById("piso").value = "1.251,00";   // piso acima do proximo lance
+      __lancebotPainel.pintar();
+      return { previsto: r.getElementById("ePrevisto").textContent,
+               erro: r.getElementById("erro").textContent };
+    })()`);
+    ok("piso alto some com a previsao e explica o motivo",
+       trava.previsto === "\u2014" && /[Mm]argem/.test(trava.erro), trava);
+
   } catch (e) {
     console.log("  ❌ excecao:", e && e.message); falhas++;
   } finally {
