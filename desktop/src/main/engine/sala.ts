@@ -4,6 +4,7 @@ import { aprenderEnderecoDe, enderecoSala } from "../auth/comprasnet.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { FONTE_MOTOR_EXTENSAO } from "./motor-extensao.js";
 import { scriptAgenteSala, type DiagnosticoSala, type EnvioSala, type ItemVisivel, type LeituraSala, type SeletoresAprendidos } from "./sala-script.js";
 import type { EstadoItem, PortalAdapter, ReferenciaItem, ResultadoEnvio } from "./portal.js";
 
@@ -159,9 +160,22 @@ export class GerenciadorSalas {
     }
   }
 
-  /** Injeta (ou reativa) o agente na página, com os seletores aprendidos. */
+  /**
+   * Injeta (ou reativa) o agente na página, com os seletores aprendidos.
+   *
+   * Primeiro entra o motor compartilhado com a extensão — é ele que conhece o HTML real
+   * do portal (`app-card-item`, `app-todos-lances`, "Valor do lance (unitário)", dinheiro
+   * com quatro casas). Depois entra o agente, que passa a preferir a leitura dele.
+   * Injetado assim, o motor só expõe `window.__lancebot`: ele nasce desligado e não dá
+   * lance por conta própria.
+   */
   private async injetar(janela: BrowserWindow): Promise<void> {
     if (janela.isDestroyed()) return;
+    try {
+      await janela.webContents.executeJavaScript(FONTE_MOTOR_EXTENSAO, true);
+    } catch {
+      // Sem o motor compartilhado o agente ainda funciona com a leitura própria.
+    }
     try {
       await janela.webContents.executeJavaScript(scriptAgenteSala(this.seletores), true);
     } catch {

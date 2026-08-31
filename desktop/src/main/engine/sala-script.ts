@@ -489,6 +489,29 @@ export function scriptAgenteSala(seletores: SeletoresAprendidos = {}): string {
   const RE_ABERTO = /em\\s+disputa|aberto|recebendo\\s+lances|fase\\s+de\\s+lances|em\\s+andamento|aberta/i;
 
   function ler(itemNum) {
+    // O motor compartilhado com a extensão foi construído sobre o HTML real do portal:
+    // conhece "app-card-item", o histórico em "app-todos-lances" e os rótulos que o
+    // portal usa de verdade ("Valor do lance (unitário)", "Valor ofertado"), além de
+    // dinheiro com quatro casas decimais. A heurística deste arquivo é anterior à coleta
+    // e não conhece nenhum desses nomes — então, quando o motor está presente e achou o
+    // item, a leitura dele vale mais.
+    if (window.__lancebot) {
+      try {
+        const i = window.__lancebot.acharItem(itemNum);
+        if (i && typeof i.melhorValor === "number") {
+          return {
+            ok: true,
+            menorLance: i.melhorValor,
+            nossoLance: typeof i.meuValor === "number" ? i.meuValor : null,
+            aberto: Boolean(i.aberto),
+            evidencia: String(i.fase || "").slice(0, 240)
+          };
+        }
+      } catch (e) {
+        // Cai na leitura própria abaixo.
+      }
+    }
+
     const escopo = escopoItem(itemNum);
     if (!escopo) {
       return { ok: false, menorLance: null, nossoLance: null, aberto: true, evidencia: "",

@@ -39,6 +39,33 @@ function fonteDoAgente() {
   return mod.scriptAgenteSala({});
 }
 
+/* --------------------------------------- a tela REAL, como a coleta mostrou */
+
+/**
+ * Estrutura tirada da coleta feita na sessão do operador: cartões `app-card-item` dentro
+ * de `app-disputa-fornecedor-itens`, a fase em `app-identificacao-e-fase-item`, e o
+ * histórico em `app-todos-lances` com o rótulo "Valor do lance (unitário)".
+ *
+ * O agente do aplicativo, sozinho, não conhece nenhum desses nomes — ele foi escrito
+ * antes da coleta. É por isso que o motor da extensão passou a ser injetado junto.
+ */
+const TELA_REAL = `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Sala de Disputa</title></head><body>
+<app-disputa-fornecedor-itens><p-dataview>
+  <app-card-item>
+    <app-identificacao-e-fase-item><div>1 - Em disputa</div></app-identificacao-e-fase-item>
+    <div><span>Valor do lance (unitário)</span><span>R$ 1.250,5000</span></div>
+    <div><span>Seu lance</span><span>R$ 1.300,0000</span></div>
+    <div><input type="text" aria-label="Valor do lance">
+         <button type="button" aria-label="Enviar lance">Enviar lance</button></div>
+  </app-card-item>
+</p-dataview></app-disputa-fornecedor-itens>
+<app-todos-lances><p-table><table>
+  <thead><tr><th>Data/hora registro</th><th>Valor do lance (unitário)</th></tr></thead>
+  <tbody><tr><td>29/08/2026 15:04:11</td><td>R$ 1.250,5000</td></tr></tbody>
+</table></p-table></app-todos-lances>
+</body></html>`;
+
 /* ------------------------------------------------------------- sala falsa */
 
 const PAGINA = `<!doctype html>
@@ -106,7 +133,7 @@ function subirServidor() {
         return;
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(PAGINA);
+      res.end(req.url === "/real" ? TELA_REAL : PAGINA);
     });
     servidor.listen(0, "127.0.0.1", () => resolve(servidor));
   });
@@ -174,6 +201,36 @@ app.whenReady().then(async () => {
     console.log("\n[7] Listagem das disputas visíveis na tela");
     const lista = await rodar("window.__lancebotSala.listar()");
     ok("achou o pregão", lista.some((i) => i.pregaoId === "90013/2025"), lista.slice(0, 3));
+    console.log("\n[8] A tela REAL do portal: o motor compartilhado com a extensão");
+    require("tsx/cjs");
+    const { FONTE_MOTOR_EXTENSAO } = require(
+      path.join(__dirname, "..", "src", "main", "engine", "motor-extensao.ts"));
+
+    await janela.loadURL(`http://127.0.0.1:${porta}/real`);
+
+    // Sem o motor: o agente sozinho não conhece "app-card-item" nem
+    // "Valor do lance (unitário)". É o estado em que o aplicativo estava.
+    await rodar(fonteDoAgente());
+    const semMotor = await rodar('window.__lancebotSala.ler("1")');
+
+    // Com o motor injetado antes, como o aplicativo passa a fazer.
+    await rodar("delete window.__lancebotSala; delete window.__lancebot; delete window.__lancebotMargem;");
+    await rodar(FONTE_MOTOR_EXTENSAO);
+    await rodar(fonteDoAgente());
+    const comMotor = await rodar('window.__lancebotSala.ler("1")');
+
+    console.log("     agente sozinho ->", JSON.stringify(semMotor));
+
+    ok("motor compartilhado presente na página", (await rodar("Boolean(window.__lancebot)")) === true);
+    ok("com o motor, le o valor certo na tela real", comMotor.menorLance === 1250.5, { semMotor, comMotor });
+    ok("com o motor, sabe que o item esta aberto", comMotor.aberto === true, comMotor);
+
+    // O ponto que importa. O agente sozinho nao reconhece o rotulo "Seu lance" nesta
+    // tela e devolve nossoLance = null. Sem nossoLance o robo nao sabe que JA esta
+    // liderando — e cobre o proprio lance, baixando o preco contra si mesmo. O motor
+    // compartilhado conhece os rotulos reais e le os dois valores.
+    ok("agente sozinho perde o NOSSO lance na tela real", semMotor.nossoLance === null, semMotor);
+    ok("com o motor, le o nosso lance (nao cobre o proprio lance)", comMotor.nossoLance === 1300, comMotor);
   } catch (e) {
     console.log("  ❌ exceção:", e && e.message);
     falhas++;
