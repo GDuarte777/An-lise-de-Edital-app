@@ -263,7 +263,7 @@ export default function App() {
         await saveUserConfigToSupabase({
           activeProvider: newProvider,
           geminiKey: currentConfig?.gemini_key || localStorage.getItem("ai_gemini_key") || "",
-          geminiModel: (currentConfig?.gemini_model === "gemini-3.6-flash" ? "gemini-3.7-flash" : currentConfig?.gemini_model) || (localStorage.getItem("ai_gemini_model") === "gemini-3.6-flash" ? "gemini-3.7-flash" : localStorage.getItem("ai_gemini_model")) || "gemini-3.7-flash",
+          geminiModel: currentConfig?.gemini_model || localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash",
           openaiKey: currentConfig?.openai_key || localStorage.getItem("ai_openai_key") || "",
           openaiModel: currentConfig?.openai_model || localStorage.getItem("ai_openai_model") || "gpt-4o",
           anthropicKey: currentConfig?.anthropic_key || localStorage.getItem("ai_anthropic_key") || "",

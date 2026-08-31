@@ -643,9 +643,9 @@ export async function fetchChatSessionsFromSupabase(): Promise<any[] | null> {
       console.warn(`[Chat] Found ${allSessions.length} sessions in DB (limit: ${MAX_CHAT_SESSIONS_IN_DB}). Purging excess...`);
       const toDelete = allSessions.slice(MAX_CHAT_SESSIONS_IN_DB);
       for (const s of toDelete) {
-        client.from("sessoes_chat").delete().eq("id", s.id).eq("user_id", user.id)
-          .then(() => {})
-          .catch(() => {});
+        void Promise.resolve(
+          client.from("sessoes_chat").delete().eq("id", s.id).eq("user_id", user.id)
+        ).catch(() => {});
       }
     }
 
@@ -1468,38 +1468,77 @@ alter table public.comparador_produtos enable row level security;
 alter table public.lancebot_config enable row level security;
 
 -- Políticas de Acesso
+-- ⚠️ Cada linha pertence a um usuário e só pode ser lida/escrita por ele.
+-- Políticas permissivas (using (true)) deixariam qualquer portador da chave
+-- publicável ler a tabela inteira — incluindo as chaves de API em
+-- configuracoes_usuario. O cast para text mantém a comparação válida tanto
+-- para colunas user_id uuid quanto text.
+
 drop policy if exists "Permitir tudo planilhas_disputas" on public.planilhas_disputas;
-create policy "Permitir tudo planilhas_disputas" on public.planilhas_disputas for all using (true) with check (true);
+drop policy if exists "Acesso proprio planilhas_disputas" on public.planilhas_disputas;
+create policy "Acesso proprio planilhas_disputas" on public.planilhas_disputas
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo editais_analisados" on public.editais_analisados;
-create policy "Permitir tudo editais_analisados" on public.editais_analisados for all using (true) with check (true);
+drop policy if exists "Acesso proprio editais_analisados" on public.editais_analisados;
+create policy "Acesso proprio editais_analisados" on public.editais_analisados
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo documentos_sincronizados" on public.documentos_sincronizados;
-create policy "Permitir tudo documentos_sincronizados" on public.documentos_sincronizados for all using (true) with check (true);
+drop policy if exists "Acesso proprio documentos_sincronizados" on public.documentos_sincronizados;
+create policy "Acesso proprio documentos_sincronizados" on public.documentos_sincronizados
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo certidoes_fiscais" on public.certidoes_fiscais;
-create policy "Permitir tudo certidoes_fiscais" on public.certidoes_fiscais for all using (true) with check (true);
+drop policy if exists "Acesso proprio certidoes_fiscais" on public.certidoes_fiscais;
+create policy "Acesso proprio certidoes_fiscais" on public.certidoes_fiscais
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo historico_concorrentes" on public.historico_concorrentes;
-create policy "Permitir tudo historico_concorrentes" on public.historico_concorrentes for all using (true) with check (true);
+drop policy if exists "Acesso proprio historico_concorrentes" on public.historico_concorrentes;
+create policy "Acesso proprio historico_concorrentes" on public.historico_concorrentes
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo sessoes_chat" on public.sessoes_chat;
-create policy "Permitir tudo sessoes_chat" on public.sessoes_chat for all using (true) with check (true);
+drop policy if exists "Acesso proprio sessoes_chat" on public.sessoes_chat;
+create policy "Acesso proprio sessoes_chat" on public.sessoes_chat
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo configuracoes_usuario" on public.configuracoes_usuario;
-create policy "Permitir tudo configuracoes_usuario" on public.configuracoes_usuario for all using (true) with check (true);
+drop policy if exists "Acesso proprio configuracoes_usuario" on public.configuracoes_usuario;
+create policy "Acesso proprio configuracoes_usuario" on public.configuracoes_usuario
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo dados_empresa" on public.dados_empresa;
-create policy "Permitir tudo dados_empresa" on public.dados_empresa for all using (true) with check (true);
+drop policy if exists "Acesso proprio dados_empresa" on public.dados_empresa;
+create policy "Acesso proprio dados_empresa" on public.dados_empresa
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo simulacoes_precos" on public.simulacoes_precos;
-create policy "Permitir tudo simulacoes_precos" on public.simulacoes_precos for all using (true) with check (true);
+drop policy if exists "Acesso proprio simulacoes_precos" on public.simulacoes_precos;
+create policy "Acesso proprio simulacoes_precos" on public.simulacoes_precos
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo comparador_produtos" on public.comparador_produtos;
-create policy "Permitir tudo comparador_produtos" on public.comparador_produtos for all using (true) with check (true);
+drop policy if exists "Acesso proprio comparador_produtos" on public.comparador_produtos;
+create policy "Acesso proprio comparador_produtos" on public.comparador_produtos
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo lancebot_config" on public.lancebot_config;
-create policy "Permitir tudo lancebot_config" on public.lancebot_config for all using (true) with check (true);
+drop policy if exists "Acesso proprio lancebot_config" on public.lancebot_config;
+create policy "Acesso proprio lancebot_config" on public.lancebot_config
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 `;
 }
 
@@ -1683,7 +1722,7 @@ export async function saveUserConfigToSupabase(config: {
       user_id: user.id,
       active_provider: config.activeProvider,
       gemini_key: config.geminiKey || "",
-      gemini_model: (config.geminiModel === "gemini-3.6-flash" || !config.geminiModel) ? "gemini-3.7-flash" : config.geminiModel,
+      gemini_model: config.geminiModel || "gemini-3.6-flash",
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",

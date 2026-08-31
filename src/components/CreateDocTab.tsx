@@ -58,7 +58,7 @@ import {
 } from "lucide-react";
 import { CompanyData, EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
-import { apiFetch, validateApiKeyFormat, formatAiError, getActiveAiConfig } from "../utils/aiClientHelper";
+import { apiFetch, validateApiKeyFormat, formatAiError, getActiveAiConfig, readJsonResponse } from "../utils/aiClientHelper";
 import {
   syncDocumentToSupabase,
   fetchDocumentosFromSupabase,
@@ -740,7 +740,7 @@ REGRAS RÍGIDAS DE GERAÇÃO:
         throw new Error(`Erro no servidor: ${response.status}`);
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data.reply) {
         setDocumentContent(data.reply);
         confetti({ particleCount: 40, spread: 60 });

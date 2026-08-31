@@ -25,9 +25,7 @@ export function getActiveAiConfig() {
     const deepseekKey = (localStorage.getItem("ai_deepseek_key") || localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
 
     if (geminiKey) {
-      const stored = localStorage.getItem("ai_gemini_model");
-      const cleanModel = (stored === "gemini-3.6-flash" || !stored) ? "gemini-3.7-flash" : stored;
-      return { provider: "gemini", apiKey: geminiKey, model: cleanModel };
+      return { provider: "gemini", apiKey: geminiKey, model: localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash" };
     }
     if (openaiKey) return { provider: "openai", apiKey: openaiKey, model: localStorage.getItem("ai_openai_model") || "gpt-4o" };
     if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey, model: localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5" };
@@ -48,8 +46,12 @@ export function validateApiKeyFormat(apiKey: string, provider: string): string |
     return `Chave de API não configurada. Acesse "IA & Modelos" no menu de Configurações e insira sua chave de API do ${provider === "gemini" ? "Google AI Studio" : provider}.`;
   }
 
-  if (provider === "gemini" && !key.startsWith("AIza")) {
-    return `A chave do Gemini parece inválida — ela deve começar com "AIza". Verifique a chave em "IA & Modelos".`;
+  // O Google emite chaves do Gemini em dois formatos:
+  //  - "AIza..."  → chave de API clássica
+  //  - "AQ.Ab8..." → nova "auth key" gerada pelo AI Studio (formato padrão desde 2026)
+  // Ambos são aceitos pelo endpoint generativelanguage.googleapis.com.
+  if (provider === "gemini" && !key.startsWith("AIza") && !key.startsWith("AQ.")) {
+    return `A chave do Gemini parece inválida — ela deve começar com "AIza" ou "AQ.". Verifique a chave em "IA & Modelos".`;
   }
   if (provider === "openai" && !key.startsWith("sk-")) {
     return `A chave do OpenAI parece inválida — ela deve começar com "sk-". Verifique a chave em "IA & Modelos".`;
@@ -91,6 +93,41 @@ export function formatAiError(error: any): string {
   // Return the original message if it's already friendly (starts with ❌/⚠️/etc)
   const original = error?.message || String(error || "Erro desconhecido.");
   return original.length < 300 ? original : "Erro ao processar a solicitação. Tente novamente.";
+}
+
+/**
+ * Lê o corpo da resposta como JSON.
+ *
+ * Quando a hospedagem devolve a própria página de erro (HTML ou texto puro, como
+ * "A server error has occurred"), `response.json()` estoura com
+ * "Unexpected token 'A'... is not valid JSON" — uma mensagem que não diz nada sobre
+ * o que de fato aconteceu. Aqui o corpo é lido como texto primeiro, para o erro
+ * carregar o status HTTP e o início da resposta real.
+ */
+export async function readJsonResponse(response: Response): Promise<any> {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const snippet = text
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+    throw new Error(
+      `O servidor respondeu HTTP ${response.status} sem JSON — a rota /api falhou antes de chegar na IA.` +
+      (snippet ? ` Resposta do servidor: "${snippet}"` : "")
+    );
+  }
+}
+
+/** Igual à anterior, mas nunca lança — para ramos que só querem extrair a mensagem de erro. */
+export async function readJsonResponseSafe(response: Response): Promise<any> {
+  try {
+    return await readJsonResponse(response);
+  } catch (err: any) {
+    return { error: err?.message || `Erro HTTP ${response.status}.` };
+  }
 }
 
 // Get the current Supabase session JWT (used to authenticate server-side AI calls)

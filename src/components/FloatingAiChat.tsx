@@ -8,7 +8,7 @@ import {
   ChevronDown, Search, AlertTriangle, Maximize2, Minimize2, Square
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { addSyncedItem } from "../utils/googleSync";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -58,6 +58,15 @@ function addDeletedSessionId(id: string) {
   }
 }
 
+function removeDeletedSessionId(id: string) {
+  try {
+    const current = getDeletedSessionIds().filter(existing => existing !== id);
+    localStorage.setItem(DELETED_SESSIONS_KEY, JSON.stringify(current));
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 function addMultipleDeletedSessionIds(ids: string[]) {
   try {
     const current = new Set(getDeletedSessionIds());
@@ -66,6 +75,29 @@ function addMultipleDeletedSessionIds(ids: string[]) {
   } catch (e) {
     console.error(e);
   }
+}
+
+// Id fixo do canal que reaparece quando o usuário apaga o último chat.
+// Precisa ser estável: com `chat-${Date.now()}` cada clique em "apagar" gerava um id
+// novo e gravava mais uma linha em sessoes_chat — foi assim que a conta acumulou
+// dezenas de "Chat Principal" vazios.
+const DEFAULT_SESSION_ID = "chat-default";
+
+function buildDefaultSession(selectedEditalId: string): ChatSession {
+  return {
+    id: DEFAULT_SESSION_ID,
+    title: "Chat Principal",
+    selectedEditalId,
+    messages: [
+      {
+        id: "msg-init",
+        role: "assistant",
+        content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
+        timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+      }
+    ],
+    createdAt: new Date().toLocaleString("pt-BR")
+  };
 }
 
 const MAX_CHATS_PER_USER = 20;
@@ -530,6 +562,13 @@ PARECER E ESTRATÉGIA:
     return titleWords.join(" ");
   };
 
+  // Espelho sempre atualizado de `sessions`, para handlers assíncronos não lerem
+  // a lista congelada no render em que foram criados.
+  const sessionsRef = useRef<ChatSession[]>(sessions);
+  sessionsRef.current = sessions;
+  // Exclusões em voo, para o mesmo chat não ser apagado duas vezes.
+  const deletingIdsRef = useRef<Set<string>>(new Set());
+
   const [isLoadedFromDb, setIsLoadedFromDb] = useState(false);
   // Ref to track the previous sessions for change detection (prevents unnecessary Supabase writes)
   const prevSessionsRef = useRef<string>("");
@@ -606,11 +645,15 @@ PARECER E ESTRATÉGIA:
 
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     syncTimerRef.current = setTimeout(() => {
-      validSessions.forEach(session => {
-        saveChatSessionToSupabase(session).catch(e =>
-          console.warn("[Chat Sync] Erro ao salvar sessão no Supabase:", e)
-        );
-      });
+      validSessions
+        // Um canal que só tem a saudação automática não é conversa nenhuma: gravá-lo
+        // era o que enchia sessoes_chat de "Chat Principal" vazios.
+        .filter(session => (session.messages || []).some(m => m.role === "user"))
+        .forEach(session => {
+          saveChatSessionToSupabase(session).catch(e =>
+            console.warn("[Chat Sync] Erro ao salvar sessão no Supabase:", e)
+          );
+        });
     }, 800); // 800ms debounce prevents cascading writes
   }, [sessions, isLoadedFromDb]); // ⚠️ isOpen and activeSessionId intentionally removed to prevent spurious syncs
 
@@ -659,49 +702,44 @@ PARECER E ESTRATÉGIA:
     setShowSidebarMobile(false);
   };
 
-  const handleDeleteChat = async (e: React.MouseEvent, idToDelete: string) => {
+  const handleDeleteChat = (e: React.MouseEvent, idToDelete: string) => {
     e.stopPropagation();
-    
+
+    // Cliques repetidos no mesmo botão chegavam todos aqui antes do primeiro
+    // terminar (o await do Supabase segurava o re-render), e cada um lia a lista
+    // ANTIGA de sessões. Com uma sessão só, todos entravam no ramo "acabou, cria
+    // outra" e criavam um canal novo cada — a origem dos chats em massa.
+    if (deletingIdsRef.current.has(idToDelete)) return;
+    deletingIdsRef.current.add(idToDelete);
+
     // 1. Grava no registro local de exclusões permanentes
     addDeletedSessionId(idToDelete);
 
-    // 2. Deleta permanentemente no Supabase
-    try {
-      await deleteChatSessionFromSupabase(idToDelete);
-    } catch (err) {
-      console.warn("Erro ao deletar sessão de chat do Supabase:", err);
+    // 2. Atualiza o estado ANTES de ir na rede, a partir da lista mais recente
+    //    (sessionsRef), nunca da capturada no render.
+    const remaining = sessionsRef.current.filter(s => s.id !== idToDelete);
+    let nextSessions: ChatSession[];
+    let nextActiveId: string | null = null;
+
+    if (remaining.length === 0) {
+      removeDeletedSessionId(DEFAULT_SESSION_ID);
+      nextSessions = [buildDefaultSession(activeEdital ? "active" : "")];
+      nextActiveId = DEFAULT_SESSION_ID;
+    } else {
+      nextSessions = remaining;
+      if (activeSessionId === idToDelete) nextActiveId = remaining[0].id;
     }
 
-    // 3. Atualiza estado local e localStorage
-    const updated = sessions.filter(s => s.id !== idToDelete);
-    
-    if (updated.length === 0) {
-      const newDefaultId = `chat-${Date.now()}`;
-      const defaultS: ChatSession = {
-        id: newDefaultId,
-        title: "Chat Principal",
-        selectedEditalId: activeEdital ? "active" : "",
-        messages: [
-          {
-            id: `msg-init-${Date.now()}`,
-            role: "assistant",
-            content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
-            timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-          }
-        ],
-        createdAt: new Date().toLocaleString("pt-BR")
-      };
-      setSessions([defaultS]);
-      setActiveSessionId(newDefaultId);
-      localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
-      await saveChatSessionToSupabase(defaultS).catch(() => {});
-    } else {
-      setSessions(updated);
-      localStorage.setItem("aip_chat_sessions", JSON.stringify(updated));
-      if (activeSessionId === idToDelete) {
-        setActiveSessionId(updated[0].id);
-      }
-    }
+    sessionsRef.current = nextSessions;
+    localStorage.setItem("aip_chat_sessions", JSON.stringify(nextSessions));
+    setSessions(nextSessions);
+
+    // 3. Deleta no Supabase em segundo plano (não bloqueia a interface)
+    deleteChatSessionFromSupabase(idToDelete)
+      .catch(err => console.warn("Erro ao deletar sessão de chat do Supabase:", err))
+      .finally(() => deletingIdsRef.current.delete(idToDelete));
+
+    if (nextActiveId) setActiveSessionId(nextActiveId);
 
     confetti({ particleCount: 30, spread: 40, colors: ["#ef4444", "#f87171"] });
     setShowSidebarMobile(true);
@@ -724,27 +762,17 @@ PARECER E ESTRATÉGIA:
     // 3. Limpa localStorage
     localStorage.removeItem("aip_chat_sessions");
 
-    // 4. Inicia um novo chat padrão com ID único
-    const newDefaultId = `chat-${Date.now()}`;
-    const defaultS: ChatSession = {
-      id: newDefaultId,
-      title: "Chat Principal",
-      selectedEditalId: activeEdital ? "active" : "",
-      messages: [
-        {
-          id: `msg-init-${Date.now()}`,
-          role: "assistant",
-          content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
-          timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-        }
-      ],
-      createdAt: new Date().toLocaleString("pt-BR")
-    };
+    // 4. Reinicia no canal padrão, com id fixo — assim limpar o histórico várias
+    //    vezes seguidas não deixa uma trilha de "Chat Principal" órfãos no banco.
+    //    A sessão só chega ao Supabase quando o usuário realmente escrever nela
+    //    (o efeito de sincronização cuida disso).
+    removeDeletedSessionId(DEFAULT_SESSION_ID);
+    const defaultS = buildDefaultSession(activeEdital ? "active" : "");
 
-    setSessions([defaultS]);
-    setActiveSessionId(newDefaultId);
+    sessionsRef.current = [defaultS];
     localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
-    await saveChatSessionToSupabase(defaultS).catch(() => {});
+    setSessions([defaultS]);
+    setActiveSessionId(DEFAULT_SESSION_ID);
 
     confetti({ particleCount: 50, spread: 60, colors: ["#ef4444", "#f87171"] });
   };
@@ -926,7 +954,7 @@ PARECER E ESTRATÉGIA:
         }
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         // Show server error message clearly to the user

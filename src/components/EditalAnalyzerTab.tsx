@@ -36,7 +36,7 @@ import {
   generateUUID
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError, readJsonResponse, readJsonResponseSafe } from "../utils/aiClientHelper";
 
 function cleanMarkdownText(text: string | undefined): string {
   if (!text) return "";
@@ -796,11 +796,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || "Erro de processamento da proposta.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data.markdown) {
         const finalTitle = data.title || proposalFileTitle || "Proposta Comercial de Licitação.md";
         onOpenDocPreview(finalTitle, data.markdown, "proposal");
@@ -1021,11 +1021,18 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || `Erro na resposta do servidor (${response.status}).`);
       }
 
-      data = await response.json();
+      data = await readJsonResponse(response);
+
+      // O servidor responde 200 mesmo quando a IA falha, entregando uma extração local
+      // marcada com degraded/reason. Sem avisar, o usuário lê um relatório pobre achando
+      // que foi a IA que o produziu.
+      if (data?.degraded && data?.reason) {
+        alert(`⚠️ A IA não conseguiu analisar este edital.\n\n${data.reason}\n\nO que aparece abaixo é apenas uma extração local do texto, sem análise da IA.`);
+      }
 
       if (data && data.analysis) {
         const fileNamesSummary = attachedFiles.length > 0
@@ -1274,11 +1281,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || "Erro de processamento no refinamento.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data && data.analysis) {
         const fileNamesSummary = attachedFiles.length > 0
           ? `Anexos (${attachedFiles.length}): ${attachedFiles.map(f => f.name).join(", ")}`
@@ -1334,11 +1341,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || "Erro de processamento do documento.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data.markdown) {
         const docTitle = docType === "proposal" ? "Proposta Comercial de Licitação.md" : 
                          docType === "joint_declaration" ? "Declaração Conjunta Unificada.md" : 

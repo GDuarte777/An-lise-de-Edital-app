@@ -5,7 +5,7 @@ import {
   Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, EditalAnalysis } from "../types";
-import { apiFetch, prepareAttachmentForServer, formatAiError } from "../utils/aiClientHelper";
+import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { 
   fetchDisputasFromSupabase, 
   saveDisputaToSupabase, 
@@ -485,7 +485,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           });
 
           if (response.ok) {
-            const data = await response.json();
+            const data = await readJsonResponse(response);
             if (data && data.analysis) {
               const editalObj: EditalAnalysis = data.analysis;
               const extracted = extractEditalFields(editalObj, file.name);
