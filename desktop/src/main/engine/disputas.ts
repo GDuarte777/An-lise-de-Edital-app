@@ -2,6 +2,7 @@ import type { Session } from "electron";
 import type { DescobridorApi } from "./discovery.js";
 import type { GerenciadorSalas } from "./sala.js";
 import type { ItemVisivel } from "./sala-script.js";
+import { enderecoPortal } from "../auth/comprasnet.js";
 
 /**
  * Lista as disputas do operador.
@@ -31,12 +32,18 @@ export interface Disputa {
   origem: "tela" | "api";
 }
 
-/** Páginas do fornecedor que listam sessões públicas em andamento. */
-const PAGINAS_DO_FORNECEDOR = [
-  "https://sala-disputa.comprasnet.gov.br/",
-  "https://sala-disputa.comprasnet.gov.br/minhas-disputas",
-  "https://sala-disputa.comprasnet.gov.br/sessoes"
-];
+/**
+ * Páginas do fornecedor que listam sessões públicas em andamento.
+ *
+ * Derivadas do endereço APRENDIDO, não fixas: a lista fixa que ficava aqui apontava toda
+ * para um host que não resolve DNS, e por isso a listagem de disputas voltava sempre
+ * vazia depois de um login que tinha dado certo.
+ */
+function paginasDoFornecedor(): string[] {
+  const base = enderecoPortal();
+  const raiz = base.replace(/\/[^/]*$/, "");
+  return [...new Set([base, `${raiz}/minhas-disputas`, `${raiz}/sessoes`])];
+}
 
 const CHAVES = {
   pregao: ["numerocompra", "numeropregao", "idcompra", "numerolicitacao", "pregao", "compra", "licitacao"],
@@ -157,7 +164,7 @@ export async function listarDisputas(
   salas: GerenciadorSalas
 ): Promise<Disputa[]> {
   const [tela, api] = await Promise.all([
-    salas.coletarDisputas(PAGINAS_DO_FORNECEDOR).then(daTela).catch(() => [] as Disputa[]),
+    salas.coletarDisputas(paginasDoFornecedor()).then(daTela).catch(() => [] as Disputa[]),
     pelaApi(sessao, descobridor).catch((erro: unknown) => {
       // Sessão expirada é a única falha de API que precisa interromper: sem ela, nem a
       // leitura de tela vale alguma coisa.

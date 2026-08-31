@@ -7,12 +7,14 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.js";
 import {
   abrirLogin,
   abrirPainelDisputas,
+  enderecoPortal,
   habilitarCertificadoDigital,
   partitionComprasnet,
   sair as sairComprasnet,
   sessaoComprasnet,
   verificarSessao
 } from "./auth/comprasnet.js";
+import { GuardiaoSessao, type EstadoGuardiao } from "./auth/sessao-viva.js";
 import { DescobridorApi, type EstadoCalibracao } from "./engine/discovery.js";
 import { listarDisputas } from "./engine/disputas.js";
 import { observarSala, extrairValores, type EventoSala } from "./engine/sniffer.js";
@@ -27,6 +29,7 @@ let janelaPrincipal: BrowserWindow | null = null;
 let motor: MotorLances | null = null;
 let descobridor: DescobridorApi | null = null;
 let salas: GerenciadorSalas | null = null;
+let guardiao: GuardiaoSessao | null = null;
 
 const auth = new AutenticacaoPlataforma(
   SUPABASE_URL,
@@ -136,10 +139,40 @@ ipcMain.handle("comprasnet:entrar", async () => {
   obterSalas();
   // Liga também o observador de DOM nesta janela: o operador costuma continuar
   // navegando pelo portal aqui mesmo depois de logar.
-  return abrirLogin(janelaPrincipal?.id, ligarObservador);
+  const status = await abrirLogin(janelaPrincipal?.id, ligarObservador);
+  // Entrou: a partir daqui é o aplicativo que segura a sessão de pé.
+  if (status.autenticado) void obterGuardiao().iniciar();
+  return status;
 });
 ipcMain.handle("comprasnet:status", async (_e, forcar?: boolean) => verificarSessao(Boolean(forcar)));
+
+/**
+ * Guardião de sessão — a razão de o robô ser aplicativo instalado e não extensão.
+ *
+ * A sessão do gov.br cai em poucos minutos quando ninguém mexe na página. Numa aba do
+ * navegador não há o que fazer: a aba vai para segundo plano e a sessão morre. Aqui a
+ * janela é do aplicativo, então ele mesmo mantém a sessão viva, sem o operador apertar
+ * F5 e sem tocar na janela onde o robô está operando.
+ */
+function obterGuardiao(): GuardiaoSessao {
+  if (!guardiao) {
+    guardiao = new GuardiaoSessao({
+      partition: partitionComprasnet(),
+      endereco: enderecoPortal,
+      // Nunca rotacionar a sessão no meio de um envio de lance.
+      podeRenovar: () => !motor?.ocupado,
+      aoMudar: (estado) => emitir("sessao:guardiao", estado),
+      aoRegistrar: (nivel, msg) => emitir("robo:log", { em: new Date().toISOString(), nivel, mensagem: msg })
+    });
+  }
+  return guardiao;
+}
+
+ipcMain.handle("sessao:manterViva", async (): Promise<EstadoGuardiao> => obterGuardiao().iniciar());
+ipcMain.handle("sessao:soltar", async (): Promise<EstadoGuardiao> => obterGuardiao().parar());
+ipcMain.handle("sessao:guardiao", async (): Promise<EstadoGuardiao> => obterGuardiao().atual);
 ipcMain.handle("comprasnet:sair", async () => {
+  obterGuardiao().parar("Você saiu do Compras.gov.br.");
   obterSalas().fechar();
   return sairComprasnet();
 });

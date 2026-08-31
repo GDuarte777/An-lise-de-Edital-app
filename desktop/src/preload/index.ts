@@ -69,6 +69,19 @@ export interface ConferenciaSala {
   seletores: { campo?: string; botao?: string; aprendidoEm?: string };
 }
 
+/** O que o guardião de sessão está fazendo — a interface mostra isso ao operador. */
+export interface EstadoGuardiao {
+  ativo: boolean;
+  autenticado: boolean;
+  desde: string | null;
+  ultimaRenovacaoEm: string | null;
+  proximaRenovacaoEm: string | null;
+  renovacoes: number;
+  falhasSeguidas: number;
+  retokensObservados: number;
+  motivo: string;
+}
+
 export interface ApiLanceBot {
   plataforma: {
     entrar(email: string, senha: string): Promise<Usuario>;
@@ -81,6 +94,16 @@ export interface ApiLanceBot {
     sair(): Promise<void>;
     abrirSala(pregaoId?: string): Promise<number>;
     abrirPainel(): Promise<number>;
+  };
+  /**
+   * Manutenção da sessão do gov.br. É o que diferencia este aplicativo de uma extensão:
+   * a sessão é mantida de pé pelo próprio programa, sem o operador atualizar a página.
+   */
+  sessao: {
+    manterViva(): Promise<EstadoGuardiao>;
+    soltar(): Promise<EstadoGuardiao>;
+    guardiao(): Promise<EstadoGuardiao>;
+    aoMudar(cb: (e: EstadoGuardiao) => void): () => void;
   };
   calibracao: {
     estado(): Promise<Calibracao>;
@@ -120,6 +143,12 @@ const api: ApiLanceBot = {
     sair: () => ipcRenderer.invoke("comprasnet:sair"),
     abrirSala: (pregaoId) => ipcRenderer.invoke("comprasnet:abrirSala", pregaoId),
     abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel")
+  },
+  sessao: {
+    manterViva: () => ipcRenderer.invoke("sessao:manterViva"),
+    soltar: () => ipcRenderer.invoke("sessao:soltar"),
+    guardiao: () => ipcRenderer.invoke("sessao:guardiao"),
+    aoMudar: (cb) => assinar<EstadoGuardiao>("sessao:guardiao", cb)
   },
   calibracao: {
     estado: () => ipcRenderer.invoke("calibracao:estado"),

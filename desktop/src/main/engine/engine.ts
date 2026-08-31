@@ -58,6 +58,15 @@ export class MotorLances {
     return this.estado;
   }
 
+  /**
+   * Verdadeiro enquanto um ciclo está em andamento — ou seja, enquanto pode haver um
+   * lance a caminho. O guardião de sessão consulta isto para não rotacionar a sessão
+   * exatamente durante um envio.
+   */
+  get ocupado(): boolean {
+    return this.ciclando;
+  }
+
   iniciar(): void {
     if (this.estado === "rodando") return;
 

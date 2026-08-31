@@ -1,4 +1,6 @@
 import { BrowserWindow } from "electron";
+
+import { aprenderEnderecoDe, enderecoSala } from "../auth/comprasnet.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -17,7 +19,11 @@ import type { EstadoItem, PortalAdapter, ReferenciaItem, ResultadoEnvio } from "
  * fazendo com a conta dele e assumir o controle a qualquer momento.
  */
 
-const URL_SALA = "https://sala-disputa.comprasnet.gov.br/";
+/**
+ * Endereço da sala — aprendido, nunca fixo. O valor fixo que ficava aqui
+ * (`sala-disputa.comprasnet.gov.br`) não resolve DNS: o robô dirigia uma sala que não
+ * existe. Ver `auth/endereco.ts`.
+ */
 
 export interface OpcoesSala {
   /** Sessão persistente do portal (partition), a mesma do login. */
@@ -111,12 +117,20 @@ export class GerenciadorSalas {
       }
     });
 
+    // A sala é onde o operador de fato navega até a disputa, então é o melhor lugar para
+    // aprender o endereço real — inclusive o caminho exato da sala, que este projeto
+    // nunca conseguiu observar de fora.
+    aprenderEnderecoDe(janela);
+
     // Reinjeta a cada navegação: a sala é uma SPA e troca de rota ao entrar no item.
     const reinjetar = () => void this.injetar(janela).catch(() => undefined);
     janela.webContents.on("dom-ready", reinjetar);
     janela.webContents.on("did-navigate-in-page", reinjetar);
 
-    const url = pregaoId ? `${URL_SALA}?compra=${encodeURIComponent(pregaoId)}` : URL_SALA;
+    const base = enderecoSala();
+    const url = pregaoId
+      ? base + (base.includes("?") ? "&" : "?") + "compra=" + encodeURIComponent(pregaoId)
+      : base;
     await janela.loadURL(url);
     await this.assentar(janela);
 

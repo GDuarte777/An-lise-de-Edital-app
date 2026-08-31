@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, session, type Session, type WebContents } from "electron";
+import { join } from "node:path";
 
+import { FONTE_REGEX_HOST, RegistroEnderecos, URL_LOGIN_SSO } from "./endereco.js";
 import { autenticadoPor, type Sondagem } from "./reconhecimento.js";
 
 /**
@@ -34,10 +36,41 @@ const PARTITION = "persist:comprasnet";
  * SSO emitir o seu; se por qualquer motivo essa página não abrir, caímos na sala de
  * disputa, que redireciona para o mesmo login com os parâmetros corretos.
  */
-const URL_LOGIN = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
-const URL_LOGIN_ALTERNATIVA = "https://sala-disputa.comprasnet.gov.br/";
+const URL_LOGIN = URL_LOGIN_SSO;
 
-export const URL_SALA_DISPUTA = "https://sala-disputa.comprasnet.gov.br/";
+/**
+ * Endereço do portal. NÃO é constante de propósito — ver `endereco.ts`. O valor fixo que
+ * ficava aqui apontava para `sala-disputa.comprasnet.gov.br`, um host que não resolve
+ * DNS: o login funcionava e todo o resto do aplicativo falava com o vazio.
+ */
+export function enderecoPortal(): string {
+  return registroEnderecos().paraAbrir();
+}
+
+export function enderecoSala(): string {
+  return registroEnderecos().paraSala();
+}
+
+let registro: RegistroEnderecos | null = null;
+
+export function registroEnderecos(): RegistroEnderecos {
+  if (!registro) {
+    registro = new RegistroEnderecos(join(app.getPath("userData"), "endereco-portal.json"));
+    void registro.carregar();
+  }
+  return registro;
+}
+
+/**
+ * Liga o aprendizado do endereço numa janela. Toda vez que ela pousa numa página do
+ * portal, o endereço é guardado — é assim que o aplicativo acompanha o portal quando ele
+ * muda de host, em vez de quebrar como quebrou.
+ */
+export function aprenderEnderecoDe(janela: BrowserWindow): void {
+  const anotar = (url: string) => void registroEnderecos().aprender(url);
+  janela.webContents.on("did-navigate", (_e, url) => anotar(url));
+  janela.webContents.on("did-navigate-in-page", (_e, url) => anotar(url));
+}
 
 /**
  * Domínios onde procuramos sessão. O `gov.br` genérico ficou de fora de propósito:
@@ -134,7 +167,7 @@ const SCRIPT_SONDA = `
   return {
     url: location.href.slice(0, 300),
     noSso: /sso\\.acesso\\.gov\\.br|acesso\\.gov\\.br\\/(login|autorizar)/i.test(location.href),
-    noPortal: /(^|\\.)(comprasnet|compras)\\.gov\\.br$/i.test(location.host),
+    noPortal: new RegExp("${FONTE_REGEX_HOST}", "i").test(location.host),
     temSenha: Boolean(document.querySelector('input[type="password"]')),
     temSair: /\\b(sair|logout|encerrar sess[aã]o|desconectar)\\b/i.test(txt) || Boolean(document.querySelector(seletorSair)),
     temIdentidade: /\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}/.test(txt) || /\\d{2}\\.\\d{3}\\.\\d{3}\\/\\d{4}-\\d{2}/.test(txt) ||
@@ -209,7 +242,7 @@ export async function verificarSessao(forcar = false): Promise<StatusSessao> {
   });
 
   try {
-    await janela.loadURL(URL_SALA_DISPUTA);
+    await janela.loadURL(enderecoPortal());
     // A sala é uma SPA: sondar antes de desenhar daria "não logado" por engano.
     let ultima: Sondagem | null = null;
     for (let i = 0; i < 12; i++) {
@@ -306,13 +339,14 @@ export async function abrirLogin(
     }
   });
 
+  aprenderEnderecoDe(janela);
   aoAbrirJanela?.(janela.id);
 
   try {
     await janela.loadURL(URL_LOGIN);
   } catch {
     try {
-      await janela.loadURL(URL_LOGIN_ALTERNATIVA);
+      await janela.loadURL(enderecoPortal());
     } catch {
       // A própria janela exibe a página de erro de rede; seguimos para o fluxo de espera.
     }
@@ -385,12 +419,13 @@ function abrirNoPortal(titulo: string, url: string): Promise<number> {
       sandbox: true
     }
   });
+  aprenderEnderecoDe(janela);
   return janela.loadURL(url).then(() => janela.id);
 }
 
 /** Abre o painel do fornecedor, de onde saem as disputas com proposta cadastrada. */
 export function abrirPainelDisputas(): Promise<number> {
-  return abrirNoPortal("Minhas disputas — Compras.gov.br", URL_SALA_DISPUTA);
+  return abrirNoPortal("Minhas disputas — Compras.gov.br", enderecoPortal());
 }
 
 /** Encerra a sessão local apagando os dados da partition. */

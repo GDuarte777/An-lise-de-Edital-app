@@ -14,7 +14,7 @@ const ok = (l: string, c: boolean, x?: unknown) => {
 };
 
 const tela = (p: Partial<Sondagem>): Sondagem => ({
-  url: "https://sala-disputa.comprasnet.gov.br/",
+  url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/painel",
   noSso: false,
   noPortal: true,
   temSenha: false,

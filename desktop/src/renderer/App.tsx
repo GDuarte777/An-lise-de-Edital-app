@@ -152,6 +152,11 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [intervalo, setIntervalo] = useState("1000");
   const [modo, setModo] = useState<"simulacao" | "real">("simulacao");
 
+  const [guardiao, setGuardiao] = useState<{
+    ativo: boolean; autenticado: boolean; renovacoes: number; retokensObservados: number;
+    ultimaRenovacaoEm: string | null; proximaRenovacaoEm: string | null; motivo: string;
+  } | null>(null);
+
   const [estadoRobo, setEstadoRobo] = useState("parado");
   const [logs, setLogs] = useState<Log[]>([]);
   const fim = useRef<HTMLDivElement>(null);
@@ -164,8 +169,10 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
         setEvidencia(s.evidencia);
       });
     void api().calibracao.estado().then(setCalib);
+    void api().sessao.guardiao().then(setGuardiao);
 
     const off = [
+      api().sessao.aoMudar(setGuardiao),
       api().robo.aoLog((e) => setLogs((a) => [...a.slice(-399), e as Log])),
       api().robo.aoEstado(setEstadoRobo),
       api().calibracao.aoAtualizar(() => void api().calibracao.estado().then(setCalib))
@@ -301,6 +308,41 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                   Abrir portal
                 </button>
               )}
+            </div>
+
+            <div className="card-head" style={{ marginTop: 18 }}>
+              <h3 className="card-title" style={{ fontSize: 15 }}>Sessão mantida viva</h3>
+              <span className={`pill ${guardiao?.ativo && guardiao.autenticado ? "ok" : "idle"}`}>
+                <span className="dot" />
+                {guardiao?.ativo ? (guardiao.autenticado ? "segurando" : "sessão caiu") : "solta"}
+              </span>
+            </div>
+
+            <p className="muted">
+              A sessão do gov.br cai em poucos minutos quando ninguém mexe na página — é por isso que no
+              navegador você precisa atualizar o tempo todo. Aqui <strong>o aplicativo mantém a sessão de pé
+              sozinho</strong>, numa janela oculta, sem tocar na sala onde o robô está operando. É o que
+              permite deixá-lo ligado e sair de perto.
+            </p>
+
+            {guardiao && (
+              <p className="faint">
+                {guardiao.motivo}
+                {guardiao.renovacoes > 0 && ` · ${guardiao.renovacoes} renovação(ões)`}
+                {guardiao.retokensObservados > 0 && ` · ${guardiao.retokensObservados} token(s) renovado(s) pelo portal`}
+              </p>
+            )}
+
+            <div className="row tight">
+              <button
+                className="btn"
+                disabled={!conectado}
+                onClick={() =>
+                  void (guardiao?.ativo ? api().sessao.soltar() : api().sessao.manterViva()).then(setGuardiao)
+                }
+              >
+                {guardiao?.ativo ? "Parar de manter a sessão" : "Manter a sessão viva"}
+              </button>
             </div>
           </section>
 

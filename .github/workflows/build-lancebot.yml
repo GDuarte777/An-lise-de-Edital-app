@@ -56,6 +56,12 @@ jobs:
       - name: Verificar que o robô consegue dar lance
         run: npm run test:sala
 
+      # O login do gov.br cai em poucos minutos. Este teste sobe um portal falso que
+      # expira sozinho e prova que o guardião atravessa várias expirações — é a razão de
+      # o robô ser aplicativo instalado, então não pode ser publicado quebrado.
+      - name: Verificar que a sessão do gov.br não expira
+        run: npm run test:sessao
+
       # A extensão é o que de fato dá lance no portal (o token de hCaptcha só existe
       # dentro da página). O painel do operador e a guarda de margem são checados aqui
       # contra uma réplica da tela real antes de qualquer publicação.
