@@ -21,6 +21,13 @@ console.log("\n[motor compartilhado app ↔ extensão]");
 const fonte = montar();
 ok("o gerado está em dia com extensao-lancebot/ (rode: npm run motor)", FONTE_MOTOR_EXTENSAO === fonte);
 
+// No Windows o git entrega CRLF, mas um template literal normaliza CRLF para LF ao
+// virar valor — então o embutido nunca bateria com o lido do disco. O gerador normaliza
+// para LF justamente por isso; se voltar a passar CR adiante, o build do Windows quebra
+// de novo, com a mensagem enganosa de "fora de sincronia".
+ok("motor embutido sem CR (senão o build do Windows quebra)", !FONTE_MOTOR_EXTENSAO.includes("\r"));
+ok("montar() normaliza para LF", !fonte.includes("\r"));
+
 // O que veio da coleta na tela real e o agente antigo do aplicativo não tinha.
 ok("traz os componentes reais do portal",
    /app-card-item/.test(FONTE_MOTOR_EXTENSAO) && /app-todos-lances/.test(FONTE_MOTOR_EXTENSAO));

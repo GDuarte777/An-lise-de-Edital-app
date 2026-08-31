@@ -21,9 +21,19 @@ const RAIZ = path.join(__dirname, "..", "..", "extensao-lancebot");
 const DESTINO = path.join(__dirname, "..", "src", "main", "engine", "motor-extensao.ts");
 const ARQUIVOS = ["margem.js", "conteudo.js"];
 
+/**
+ * Quebra de linha SEMPRE em LF.
+ *
+ * No Windows o git entrega os arquivos com CRLF, mas um template literal do JavaScript
+ * normaliza CRLF para LF ao virar valor. Sem normalizar aqui, o conteúdo lido do disco
+ * nunca bate com o embutido, e a checagem de sincronia falha no Windows mesmo estando
+ * tudo em dia — foi exatamente o que quebrou o build.
+ */
+const emLf = (t) => t.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
 function montar() {
   const partes = ARQUIVOS.map((nome) => {
-    const fonte = fs.readFileSync(path.join(RAIZ, nome), "utf-8");
+    const fonte = emLf(fs.readFileSync(path.join(RAIZ, nome), "utf-8"));
     return `/* ===== extensao-lancebot/${nome} ===== */\n${fonte}`;
   });
   return partes.join("\n");
