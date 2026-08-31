@@ -1,14 +1,31 @@
 # HORASIS LanceBot — extensão
 
-Robô de lances que roda **dentro do seu navegador, na sua sessão** do Compras.gov.br.
+Motor de lances rodando **dentro do seu navegador, na sua sessão** do Compras.gov.br.
 
-## Por que extensão
+## O que isto é, e o que não é
 
-A coleta na tela real mostrou que quase toda chamada de dados do portal exige um token
-de hCaptcha (`?captcha=P1_...`), gerado pelo widget que roda **dentro da página**. Isso
-torna impossível um robô por fora — de Electron, de servidor, de qualquer lugar: ele não
-teria como produzir esse token. O robô tem que viver na página. Como consequência, não
-existe login para implementar: você entra no gov.br do seu jeito e o robô herda a sessão.
+**O robô é o aplicativo instalado, em `desktop/`.** Esta extensão é o mesmo motor de
+leitura rodando no Chrome, para quem preferir operar direto no navegador.
+
+Vale registrar o raciocínio errado que quase fez esta extensão virar o produto: a coleta
+mostrou que quase toda chamada de dados do portal exige um token de hCaptcha
+(`?captcha=P1_...`), gerado pelo widget que roda **dentro da página** — logo, o robô tem
+que viver numa página. Isso está certo. O que não segue é "logo, tem que ser extensão":
+um aplicativo Electron **também tem uma página**, e ela é dele.
+
+E essa diferença decide o caso. A sessão do gov.br cai em poucos minutos sem interação;
+numa aba do navegador a aba vai para segundo plano, o SPA para de renovar o token e a
+sessão morre — por isso se atualiza a página o tempo todo. No aplicativo a janela é dele,
+então ele mantém a sessão viva sozinho (ver `desktop/src/main/auth/sessao-viva.ts`).
+É por isso que os robôs de mercado são aplicativos instalados.
+
+**Limitação desta extensão, e ela é séria:** aqui a sessão NÃO é mantida viva, porque não
+há como. Se a sessão cair, o robô para. Para deixar ligado sem acompanhar, use o
+aplicativo.
+
+O motor de leitura é literalmente o mesmo arquivo nos dois — `desktop` embute
+`margem.js` e `conteudo.js` via `scripts/gerar-motor.cjs`, com teste que falha se
+divergirem.
 
 ## O que já está pronto e testado
 

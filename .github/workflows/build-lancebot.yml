@@ -97,30 +97,36 @@ jobs:
             desktop/release/HORASIS-LanceBot-Setup.exe
             HORASIS-LanceBot-Extensao.zip
           body: |
-            ## Extensão — é ela que dá o lance
-
-            Download:
-            https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Extensao.zip
-
-            Descompacte numa pasta fixa, abra `chrome://extensions`, ligue o
-            "Modo do desenvolvedor" e clique em "Carregar sem compactação",
-            apontando para a pasta.
-
-            Depois é só entrar no gov.br normalmente e abrir a sala da disputa: o
-            painel do robô aparece no canto inferior direito. Escolha o item, informe
-            o piso e o decremento e clique em "Ligar robô". O painel mostra o melhor
-            lance, o seu lance e qual seria o próximo — antes de você ligar qualquer
-            coisa.
-
-            O robô nunca oferta abaixo do piso, confere o valor no campo antes de
-            clicar e para sozinho se o portal não confirmar o envio.
-
-            ## Aplicativo Windows — análise de edital
+            ## Aplicativo Windows — é ele que dá o lance
 
             Download direto:
             https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Setup.exe
 
             Entre com sua conta HORASIS, clique em "Entrar no gov.br" e faça o login
             na janela oficial — ela se fecha sozinha quando o login é reconhecido.
+
+            Em seguida ligue **"Manter a sessão viva"**. A sessão do gov.br cai em
+            poucos minutos quando ninguém mexe na página — é por isso que no navegador
+            você precisa atualizar o tempo todo. O aplicativo mantém a sessão de pé
+            sozinho, numa janela oculta, sem tocar na sala onde o robô está operando.
+            É o que permite deixá-lo ligado e sair de perto.
+
+            Abra a sala da disputa pelo aplicativo, escolha o item, informe o piso e o
+            decremento. O robô nunca oferta abaixo do piso, confere o valor no campo
+            antes de clicar, e para sozinho se o portal não confirmar o envio ou se a
+            leitura da tela ficar velha.
+
+            ## Extensão para o navegador (opcional)
+
+            Download:
+            https://github.com/${{ github.repository }}/releases/latest/download/HORASIS-LanceBot-Extensao.zip
+
+            Mesmo motor de leitura do aplicativo, para quem preferir operar direto no
+            Chrome. Descompacte numa pasta fixa, abra `chrome://extensions`, ligue o
+            "Modo do desenvolvedor" e clique em "Carregar sem compactação".
+
+            Atenção: aqui a sessão do gov.br NÃO é mantida viva — numa aba do navegador
+            não há como. Se a sessão cair, o robô para. Para deixar ligado sem
+            acompanhar, use o aplicativo.
 
             Build: ${{ github.sha }}
