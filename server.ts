@@ -69,6 +69,33 @@ async function loadPdfParse(): Promise<PdfExtractor | null> {
   return pdfParsePromise;
 }
 
+/**
+ * Teto de caracteres de um documento enviado ao modelo.
+ *
+ * Um edital de 180 páginas rende ~800 mil caracteres, e cada tentativa da cadeia de
+ * fallback reenvia tudo ao provedor. Acima desse teto o miolo é elidido, preservando
+ * o começo (identificação, objeto, valor, habilitação) e o fim (anexos e termo de
+ * referência), que é onde está o conteúdo decisivo.
+ */
+const MAX_DOCUMENT_CHARS = Number(process.env.MAX_DOCUMENT_CHARS || 400_000);
+
+function capDocumentText(text: string, label: string): string {
+  const full = String(text || "");
+  if (full.length <= MAX_DOCUMENT_CHARS) return full;
+
+  const headChars = Math.floor(MAX_DOCUMENT_CHARS * 0.65);
+  const tailChars = MAX_DOCUMENT_CHARS - headChars;
+  const omitted = full.length - MAX_DOCUMENT_CHARS;
+  console.log(`[PDF Parser] ${label}: ${full.length} caracteres excedem o teto de ${MAX_DOCUMENT_CHARS}; ${omitted} caracteres do miolo foram elididos.`);
+
+  return (
+    full.slice(0, headChars) +
+    `\n\n[... ${omitted} caracteres do miolo deste documento foram omitidos por limite de tamanho. ` +
+    `Se a informação procurada estiver nesta parte, analise o trecho correspondente separadamente. ...]\n\n` +
+    full.slice(-tailChars)
+  );
+}
+
 /** Extrai o texto de um PDF. Devolve "" se o extrator não estiver disponível. */
 async function extractPdfText(buffer: Buffer): Promise<string> {
   const pdfParse = await loadPdfParse();
@@ -486,7 +513,7 @@ async function processFileAttachmentAsync(
             console.log(`[PDF Parser] ✅ Sucesso! Extraídos ${pdfData.text.length} caracteres de ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas).`);
             return {
               part: {
-                text: `\n\n--- INÍCIO DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas) ---\n${pdfData.text}\n--- FIM DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} ---\n\n`
+                text: `\n\n--- INÍCIO DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas) ---\n${capDocumentText(pdfData.text, fname || "Edital.pdf")}\n--- FIM DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} ---\n\n`
               },
               tempFilePath: chunkFilePath
             };
@@ -542,7 +569,7 @@ async function processFileAttachmentAsync(
         console.log(`[PDF Parser] ✅ Sucesso! Extraídos ${pdfData.text.length} caracteres de base64 ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas).`);
         return {
           part: {
-            text: `\n\n--- INÍCIO DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas) ---\n${pdfData.text}\n--- FIM DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} ---\n\n`
+            text: `\n\n--- INÍCIO DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas) ---\n${capDocumentText(pdfData.text, fname || "Edital.pdf")}\n--- FIM DO EDITAL/DOCUMENTO: ${fname || "Edital.pdf"} ---\n\n`
           }
         };
       }
@@ -875,6 +902,19 @@ function buildProviderMessages(contents: any[], provider: string): any[] {
 }
 
 // Dynamic Multi-Provider AI Routing Helper using exclusively user API keys
+/**
+ * Tempo total que uma requisição de IA pode consumir no servidor, somando todas as
+ * tentativas e rotações de modelo.
+ *
+ * Sem esse teto, um edital grande virava um desastre: cada tentativa reenvia o
+ * documento inteiro para o Google, e com os modelos devolvendo 503 a cadeia chegava a
+ * 8 uploads do mesmo arquivo. O navegador desistia antes do servidor, então o usuário
+ * via "excedeu 120 segundos" e nunca ficava sabendo que a causa real era sobrecarga
+ * do provedor. O orçamento fica abaixo do timeout do cliente de propósito: assim quem
+ * responde é o servidor, com o motivo verdadeiro.
+ */
+const AI_REQUEST_BUDGET_MS = Number(process.env.AI_REQUEST_BUDGET_MS || 100_000);
+
 async function generateAiResponse(params: {
   contents: any[];
   systemInstruction?: string;
@@ -887,8 +927,13 @@ async function generateAiResponse(params: {
   model?: string;
   responseSchema?: any;
   tools?: any;
+  budgetMs?: number;
 }): Promise<any> {
   const { contents, systemInstruction, aiConfig, jsonMode, model, responseSchema, tools } = params;
+  const startedAt = Date.now();
+  const budgetMs = params.budgetMs ?? AI_REQUEST_BUDGET_MS;
+  const elapsedMs = () => Date.now() - startedAt;
+  const remainingMs = () => budgetMs - elapsedMs();
 
   if (!aiConfig || !aiConfig.apiKey || aiConfig.apiKey.trim().length < 10) {
     throw new Error("❌ Chave de API não configurada. Acesse 'IA & Modelos' nas Configurações, insira sua chave e clique em 'Salvar Configurações'.");
@@ -1049,6 +1094,11 @@ async function generateAiResponse(params: {
     const uniqueModels = getFallbackModels(primaryModel);
     
     let lastError: any = null;
+    // Quando vários modelos DIFERENTES respondem 503 seguidos, a indisponibilidade é do
+    // serviço, não do modelo — continuar rotacionando só reenvia o documento à toa.
+    let modelsDownInARow = 0;
+    const MAX_MODELS_DOWN_IN_A_ROW = 3;
+    let budgetExhausted = false;
 
     for (const keyToUse of candidateKeys) {
       const customClient = new GoogleGenAI({
@@ -1061,9 +1111,20 @@ async function generateAiResponse(params: {
       });
 
       for (const geminiModelName of uniqueModels) {
+        if (remainingMs() <= 0) {
+          budgetExhausted = true;
+          console.warn(`[Dynamic AI Router] Orçamento de ${budgetMs}ms esgotado após ${elapsedMs()}ms. Interrompendo a rotação de modelos.`);
+          break;
+        }
+        if (modelsDownInARow >= MAX_MODELS_DOWN_IN_A_ROW) {
+          console.warn(`[Dynamic AI Router] ${modelsDownInARow} modelos seguidos indisponíveis — tratando como sobrecarga geral do provedor.`);
+          break;
+        }
+
         let attempt = 0;
         const maxAttempts = 2;
         let delay = 1000;
+        let modelFailedTransiently = false;
         // A busca no Google (grounding) consome uma cota SEPARADA da cota de geração
         // de texto e é a primeira a se esgotar no plano gratuito. Quando isso acontece
         // repetimos a chamada no mesmo modelo sem a ferramenta, em vez de desistir.
@@ -1085,6 +1146,7 @@ async function generateAiResponse(params: {
               ...(Object.keys(reqConfig).length > 0 ? { config: reqConfig } : {})
             });
 
+            modelsDownInARow = 0;
             const text = sanitizeAiTextResponse(response.text || "");
             return {
               text,
@@ -1153,7 +1215,10 @@ async function generateAiResponse(params: {
               ));
 
             if (isTransient) {
-              if (attempt < maxAttempts) {
+              modelFailedTransiently = true;
+              // Só vale repetir se ainda houver tempo para a espera E para outra
+              // tentativa: cada retentativa reenvia o documento inteiro ao provedor.
+              if (attempt < maxAttempts && remainingMs() > delay * 3) {
                 console.log(`[Dynamic AI Router] Transient 503 on ${geminiModelName}. Waiting ${delay}ms before retry...`);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 delay *= 2;
@@ -1207,7 +1272,24 @@ async function generateAiResponse(params: {
             break;
           }
         }
+
+        if (modelFailedTransiently) {
+          modelsDownInARow++;
+        }
       }
+    }
+    if (budgetExhausted) {
+      throw new Error(
+        `⏱️ A análise ultrapassou o tempo limite de ${Math.round(budgetMs / 1000)}s. ` +
+        `Os modelos do Gemini responderam "sobrecarregado" (503) a cada tentativa. ` +
+        `Tente de novo em alguns minutos ou escolha outro modelo em "IA & Modelos".`
+      );
+    }
+    if (modelsDownInARow >= MAX_MODELS_DOWN_IN_A_ROW) {
+      throw new Error(
+        `⚠️ Os modelos do Gemini estão sobrecarregados no momento (503) — ${modelsDownInARow} modelos seguidos recusaram a requisição. ` +
+        `Isso costuma durar poucos minutos. Tente novamente em instantes.`
+      );
     }
     if (lastError) {
       const errMsg = lastError.message || String(lastError);

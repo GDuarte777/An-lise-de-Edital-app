@@ -1002,7 +1002,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     setLoading(true);
     // AbortController for 120s timeout
     const abortCtrl = new AbortController();
-    const timeoutId = setTimeout(() => abortCtrl.abort(), 120_000);
+    // O servidor tem orçamento próprio de ~100s para falar com a IA e responde antes
+    // disso com o motivo real da falha. O timeout do navegador fica acima, cobrindo
+    // também o envio do arquivo e a partida a frio da função — se ele disparar
+    // primeiro, o usuário perde a explicação e vê só "excedeu o tempo".
+    const timeoutId = setTimeout(() => abortCtrl.abort(), 240_000);
 
     try {
       let data: any;
@@ -1131,7 +1135,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     } catch (e: any) {
       if (e?.name === "AbortError" || e?.message?.includes("aborted")) {
-        alert("⏱️ A análise excedeu 120 segundos. O arquivo pode ser muito grande ou a IA está sobrecarregada. Tente novamente com um texto menor ou aguarde alguns instantes.");
+        alert("⏱️ A análise excedeu 4 minutos, contando o envio do arquivo e o processamento pela IA.\n\nNormalmente é sobrecarga temporária do Gemini (erro 503) ou uma conexão lenta para enviar o arquivo. Aguarde alguns minutos e tente de novo — ou selecione outro modelo em \"IA & Modelos\".");
       } else {
         alert(formatAiError(e));
       }
