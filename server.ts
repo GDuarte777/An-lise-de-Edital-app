@@ -5,7 +5,15 @@ import { createRequire } from "module";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
-const require = createRequire(import.meta.url);
+// `npm run build` empacota este arquivo como CJS (esbuild --format=cjs), e nesse
+// formato `import.meta` vira um objeto vazio: `import.meta.url` fica undefined e
+// createRequire() lança ERR_INVALID_ARG_VALUE já na carga do módulo — ou seja, o
+// servidor de produção (`npm start`) morria antes de registrar qualquer rota, e
+// toda chamada a /api caía na página de erro da hospedagem. No bundle CJS
+// `__filename` existe; em desenvolvimento (tsx/ESM) não existe e vale o import.meta.
+const require = createRequire(
+  typeof __filename !== "undefined" ? __filename : import.meta.url
+);
 const pdfParse = require("pdf-parse");
 
 // .env.local first: dotenv never overwrites an already-set variable, so this gives the
