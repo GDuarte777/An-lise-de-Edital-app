@@ -25,9 +25,7 @@ export function getActiveAiConfig() {
     const deepseekKey = (localStorage.getItem("ai_deepseek_key") || localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
 
     if (geminiKey) {
-      const stored = localStorage.getItem("ai_gemini_model");
-      const cleanModel = (stored === "gemini-3.6-flash" || !stored) ? "gemini-3.7-flash" : stored;
-      return { provider: "gemini", apiKey: geminiKey, model: cleanModel };
+      return { provider: "gemini", apiKey: geminiKey, model: localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash" };
     }
     if (openaiKey) return { provider: "openai", apiKey: openaiKey, model: localStorage.getItem("ai_openai_model") || "gpt-4o" };
     if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey, model: localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5" };
@@ -48,8 +46,12 @@ export function validateApiKeyFormat(apiKey: string, provider: string): string |
     return `Chave de API não configurada. Acesse "IA & Modelos" no menu de Configurações e insira sua chave de API do ${provider === "gemini" ? "Google AI Studio" : provider}.`;
   }
 
-  if (provider === "gemini" && !key.startsWith("AIza")) {
-    return `A chave do Gemini parece inválida — ela deve começar com "AIza". Verifique a chave em "IA & Modelos".`;
+  // O Google emite chaves do Gemini em dois formatos:
+  //  - "AIza..."  → chave de API clássica
+  //  - "AQ.Ab8..." → nova "auth key" gerada pelo AI Studio (formato padrão desde 2026)
+  // Ambos são aceitos pelo endpoint generativelanguage.googleapis.com.
+  if (provider === "gemini" && !key.startsWith("AIza") && !key.startsWith("AQ.")) {
+    return `A chave do Gemini parece inválida — ela deve começar com "AIza" ou "AQ.". Verifique a chave em "IA & Modelos".`;
   }
   if (provider === "openai" && !key.startsWith("sk-")) {
     return `A chave do OpenAI parece inválida — ela deve começar com "sk-". Verifique a chave em "IA & Modelos".`;

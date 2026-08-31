@@ -1027,6 +1027,13 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
       data = await response.json();
 
+      // O servidor responde 200 mesmo quando a IA falha, entregando uma extração local
+      // marcada com degraded/reason. Sem avisar, o usuário lê um relatório pobre achando
+      // que foi a IA que o produziu.
+      if (data?.degraded && data?.reason) {
+        alert(`⚠️ A IA não conseguiu analisar este edital.\n\n${data.reason}\n\nO que aparece abaixo é apenas uma extração local do texto, sem análise da IA.`);
+      }
+
       if (data && data.analysis) {
         const fileNamesSummary = attachedFiles.length > 0
           ? `Anexos (${attachedFiles.length}): ${attachedFiles.map(f => f.name).join(", ")}`

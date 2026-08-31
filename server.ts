@@ -13,51 +13,56 @@ const pdfParse = require("pdf-parse");
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-// Helper: resolve the active AI config for a user from Supabase using their JWT
+// Modelos Gemini que a API generativelanguage.googleapis.com realmente expõe hoje.
+// ⚠️ A família 2.5 foi descontinuada para novas chaves ("This model is no longer
+// available to new users" → HTTP 404), por isso não entra mais em nenhuma lista.
+const VALID_GEMINI_MODELS = [
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
+  "gemini-3.1-pro-preview"
+];
+
+const GEMINI_MODEL_ALIASES: Record<string, string> = {
+  "flash": "gemini-flash-latest",
+  "gemini-flash": "gemini-flash-latest",
+  "pro": "gemini-3.1-pro-preview",
+  "gemini-pro": "gemini-3.1-pro-preview",
+  "gemini-3.1-pro": "gemini-3.1-pro-preview",
+  "lite": "gemini-3.1-flash-lite",
+  "flash-lite": "gemini-3.1-flash-lite",
+  "gemini-lite": "gemini-3.1-flash-lite",
+  "gemini-flash-lite": "gemini-3.1-flash-lite",
+  // Modelos aposentados → apontam para o substituto recomendado pelo próprio Google
+  "gemini-2.5-flash": "gemini-3.6-flash",
+  "2.5-flash": "gemini-3.6-flash",
+  "gemini-2.5-flash-lite": "gemini-3.1-flash-lite",
+  "2.5-flash-lite": "gemini-3.1-flash-lite",
+  "gemini-2.5-pro": "gemini-3.1-pro-preview"
+};
+
 function normalizeGeminiModel(model: string | undefined): string {
   if (!model) return "gemini-3.7-flash";
   const trimmed = model.trim().toLowerCase();
-  if (trimmed === "gemini-flash" || trimmed === "flash") {
-    return "gemini-flash-latest";
-  }
-  if (trimmed === "gemini-3.1-flash-lite" || trimmed === "gemini-lite" || trimmed === "flash-lite" || trimmed === "gemini-flash-lite") {
-    return "gemini-3.1-flash-lite";
-  }
-  if (trimmed === "gemini-3.1-pro-preview" || trimmed === "gemini-pro" || trimmed === "pro" || trimmed === "gemini-3.1-pro") {
-    return "gemini-3.1-pro-preview";
-  }
-  if (trimmed === "gemini-2.5-flash" || trimmed === "2.5-flash") {
-    return "gemini-2.5-flash";
-  }
-  if (trimmed === "gemini-2.5-flash-lite" || trimmed === "2.5-flash-lite") {
-    return "gemini-2.5-flash-lite";
-  }
-  const validModels = [
-    "gemini-3.7-flash",
-    "gemini-flash-latest",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-3.1-pro-preview"
-  ];
-  if (validModels.includes(trimmed)) {
-    return trimmed;
-  }
+  if (VALID_GEMINI_MODELS.includes(trimmed)) return trimmed;
+  if (GEMINI_MODEL_ALIASES[trimmed]) return GEMINI_MODEL_ALIASES[trimmed];
   return "gemini-3.7-flash";
 }
 
-// Get the fallback list of Gemini models, prioritizing distinct models across different quota buckets
+// Lista de fallback: mantém o modelo escolhido pelo usuário em primeiro lugar e,
+// em caso de 429/503, rotaciona por modelos de famílias e cotas diferentes.
 function getFallbackModels(primaryModel: string): string[] {
   const normPrimary = normalizeGeminiModel(primaryModel);
-  // Ensure we order fallback models such that if gemini-3.7-flash is quota-exhausted,
-  // we try gemini-3.1-flash-lite and gemini-2.5-flash before repeating 3.7-flash aliases
   const baseList = [
     normPrimary,
-    normPrimary !== "gemini-3.1-flash-lite" ? "gemini-3.1-flash-lite" : "gemini-2.5-flash",
-    "gemini-2.5-flash",
-    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
     "gemini-flash-latest",
-    "gemini-3.1-pro-preview"
+    "gemini-3.7-flash"
   ];
   return Array.from(new Set(baseList.filter(Boolean)));
 }
@@ -77,6 +82,52 @@ function getServerFallbackKey(varName: "GEMINI_API_KEY" | "OPENAI_API_KEY"): str
   if (!SERVER_KEY_FALLBACK_ENABLED) return null;
   const key = String(process.env[varName] || "").trim();
   return key.length > 10 ? key : null;
+}
+
+// Lê o "sub" (id do usuário) de um JWT do Supabase sem verificar assinatura.
+// A verificação continua sendo feita pelo PostgREST/RLS; aqui o valor serve apenas
+// para filtrar a consulta pela linha do usuário correto.
+function getUserIdFromJwt(token: string): string | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const json = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+    const sub = JSON.parse(json)?.sub;
+    return typeof sub === "string" && sub.length > 0 ? sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Traduz o erro bruto do provedor em uma frase acionável.
+ *
+ * As rotas de IA caem em geradores locais quando o provedor falha, para o usuário
+ * nunca ficar sem resposta. Antes isso era feito em silêncio (HTTP 200, sem sinal
+ * nenhum), então uma cota estourada era indistinguível de uma análise de verdade —
+ * o motivo de "as ferramentas não funcionam e não dizem por quê". Agora o motivo
+ * viaja junto com a resposta degradada.
+ */
+function describeAiFailure(error: any): string {
+  const raw = String(error?.message || error || "");
+  const msg = raw.toLowerCase();
+
+  if (msg.includes("429") || msg.includes("quota") || msg.includes("resource_exhausted") || msg.includes("rate limit")) {
+    return "Cota da sua chave de IA esgotada (429). Verifique os limites em https://ai.dev/rate-limit ou ative o faturamento no Google AI Studio.";
+  }
+  if (msg.includes("401") || msg.includes("403") || msg.includes("api_key_invalid") || msg.includes("permission_denied") || msg.includes("unauthenticated")) {
+    return "Chave de IA inválida ou sem permissão. Revise a chave em \"IA & Modelos\".";
+  }
+  if (msg.includes("404") || msg.includes("not_found")) {
+    return "O modelo selecionado não está disponível para a sua chave. Escolha outro modelo em \"IA & Modelos\".";
+  }
+  if (msg.includes("503") || msg.includes("unavailable") || msg.includes("overloaded") || msg.includes("high demand")) {
+    return "Os modelos do provedor estão sobrecarregados no momento (503). Tente de novo em alguns instantes.";
+  }
+  if (msg.includes("chave de api não configurada") || msg.includes("nenhuma chave")) {
+    return raw;
+  }
+  return raw.length > 0 && raw.length < 300 ? raw : "Falha na comunicação com o provedor de IA.";
 }
 
 // Helper: resolve the active AI config for a user from Supabase, payload, or server environment
@@ -125,9 +176,14 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
     const supabaseUrl = process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
     const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
 
-    if (supabaseUrl && supabaseAnonKey) {
+    // ⚠️ Sem o filtro por user_id a consulta devolvia "uma linha qualquer" da tabela
+    // (as políticas de RLS do projeto são permissivas), o que fazia um usuário rodar
+    // com a chave de API de outro. O filtro abaixo amarra a busca ao dono do token.
+    const jwtUserId = getUserIdFromJwt(token);
+
+    if (supabaseUrl && supabaseAnonKey && jwtUserId) {
       try {
-        const resp = await fetch(`${supabaseUrl}/rest/v1/configuracoes_usuario?select=*&limit=1`, {
+        const resp = await fetch(`${supabaseUrl}/rest/v1/configuracoes_usuario?select=*&user_id=eq.${encodeURIComponent(jwtUserId)}&limit=1`, {
           headers: {
             "apikey": supabaseAnonKey,
             "Authorization": `Bearer ${token}`,
@@ -939,6 +995,10 @@ async function generateAiResponse(params: {
         let attempt = 0;
         const maxAttempts = 2;
         let delay = 1000;
+        // A busca no Google (grounding) consome uma cota SEPARADA da cota de geração
+        // de texto e é a primeira a se esgotar no plano gratuito. Quando isso acontece
+        // repetimos a chamada no mesmo modelo sem a ferramenta, em vez de desistir.
+        let useTools = Boolean(tools);
         
         while (attempt < maxAttempts) {
           try {
@@ -948,7 +1008,7 @@ async function generateAiResponse(params: {
             if (systemInstruction) reqConfig.systemInstruction = systemInstruction;
             if (jsonMode) reqConfig.responseMimeType = "application/json";
             if (responseSchema) reqConfig.responseSchema = responseSchema;
-            if (tools) reqConfig.tools = tools;
+            if (useTools && tools) reqConfig.tools = tools;
 
             const response = await customClient.models.generateContent({
               model: geminiModelName,
@@ -963,10 +1023,20 @@ async function generateAiResponse(params: {
               groundingMetadata: (response.candidates?.[0] as any)?.groundingMetadata || null
             };
           } catch (error: any) {
-            attempt++;
-            console.warn(`[Dynamic AI Router] Gemini model ${geminiModelName} failed on attempt ${attempt}:`, error.message || error);
+            console.warn(`[Dynamic AI Router] Gemini model ${geminiModelName} failed on attempt ${attempt + 1}:`, error.message || error);
             lastError = error;
-            
+
+            // Grounding tem cota própria: um 429/400 aqui normalmente vem da busca no
+            // Google, não do modelo. Refaz a MESMA chamada sem ferramentas antes de
+            // classificar o erro ou rotacionar de modelo.
+            if (useTools) {
+              console.log(`[Dynamic AI Router] ${geminiModelName} falhou com googleSearch ativo. Repetindo sem ferramentas...`);
+              useTools = false;
+              continue;
+            }
+
+            attempt++;
+
             const isPermissionError = 
               error.status === 403 || 
               error.status === 401 ||
@@ -1037,30 +1107,8 @@ async function generateAiResponse(params: {
               ));
 
             if (isSchemaOrToolError) {
-              if (tools) {
-                console.log(`[Dynamic AI Router] Trying model ${geminiModelName} without tools fallback...`);
-                try {
-                  const reqConfigNoTools: any = {};
-                  if (systemInstruction) reqConfigNoTools.systemInstruction = systemInstruction;
-                  if (jsonMode) reqConfigNoTools.responseMimeType = "application/json";
-                  if (responseSchema) reqConfigNoTools.responseSchema = responseSchema;
-
-                  const responseNoTools = await customClient.models.generateContent({
-                    model: geminiModelName,
-                    contents: normalizedContents,
-                    ...(Object.keys(reqConfigNoTools).length > 0 ? { config: reqConfigNoTools } : {})
-                  });
-                  const text = sanitizeAiTextResponse(responseNoTools.text || "");
-                  return {
-                    text,
-                    candidates: responseNoTools.candidates || [],
-                    groundingMetadata: null
-                  };
-                } catch (noToolsErr: any) {
-                  console.warn(`[Dynamic AI Router] Fallback without tools also failed on ${geminiModelName}:`, noToolsErr.message || noToolsErr);
-                }
-              }
-
+              // O retry sem ferramentas já aconteceu acima (flag useTools), então aqui
+              // só resta afrouxar a restrição de schema estrito.
               if (responseSchema) {
                 console.log(`[Dynamic AI Router] Trying model ${geminiModelName} without strict schema constraint...`);
                 try {
@@ -2275,7 +2323,11 @@ const PORT = 3000;
           }
         }
         const offlineData = parseEditalLocally(extractedText.length > 5 ? extractedText : "Edital de Licitação Pública");
-        return res.json({ analysis: offlineData });
+        return res.json({
+          analysis: offlineData,
+          degraded: true,
+          reason: "Nenhuma chave de IA configurada — o edital foi lido por extração local, sem análise da IA. Configure sua chave em \"IA & Modelos\"."
+        });
       }
 
       const aiClient = getAiClientForConfig(aiConfig);
@@ -2710,7 +2762,11 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
         const combinedText = ((textInput || "") + "\n" + extractedTextFromFiles).trim();
         console.log("[analyze-edital] Aplicando fallback local estruturado para garantir resposta contínua ao usuário...");
         const fallbackData = parseEditalLocally(combinedText.length > 5 ? combinedText : "Edital de Licitação Pública");
-        return res.json({ analysis: fallbackData });
+        return res.json({
+          analysis: fallbackData,
+          degraded: true,
+          reason: describeAiFailure(error)
+        });
       } catch (fallbackError: any) {
         console.error("[analyze-edital] Falha no fallback local:", fallbackError);
       }
@@ -3434,10 +3490,16 @@ ${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum
     } catch (error: any) {
       console.warn("Erro no chat com IA, aplicando resposta do assistente local:", error.message || error);
       const errMsg = error?.message || "Erro de conexão com a IA.";
+      const reason = describeAiFailure(error);
       try {
         const { messages, companyData, activeEditalAnalysis } = req.body;
         const fallbackReply = generateChatLocally(messages || [], companyData, activeEditalAnalysis);
-        return res.json({ reply: fallbackReply });
+        // Resposta degradada: entrega o texto local, mas deixa explícito que a IA falhou.
+        return res.json({
+          reply: `⚠️ **Resposta gerada localmente — a IA não respondeu.**\n${reason}\n\n---\n\n${fallbackReply}`,
+          degraded: true,
+          reason
+        });
       } catch (fallbackError: any) {
         return res.status(400).json({ error: errMsg });
       }
