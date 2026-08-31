@@ -1,20 +1,81 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createRequire } from "module";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
-// `npm run build` empacota este arquivo como CJS (esbuild --format=cjs), e nesse
-// formato `import.meta` vira um objeto vazio: `import.meta.url` fica undefined e
-// createRequire() lança ERR_INVALID_ARG_VALUE já na carga do módulo — ou seja, o
-// servidor de produção (`npm start`) morria antes de registrar qualquer rota, e
-// toda chamada a /api caía na página de erro da hospedagem. No bundle CJS
-// `__filename` existe; em desenvolvimento (tsx/ESM) não existe e vale o import.meta.
-const require = createRequire(
-  typeof __filename !== "undefined" ? __filename : import.meta.url
-);
-const pdfParse = require("pdf-parse");
+/**
+ * pdf-parse é carregado sob demanda, com um `import()` de especificador literal.
+ *
+ * Antes era `createRequire(import.meta.url)("pdf-parse")` no topo do arquivo, e isso
+ * quebrava a aplicação de duas formas:
+ *
+ *  - Nenhum empacotador enxerga através de createRequire, então a dependência ficava
+ *    invisível para a análise estática e não era embarcada na função serverless da
+ *    Vercel. Lá o require estourava "Cannot find module" na carga do módulo, antes de
+ *    qualquer rota existir, e toda chamada a /api virava FUNCTION_INVOCATION_FAILED.
+ *  - No bundle CJS do `npm run build`, `import.meta` vira {} e createRequire recebia
+ *    undefined, derrubando o `npm start` com ERR_INVALID_ARG_VALUE.
+ *
+ * Um `import("pdf-parse")` com string literal é rastreável por qualquer empacotador,
+ * funciona em ESM e em CJS, e sendo preguiçoso não pesa no cold start. A falha ao
+ * carregar deixa de ser fatal: sem ele a extração de PDF é pulada, e o resto da
+ * plataforma (chat, análises, documentos) continua de pé.
+ */
+type PdfExtractor = (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
+
+let pdfParsePromise: Promise<PdfExtractor | null> | null = null;
+
+/**
+ * Adapta o pdf-parse v2 ao formato que o restante do arquivo espera.
+ *
+ * A v2 exporta a classe `PDFParse`, não uma função — não existe export default.
+ * O código anterior fazia `await pdfParse(buffer)` (formato da v1), então toda
+ * extração local de PDF lançava "is not a function" e caía no catch: os editais
+ * seguiam para a IA como binário bruto e os caminhos de extração offline ficavam
+ * sempre vazios.
+ */
+async function loadPdfParse(): Promise<PdfExtractor | null> {
+  if (!pdfParsePromise) {
+    pdfParsePromise = import("pdf-parse")
+      .then((mod: any) => {
+        const PDFParse = mod?.PDFParse ?? mod?.default?.PDFParse;
+        if (typeof PDFParse !== "function") {
+          throw new Error("pdf-parse não expõe a classe PDFParse");
+        }
+        const extract: PdfExtractor = async (buffer: Buffer) => {
+          const parser = new PDFParse({ data: new Uint8Array(buffer) });
+          try {
+            const result = await parser.getText();
+            // A v2 injeta marcadores "-- 1 of 12 --" entre as páginas; eles só
+            // poluiriam o contexto enviado ao modelo.
+            const text = String(result?.text || "").replace(/^--\s*\d+\s+of\s+\d+\s*--$/gm, "").trim();
+            return { text, numpages: Number(result?.total) || 0 };
+          } finally {
+            try {
+              await parser.destroy();
+            } catch {
+              // liberar o parser nunca deve derrubar a extração
+            }
+          }
+        };
+        return extract;
+      })
+      .catch((err: any) => {
+        console.error("[pdf-parse] Não foi possível carregar o extrator de PDF:", err?.message || err);
+        return null;
+      });
+  }
+  return pdfParsePromise;
+}
+
+/** Extrai o texto de um PDF. Devolve "" se o extrator não estiver disponível. */
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  const pdfParse = await loadPdfParse();
+  if (!pdfParse) return "";
+  const result = await pdfParse(buffer);
+  return result?.text || "";
+}
 
 // .env.local first: dotenv never overwrites an already-set variable, so this gives the
 // local file precedence over .env, matching Vite's convention and the README instructions.
@@ -420,7 +481,7 @@ async function processFileAttachmentAsync(
       if (mtype === "application/pdf" || lowerName.endsWith(".pdf")) {
         try {
           const buf = fs.readFileSync(chunkFilePath);
-          const pdfData = await (pdfParse as any)(buf);
+          const pdfData = await (await loadPdfParse())?.(buf);
           if (pdfData && pdfData.text && pdfData.text.trim().length > 30) {
             console.log(`[PDF Parser] ✅ Sucesso! Extraídos ${pdfData.text.length} caracteres de ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas).`);
             return {
@@ -476,7 +537,7 @@ async function processFileAttachmentAsync(
   if (mtype === "application/pdf" || lowerName.endsWith(".pdf")) {
     try {
       const buffer = Buffer.from(cleanB64, "base64");
-      const pdfData = await (pdfParse as any)(buffer);
+      const pdfData = await (await loadPdfParse())?.(buffer);
       if (pdfData && pdfData.text && pdfData.text.trim().length > 30) {
         console.log(`[PDF Parser] ✅ Sucesso! Extraídos ${pdfData.text.length} caracteres de base64 ${fname || "Edital.pdf"} (${pdfData.numpages || "?"} páginas).`);
         return {
@@ -2308,8 +2369,8 @@ const PORT = 3000;
               if (fs.existsSync(chunkFilePath)) {
                 const buf = fs.readFileSync(chunkFilePath);
                 try {
-                  const pdfRes = await (pdfParse as any)(buf);
-                  if (pdfRes?.text) extractedText += "\n" + pdfRes.text;
+                  const pdfText = await extractPdfText(buf);
+                  if (pdfText) extractedText += "\n" + pdfText;
                 } catch {
                   const txt = buf.toString("utf-8");
                   if (txt && !txt.startsWith("%PDF")) extractedText += "\n" + txt;
@@ -2319,8 +2380,8 @@ const PORT = 3000;
               const b64 = (f.base64 || f.fileBase64 || f.data || "").replace(/^data:[^;]+;base64,/, "").trim();
               const buf = Buffer.from(b64, "base64");
               try {
-                const pdfRes = await (pdfParse as any)(buf);
-                if (pdfRes?.text) extractedText += "\n" + pdfRes.text;
+                const pdfText = await extractPdfText(buf);
+                if (pdfText) extractedText += "\n" + pdfText;
               } catch {
                 const txt = buf.toString("utf-8");
                 if (txt && !txt.startsWith("%PDF")) extractedText += "\n" + txt;
@@ -2745,8 +2806,8 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
               if (fs.existsSync(chunkFilePath)) {
                 const buf = fs.readFileSync(chunkFilePath);
                 try {
-                  const pdfRes = await (pdfParse as any)(buf);
-                  if (pdfRes?.text) extractedTextFromFiles += "\n" + pdfRes.text;
+                  const pdfText = await extractPdfText(buf);
+                  if (pdfText) extractedTextFromFiles += "\n" + pdfText;
                 } catch {
                   const txt = buf.toString("utf-8");
                   if (txt && !txt.startsWith("%PDF")) extractedTextFromFiles += "\n" + txt;
@@ -2756,8 +2817,8 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
               const b64 = (f.base64 || f.fileBase64 || f.data || "").replace(/^data:[^;]+;base64,/, "").trim();
               const buf = Buffer.from(b64, "base64");
               try {
-                const pdfRes = await (pdfParse as any)(buf);
-                if (pdfRes?.text) extractedTextFromFiles += "\n" + pdfRes.text;
+                const pdfText = await extractPdfText(buf);
+                if (pdfText) extractedTextFromFiles += "\n" + pdfText;
               } catch {
                 const txt = buf.toString("utf-8");
                 if (txt && !txt.startsWith("%PDF")) extractedTextFromFiles += "\n" + txt;
@@ -3592,9 +3653,35 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
   });
 
 
-  // Vite Integration and listen
+  // Uma rota /api desconhecida deve responder JSON, nunca o index.html do SPA:
+  // o cliente faz JSON.parse da resposta e um HTML aqui vira "Unexpected token '<'".
+  app.use("/api", (req, res) => {
+    res.status(404).json({ error: `Rota não encontrada: ${req.method} ${req.originalUrl}` });
+  });
+
+  // Tratador de erros do Express. Sem ele, qualquer exceção não capturada numa rota
+  // derruba a função e o usuário recebe a página de erro da hospedagem
+  // (FUNCTION_INVOCATION_FAILED) em vez de uma mensagem que diga o que houve.
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[Express] Erro não tratado:", err?.stack || err?.message || err);
+    if (res.headersSent) return;
+    res.status(500).json({ error: describeAiFailure(err) });
+  });
+
+  // Ambiente serverless (Vercel): o módulo só exporta o app, sem escutar porta e sem
+  // Vite. Servidor próprio (Cloud Run, VPS, npm start): registra o front e escuta.
+  const isServerless = Boolean(process.env.VERCEL);
+
+  function serveBuiltFrontend() {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
   async function initializeViteAndListen() {
-    if (process.env.NODE_ENV !== "production") {
+    if (process.env.NODE_ENV !== "production" && !isServerless) {
       const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true },
@@ -3602,20 +3689,25 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
       });
       app.use(vite.middlewares);
     } else {
-      const distPath = path.join(process.cwd(), "dist");
-      app.use(express.static(distPath));
-      app.get("*", (req, res) => {
-        res.sendFile(path.join(distPath, "index.html"));
-      });
+      serveBuiltFrontend();
     }
 
-    if (!process.env.VERCEL) {
+    if (!isServerless) {
       app.listen(PORT, "0.0.0.0", () => {
         console.log(`Server running on http://0.0.0.0:${PORT}`);
       });
     }
   }
 
-  initializeViteAndListen();
+  if (isServerless) {
+    // Na Vercel o roteamento estático é feito pelo vercel.json; aqui basta garantir
+    // que nada assíncrono rode na carga do módulo e possa rejeitar.
+    serveBuiltFrontend();
+  } else {
+    // Uma rejeição aqui não pode derrubar o processo antes das rotas existirem.
+    initializeViteAndListen().catch((err) => {
+      console.error("[Bootstrap] Falha ao inicializar o servidor:", err?.stack || err?.message || err);
+    });
+  }
 
   export default app;
