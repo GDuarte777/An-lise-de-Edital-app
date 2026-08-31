@@ -8,7 +8,7 @@ import {
   ChevronDown, Search, AlertTriangle, Maximize2, Minimize2, Square
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { addSyncedItem } from "../utils/googleSync";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -954,7 +954,7 @@ PARECER E ESTRATÉGIA:
         }
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         // Show server error message clearly to the user

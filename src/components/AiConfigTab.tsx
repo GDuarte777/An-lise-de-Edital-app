@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Cpu, Key, CheckCircle, RefreshCw, AlertTriangle, Sparkles, ExternalLink, ShieldCheck, Zap, Loader2, XCircle } from "lucide-react";
 import confetti from "canvas-confetti";
 import { saveUserConfigToSupabase } from "../utils/supabaseClient";
-import { apiFetch } from "../utils/aiClientHelper";
+import { apiFetch, readJsonResponse } from "../utils/aiClientHelper";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
@@ -161,7 +161,7 @@ export default function AiConfigTab() {
         }
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         setTestResult({ ok: false, message: data?.error || "Erro desconhecido." });

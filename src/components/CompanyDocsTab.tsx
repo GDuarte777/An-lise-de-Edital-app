@@ -12,7 +12,7 @@ import {
   FileUp, Loader2, GripVertical, SlidersHorizontal, Sparkles, Download
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentForServer, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -359,7 +359,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
         body: { name: title }
       });
       if (response.ok) {
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         if (data.description) {
           setFormData(prev => ({
             ...prev,
@@ -558,7 +558,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
             throw new Error("Erro de processamento no servidor.");
           }
 
-          const data = await response.json();
+          const data = await readJsonResponse(response);
           const result = data.result;
 
           if (result) {
@@ -683,7 +683,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
             }
           });
           if (!response.ok) throw new Error("Erro de processamento.");
-          const data = await response.json();
+          const data = await readJsonResponse(response);
           const result = data.result;
           if (result) {
             const expirationDate = result.expirationDate || "";
@@ -825,7 +825,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
           body: { name: formData.name }
         });
         if (response.ok) {
-          const data = await response.json();
+          const data = await readJsonResponse(response);
           if (data.description) {
             finalNotes = data.description;
           }
@@ -1051,7 +1051,7 @@ Retorne exclusivamente o JSON estruturado.
         }
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       const rawText = data.reply || "";
       
       // Extract json from markdown or raw text codeblock

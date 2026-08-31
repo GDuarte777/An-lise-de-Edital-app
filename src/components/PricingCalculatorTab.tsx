@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
-import { apiFetch, formatAiError } from "../utils/aiClientHelper";
+import { apiFetch, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import {
   fetchSimulacoesFromSupabase,
   saveSimulacaoToSupabase,
@@ -350,7 +350,7 @@ Estrutura JSON esperada:
         }
       });
 
-      const resData = await res.json();
+      const resData = await readJsonResponse(res);
       const rawReply = resData.reply || "";
       const parsed = parseAiJson(rawReply);
       if (parsed) {
@@ -413,7 +413,7 @@ Responda em formato JSON:
         }
       });
 
-      const resData = await res.json();
+      const resData = await readJsonResponse(res);
       const rawReply = resData.reply || "";
       const parsed = parseAiJson(rawReply);
       if (parsed) {
@@ -463,7 +463,7 @@ Retorne o JSON no seguinte formato:
         }
       });
 
-      const resData = await res.json();
+      const resData = await readJsonResponse(res);
       const rawReply = resData.reply || "";
       const parsed = parseAiJson(rawReply);
       if (parsed) {

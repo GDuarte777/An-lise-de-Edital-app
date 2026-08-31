@@ -12,7 +12,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { CompetitorAnalysis, CompetitorHistoryItem, EditalAnalysis } from "../types";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
@@ -267,7 +267,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
         throw new Error("Erro de comunicação com o servidor.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data.analysis) {
         const analysisResult: CompetitorAnalysis = data.analysis;
         

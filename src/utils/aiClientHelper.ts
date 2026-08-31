@@ -95,6 +95,41 @@ export function formatAiError(error: any): string {
   return original.length < 300 ? original : "Erro ao processar a solicitação. Tente novamente.";
 }
 
+/**
+ * Lê o corpo da resposta como JSON.
+ *
+ * Quando a hospedagem devolve a própria página de erro (HTML ou texto puro, como
+ * "A server error has occurred"), `response.json()` estoura com
+ * "Unexpected token 'A'... is not valid JSON" — uma mensagem que não diz nada sobre
+ * o que de fato aconteceu. Aqui o corpo é lido como texto primeiro, para o erro
+ * carregar o status HTTP e o início da resposta real.
+ */
+export async function readJsonResponse(response: Response): Promise<any> {
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    const snippet = text
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 160);
+    throw new Error(
+      `O servidor respondeu HTTP ${response.status} sem JSON — a rota /api falhou antes de chegar na IA.` +
+      (snippet ? ` Resposta do servidor: "${snippet}"` : "")
+    );
+  }
+}
+
+/** Igual à anterior, mas nunca lança — para ramos que só querem extrair a mensagem de erro. */
+export async function readJsonResponseSafe(response: Response): Promise<any> {
+  try {
+    return await readJsonResponse(response);
+  } catch (err: any) {
+    return { error: err?.message || `Erro HTTP ${response.status}.` };
+  }
+}
+
 // Get the current Supabase session JWT (used to authenticate server-side AI calls)
 export async function getSupabaseToken(): Promise<string> {
   try {
