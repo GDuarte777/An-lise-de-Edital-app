@@ -321,6 +321,9 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  // Número de controle PNCP da contratação, quando a análise vem do Radar.
+  // Permite ao servidor sobrepor os campos factuais com o dado oficial.
+  const [pncpNumeroControle, setPncpNumeroControle] = useState<string>("");
 
   // File size error popup modal state (>60MB)
   const [fileSizeErrorModal, setFileSizeErrorModal] = useState<{
@@ -856,11 +859,19 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
     const handleExternalText = () => {
       const extText = localStorage.getItem("aip_auto_analyze_text");
-      if (extText) {
-        setTextInput(extText);
-        setAttachedFiles([]);
+      // O Radar pode repassar o PDF oficial do edital e o número de controle
+      // PNCP. O arquivo vem por variável de janela porque não caberia no
+      // localStorage; o número de controle faz o servidor completar os campos
+      // factuais com o dado publicado pelo órgão.
+      const pendente = (window as any).__aipPendingEdital;
+
+      if (extText || pendente?.file) {
+        setTextInput(extText || "");
+        setAttachedFiles(pendente?.file ? [pendente.file] : []);
+        setPncpNumeroControle(pendente?.numeroControlePNCP || "");
         localStorage.removeItem("aip_auto_analyze_text");
-        
+        delete (window as any).__aipPendingEdital;
+
         // Trigger auto analysis after a tiny delay so the state update is processed
         setTimeout(() => {
           const btn = document.getElementById("trigger-analyze-btn");
@@ -1020,7 +1031,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         signal: abortCtrl.signal,
         body: {
           textInput: textInput,
-          attachments: preparedAttachments
+          attachments: preparedAttachments,
+          numeroControlePNCP: pncpNumeroControle || undefined
         }
       });
 

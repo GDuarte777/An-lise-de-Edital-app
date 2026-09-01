@@ -2099,326 +2099,461 @@ const PORT = 3000;
   });
 
   // In-memory cache for PNCP queries to prevent 429 rate limits
+/* ==========================================================================
+ * Cliente do PNCP (Portal Nacional de Contratações Públicas)
+ *
+ * Fonte oficial e estruturada dos dados de licitação. Tudo que vem daqui é o
+ * que o próprio órgão publicou — não precisa ser adivinhado por IA.
+ *
+ * Duas APIs públicas, sem autenticação:
+ *   consulta   https://pncp.gov.br/api/consulta/v1/...   (busca de contratações)
+ *   integração https://pncp.gov.br/api/pncp/v1/...       (detalhe, itens, arquivos)
+ * ========================================================================== */
+
+const PNCP_CONSULTA_BASE = "https://pncp.gov.br/api/consulta";
+const PNCP_INTEGRACAO_BASE = "https://pncp.gov.br/api/pncp";
+
+// O PNCP entrega no máximo 500 registros por página.
+const PNCP_MAX_PAGE_SIZE = 500;
+
+/**
+ * Tabela de domínio "Modalidade da Contratação" do PNCP.
+ *
+ * ⚠️ O código anterior tratava 5 como "Pregão Eletrônico". Está errado: 5 é
+ * Concorrência PRESENCIAL, e Pregão Eletrônico é 6. Como o Pregão Eletrônico é
+ * de longe a modalidade mais usada, a plataforma simplesmente nunca o consultava
+ * — daí a impressão de que "só aparecem algumas oportunidades".
+ */
+const PNCP_MODALIDADES: Record<string, string> = {
+  "1": "Leilão - Eletrônico",
+  "2": "Diálogo Competitivo",
+  "3": "Concurso",
+  "4": "Concorrência - Eletrônica",
+  "5": "Concorrência - Presencial",
+  "6": "Pregão - Eletrônico",
+  "7": "Pregão - Presencial",
+  "8": "Dispensa de Licitação",
+  "9": "Inexigibilidade",
+  "10": "Manifestação de Interesse",
+  "11": "Pré-qualificação",
+  "12": "Credenciamento",
+  "13": "Leilão - Presencial"
+};
+
+// Modalidades consultadas quando o usuário não escolhe nenhuma: as que
+// concentram a esmagadora maioria das oportunidades reais de disputa.
+const PNCP_MODALIDADES_PADRAO = ["6", "8", "4", "9"];
+
+const PNCP_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Accept": "application/json"
+};
+
+async function pncpFetchJson(url: string, timeoutMs = 20_000): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { headers: PNCP_HEADERS, signal: controller.signal });
+    if (response.status === 204) return { data: [], totalRegistros: 0, totalPaginas: 0, paginasRestantes: 0 };
+    if (!response.ok) {
+      console.warn(`[PNCP] HTTP ${response.status} em ${url}`);
+      return null;
+    }
+    return await response.json();
+  } catch (err: any) {
+    console.warn(`[PNCP] Falha em ${url}:`, err?.name === "AbortError" ? `timeout de ${timeoutMs}ms` : err?.message || err);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function pncpFormatDate(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
+
+/** Chave estável de uma contratação, para deduplicar entre modalidades e UFs. */
+function pncpKey(item: any): string {
+  return (
+    item?.numeroControlePNCP ||
+    `${item?.orgaoEntidade?.cnpj || item?.cnpjOrgao || ""}-${item?.anoCompra || ""}-${item?.sequencialCompra || ""}`
+  );
+}
+
+/**
+ * Decompõe o número de controle PNCP (ex.: "79151312000156-1-000501/2026")
+ * nas partes necessárias para as consultas de detalhe, itens e arquivos.
+ */
+function parseNumeroControlePNCP(numero: string): { cnpj: string; ano: string; sequencial: string } | null {
+  const m = String(numero || "").match(/(\d{14})-\d+-(\d+)\/(\d{4})/);
+  if (!m) return null;
+  return { cnpj: m[1], sequencial: String(parseInt(m[2], 10)), ano: m[3] };
+}
+
+/**
+ * Percorre TODAS as páginas de uma combinação (modalidade × UF).
+ *
+ * O código anterior pedia uma única página de 20 registros por modalidade e
+ * ainda parava cedo — por isso a tela nunca mostrava o conjunto real. Aqui a
+ * paginação vai até `paginasRestantes` zerar, respeitando um teto de páginas e
+ * um orçamento de tempo para a rota não travar.
+ */
+async function pncpFetchAllPages(params: {
+  endpoint: "publicacao" | "proposta";
+  modalidade: string;
+  uf?: string;
+  municipio?: string;
+  dataInicial?: string;
+  dataFinal: string;
+  maxPages: number;
+  deadline: number;
+}): Promise<{ items: any[]; totalRegistros: number; truncado: boolean }> {
+  const items: any[] = [];
+  let totalRegistros = 0;
+  let truncado = false;
+
+  for (let pagina = 1; pagina <= params.maxPages; pagina++) {
+    if (Date.now() > params.deadline) {
+      truncado = true;
+      break;
+    }
+
+    const query = new URLSearchParams({
+      dataFinal: params.dataFinal,
+      codigoModalidadeContratacao: params.modalidade,
+      pagina: String(pagina),
+      tamanhoPagina: String(PNCP_MAX_PAGE_SIZE)
+    });
+    // `dataInicial` só existe no endpoint de publicação; o de proposta filtra
+    // pelo prazo de recebimento ainda aberto.
+    if (params.endpoint === "publicacao" && params.dataInicial) query.set("dataInicial", params.dataInicial);
+    if (params.uf) query.set("uf", params.uf);
+    if (params.municipio) query.set("codigoMunicipioIbge", params.municipio);
+
+    const json = await pncpFetchJson(`${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query.toString()}`);
+    if (!json) break;
+
+    const pageItems = Array.isArray(json.data) ? json.data : [];
+    if (pageItems.length > 0) items.push(...pageItems);
+    if (pagina === 1) totalRegistros = Number(json.totalRegistros) || pageItems.length;
+
+    const restantes = Number(json.paginasRestantes);
+    const totalPaginas = Number(json.totalPaginas) || 1;
+    const acabou = Number.isFinite(restantes) ? restantes <= 0 : pagina >= totalPaginas;
+    if (acabou || pageItems.length === 0) break;
+
+    if (pagina === params.maxPages) truncado = true;
+  }
+
+  return { items, totalRegistros, truncado };
+}
+
+/** Normaliza uma contratação do PNCP para o formato consumido pela interface. */
+function pncpNormalizeItem(item: any): any {
+  const cnpj = item?.orgaoEntidade?.cnpj || item?.cnpjOrgao || "";
+  const ano = item?.anoCompra || new Date().getFullYear();
+  const sequencial = item?.sequencialCompra || 0;
+  const numeroControle = item?.numeroControlePNCP || (cnpj ? `${cnpj}-1-${String(sequencial).padStart(6, "0")}/${ano}` : "");
+  const modalidadeId = item?.modalidadeId != null ? String(item.modalidadeId) : "";
+
+  return {
+    ...item,
+    numeroControlePNCP: numeroControle,
+    idContratacaoPNCP: numeroControle,
+    cnpjOrgao: cnpj,
+    anoCompra: ano,
+    sequencialCompra: sequencial,
+    modalidadeNome: item?.modalidadeNome || PNCP_MODALIDADES[modalidadeId] || "",
+    uasg: item?.unidadeOrgao?.codigoUnidade
+      ? `UASG ${item.unidadeOrgao.codigoUnidade} - ${item.unidadeOrgao.nomeUnidade || item.unidadeOrgao.municipioNome || "Unidade Compradora"}`
+      : "",
+    linkPNCP: cnpj ? `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${sequencial}` : "",
+    // Marca a procedência: tudo que sai daqui veio da API oficial, nunca de
+    // dado gerado localmente.
+    fontePNCP: true
+  };
+}
+
+/** Lista os documentos (edital, anexos, termo de referência) de uma contratação. */
+async function pncpFetchArquivos(cnpj: string, ano: string | number, sequencial: string | number): Promise<any[]> {
+  const url = `${PNCP_INTEGRACAO_BASE}/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos`;
+  const json = await pncpFetchJson(url);
+  const lista = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+
+  return lista.map((doc: any, idx: number) => {
+    const sequencialDocumento = doc?.sequencialDocumento ?? idx + 1;
+    return {
+      sequencialDocumento,
+      titulo: doc?.titulo || doc?.nomeArquivo || `Documento ${sequencialDocumento}`,
+      tipo: doc?.tipoDocumentoNome || doc?.tipoDocumentoDescricao || "Documento",
+      dataPublicacao: doc?.dataPublicacaoPncp || doc?.dataPublicacao || "",
+      // `uri` é a URL absoluta que o próprio PNCP devolve para o arquivo.
+      uri: doc?.uri || doc?.url || `${PNCP_INTEGRACAO_BASE}/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos/${sequencialDocumento}`
+    };
+  });
+}
+
+/** Dados oficiais e estruturados de uma contratação, incluindo seus itens. */
+async function pncpFetchContratacao(cnpj: string, ano: string | number, sequencial: string | number): Promise<any | null> {
+  const base = `${PNCP_INTEGRACAO_BASE}/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`;
+  const [detalhe, itens] = await Promise.all([
+    pncpFetchJson(base),
+    pncpFetchJson(`${base}/itens`)
+  ]);
+  if (!detalhe) return null;
+  return { ...detalhe, itens: Array.isArray(itens) ? itens : Array.isArray(itens?.data) ? itens.data : [] };
+}
+
   const pncpCache = new Map<string, { timestamp: number; data: any }>();
 
   // API Route: Proxy PNCP Contratacoes
+  /**
+   * Radar de Oportunidades — busca de contratações no PNCP.
+   *
+   * Reescrita por três motivos, todos verificados contra a tabela de domínio
+   * oficial e o manual de consultas do PNCP:
+   *
+   * 1. A modalidade estava errada. O código pedia `codigoModalidadeContratacao=5`
+   *    acreditando ser "Pregão Eletrônico", mas 5 é Concorrência PRESENCIAL —
+   *    Pregão Eletrônico é 6. A modalidade mais comum do país nunca era
+   *    consultada, e é a maior explicação para "só aparecem algumas".
+   * 2. A paginação era fictícia. Buscava UMA página de 20 registros por
+   *    modalidade, parava cedo (`length >= pageSize * 2`) e, pior, sobrescrevia
+   *    o `totalRegistros` do PNCP pela quantidade que havia carregado — a
+   *    interface acreditava que o total do Brasil eram 20 linhas.
+   * 3. Havia um gerador de licitações FICTÍCIAS que entrava sempre que a API
+   *    falhava, com órgãos, objetos e valores inventados, rotulado na interface
+   *    como "Base PNCP Sincronizada em Tempo Real". Numa plataforma de
+   *    licitações isso é inaceitável: o usuário poderia montar proposta para um
+   *    certame que não existe. Foi removido. Sem dado oficial, a rota diz que
+   *    não conseguiu buscar.
+   */
   app.get("/api/pncp/contratacoes", async (req, res): Promise<any> => {
     try {
-      const { 
-        uf, 
-        ufs, 
-        modalidade, 
-        modalidades, 
-        pagina = "1", 
+      const {
+        uf,
+        ufs,
+        modalidade,
+        modalidades,
+        pagina = "1",
         tamanhoPagina = "20",
         q = "",
         municipio = "",
+        fonte = "proposta",
         dataInicial: reqDataInicial,
         dataFinal: reqDataFinal
       } = req.query;
 
-      // Normalize selected UFs list
-      let selectedUfs: string[] = [];
-      if (ufs && typeof ufs === "string" && ufs.trim()) {
-        selectedUfs = ufs.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
-      } else if (uf && typeof uf === "string" && uf.trim() && uf !== "TODOS") {
-        selectedUfs = [uf.trim().toUpperCase()];
-      }
+      const selectedUfs: string[] = (() => {
+        if (ufs && typeof ufs === "string" && ufs.trim()) {
+          return ufs.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+        }
+        if (uf && typeof uf === "string" && uf.trim() && uf !== "TODOS") return [uf.trim().toUpperCase()];
+        return [];
+      })();
 
-      // Normalize selected Modalidades
-      let selectedModalidades: string[] = [];
-      if (modalidades && typeof modalidades === "string" && modalidades.trim()) {
-        selectedModalidades = modalidades.split(",").map(s => s.trim()).filter(Boolean);
-      } else if (modalidade && typeof modalidade === "string" && modalidade.trim() && modalidade !== "TODAS") {
-        selectedModalidades = [modalidade.trim()];
-      }
+      const selectedModalidades: string[] = (() => {
+        if (modalidades && typeof modalidades === "string" && modalidades.trim()) {
+          return modalidades.split(",").map(s => s.trim()).filter(Boolean);
+        }
+        if (modalidade && typeof modalidade === "string" && modalidade.trim() && modalidade !== "TODAS") {
+          return [modalidade.trim()];
+        }
+        return [];
+      })();
 
-      const pageNum = parseInt(String(pagina), 10) || 1;
-      const pageSize = parseInt(String(tamanhoPagina), 10) || 20;
+      const pageNum = Math.max(1, parseInt(String(pagina), 10) || 1);
+      const pageSize = Math.min(200, Math.max(1, parseInt(String(tamanhoPagina), 10) || 20));
 
-      // Dates
-      const today = new Date();
-      const formatPNCPDate = (date: Date) => {
-        const yyyy = date.getFullYear();
-        const mm = String(date.getMonth() + 1).padStart(2, '0');
-        const dd = String(date.getDate()).padStart(2, '0');
-        return `${yyyy}${mm}${dd}`;
-      };
+      // "proposta" traz o que ainda aceita proposta — é o que um Radar de
+      // Oportunidades quer. "publicacao" traz tudo que foi publicado no período.
+      const endpoint: "publicacao" | "proposta" = fonte === "publicacao" ? "publicacao" : "proposta";
 
-      const dataFinal = reqDataFinal ? String(reqDataFinal).replace(/-/g, "") : formatPNCPDate(today);
+      const hoje = new Date();
       const daysBack = parseInt(String(req.query.periodDays || 90), 10) || 90;
-      const startDate = new Date();
-      startDate.setDate(today.getDate() - daysBack);
-      const dataInicial = reqDataInicial ? String(reqDataInicial).replace(/-/g, "") : formatPNCPDate(startDate);
+      const inicio = new Date();
+      inicio.setDate(hoje.getDate() - daysBack);
 
-      const cacheKey = `${selectedUfs.join("-")}_${selectedModalidades.join("-")}_${pageNum}_${pageSize}_${q}_${municipio}_${dataInicial}_${dataFinal}`;
+      const dataInicial = reqDataInicial ? String(reqDataInicial).replace(/-/g, "") : pncpFormatDate(inicio);
+      // No endpoint de proposta, dataFinal é o horizonte de encerramento que
+      // interessa — olhar para a frente, não para trás.
+      const horizonte = new Date();
+      horizonte.setDate(hoje.getDate() + 365);
+      const dataFinal = reqDataFinal
+        ? String(reqDataFinal).replace(/-/g, "")
+        : pncpFormatDate(endpoint === "proposta" ? horizonte : hoje);
+
+      const targetMods = selectedModalidades.length > 0 ? selectedModalidades : PNCP_MODALIDADES_PADRAO;
+      // Sem UF escolhida, uma única consulta sem filtro cobre o Brasil inteiro.
+      const targetUfs = selectedUfs.length > 0 ? selectedUfs : [""];
+
+      const cacheKey = `${endpoint}|${targetUfs.join(",")}|${targetMods.join(",")}|${municipio}|${dataInicial}|${dataFinal}`;
       const cached = pncpCache.get(cacheKey);
-      if (cached && (Date.now() - cached.timestamp < 180000)) { // 3 min cache
-        console.log(`[PNCP Proxy] Returning cached response for key: ${cacheKey}`);
-        return res.json(cached.data);
-      }
+      let agregado: { items: any[]; totalPNCP: number; truncado: boolean };
 
-      console.log(`[PNCP Proxy] Fetching from PNCP API. UFs: ${selectedUfs.join(",") || "ALL"}, Modalidades: ${selectedModalidades.join(",") || "ALL"}, Page: ${pageNum}`);
+      if (cached && Date.now() - cached.timestamp < 180_000) {
+        agregado = cached.data;
+      } else {
+        // Orçamento de tempo: a rota agrega muitas páginas, mas não pode
+        // estourar o limite da função serverless.
+        const deadline = Date.now() + 25_000;
+        const maxPagesPorCombo = 10; // até 5.000 registros por combinação
 
-      let fetchedItems: any[] = [];
-      let totalRegistros = 0;
-      let totalPaginas = 1;
-      let fetchedSuccessfully = false;
+        const combos: Array<{ modalidade: string; uf: string }> = [];
+        for (const m of targetMods) for (const u of targetUfs) combos.push({ modalidade: m, uf: u });
 
-      // Modalidades to query: if user picked specific ones, use them. If none picked, query top active modalities: 5 (Pregão), 8 (Dispensa), 4 (Concorrência), 9 (Inexigibilidade)
-      const targetMods = selectedModalidades.length > 0 ? selectedModalidades : ["5", "8", "4", "9"];
-      const targetUf = selectedUfs.length === 1 ? selectedUfs[0] : "";
+        const resultados = await Promise.all(
+          combos.map(c =>
+            pncpFetchAllPages({
+              endpoint,
+              modalidade: c.modalidade,
+              uf: c.uf || undefined,
+              municipio: String(municipio || "") || undefined,
+              dataInicial,
+              dataFinal,
+              maxPages: maxPagesPorCombo,
+              deadline
+            })
+          )
+        );
 
-      for (const modCode of targetMods) {
-        if (fetchedItems.length >= pageSize * 2) break; // enough items for page
+        const vistos = new Set<string>();
+        const items: any[] = [];
+        let totalPNCP = 0;
+        let truncado = false;
 
-        const targetUrl = `https://pncp.gov.br/pncp-consulta/v1/contratacoes/publicacao?dataInicial=${dataInicial}&dataFinal=${dataFinal}&codigoModalidadeContratacao=${modCode}${targetUf ? `&uf=${targetUf}` : ""}&pagina=${pageNum}&tamanhoPagina=${pageSize}`;
-
-        try {
-          const response = await fetch(targetUrl, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36",
-              "Accept": "application/json"
-            }
-          });
-
-          if (response.ok) {
-            const json = await response.json();
-            if (json && Array.isArray(json.data) && json.data.length > 0) {
-              fetchedItems.push(...json.data);
-              totalRegistros += json.totalRegistros || json.data.length;
-              fetchedSuccessfully = true;
-            }
-          } else {
-            console.log(`[PNCP Proxy] PNCP API status ${response.status} for modality ${modCode}`);
+        for (const r of resultados) {
+          totalPNCP += r.totalRegistros;
+          if (r.truncado) truncado = true;
+          for (const raw of r.items) {
+            const key = pncpKey(raw);
+            if (!key || vistos.has(key)) continue;
+            vistos.add(key);
+            items.push(pncpNormalizeItem(raw));
           }
-        } catch (err: any) {
-          console.log(`[PNCP Proxy] Error reaching PNCP API for modality ${modCode}:`, err.message);
         }
+
+        // Mais recentes primeiro.
+        items.sort((a, b) => String(b.dataPublicacaoPncp || "").localeCompare(String(a.dataPublicacaoPncp || "")));
+
+        agregado = { items, totalPNCP, truncado };
+        pncpCache.set(cacheKey, { timestamp: Date.now(), data: agregado });
       }
 
-      // Filter by selected UFs if multiple were specified
-      if (fetchedSuccessfully && fetchedItems.length > 0) {
-        if (selectedUfs.length > 1) {
-          fetchedItems = fetchedItems.filter(item => {
-            const itemUf = item.unidadeOrgao?.ufSigla || item.uf;
-            return itemUf && selectedUfs.includes(itemUf.toUpperCase());
-          });
-        }
-
-        // Deduplicate by numeroControlePNCP
-        const seen = new Set<string>();
-        fetchedItems = fetchedItems.filter(item => {
-          const key = item.numeroControlePNCP || `${item.cnpjOrgao}-${item.anoCompra}-${item.sequencialCompra}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-
-        // Add uasg and idContratacaoPNCP helper fields
-        fetchedItems = fetchedItems.map(item => {
-          const cnpj = item.cnpjOrgao || item.orgaoEntidade?.cnpj || "00000000000100";
-          const ano = item.anoCompra || 2026;
-          const seq = String(item.sequencialCompra || 1).padStart(6, '0');
-          const idPncp = item.numeroControlePNCP || `${cnpj}-1-${seq}/${ano}`;
-          const uasgCode = item.unidadeOrgao?.codigoUnidade || item.unidadeOrgao?.codigoUnidadeAdministrativa || item.unidadeOrgao?.codigoIbge || "925001";
-          
-          return {
-            ...item,
-            idContratacaoPNCP: idPncp,
-            uasg: `UASG ${uasgCode} - ${item.unidadeOrgao?.nomeUnidade || item.unidadeOrgao?.municipioNome || 'Unidade Compradora'}`,
-            linkPNCP: item.linkPNCP || `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`
-          };
-        });
-
-        totalRegistros = fetchedItems.length || totalRegistros;
-        totalPaginas = Math.ceil(totalRegistros / pageSize) || 1;
-
-        const resultObj = {
-          data: fetchedItems.slice(0, pageSize),
-          totalRegistros,
-          totalPaginas,
+      if (agregado.items.length === 0) {
+        return res.status(502).json({
+          error: "Não foi possível obter as contratações do PNCP no momento. O portal pode estar indisponível — tente novamente em alguns minutos.",
+          data: [],
+          totalRegistros: 0,
+          totalPaginas: 0,
           numeroPagina: pageNum,
-          source: "pncp_api_real"
-        };
-        pncpCache.set(cacheKey, { timestamp: Date.now(), data: resultObj });
-        return res.json(resultObj);
+          source: "pncp_indisponivel"
+        });
       }
 
-      // Multi-State Fallback Engine covering ALL 27 Brazilian States & ALL Modalities
-      console.log(`[PNCP Proxy] Using high-fidelity multi-state registry generator for ALL states & modalities.`);
-
-      const allUfsList = [
-        "BA", "SP", "RJ", "MG", "DF", "CE", "PE", "PR", "RS", "SC", 
-        "GO", "ES", "MA", "PA", "PB", "PI", "RN", "AL", "SE", "MT", 
-        "MS", "TO", "RO", "AC", "AM", "AP", "RR"
-      ];
-
-      const activeUfs = selectedUfs.length > 0 ? selectedUfs : allUfsList;
-
-      const cityMap: Record<string, string[]> = {
-        "BA": ["Salvador", "Feira de Santana", "Vitória da Conquista", "Camaçari", "Lauro de Freitas", "Itabuna", "Ilhéus", "Juazeiro", "Barreiras"],
-        "SP": ["São Paulo", "Campinas", "Guarulhos", "Mauá", "Santo André", "São José dos Campos", "Ribeirão Preto", "Sorocaba", "Santos", "Osasco"],
-        "RJ": ["Rio de Janeiro", "Niterói", "Duque de Caxias", "Nova Iguaçu", "Campos dos Goytacazes", "Petrópolis", "Volta Redonda"],
-        "MG": ["Belo Horizonte", "Uberlândia", "Contagem", "Juiz de Fora", "Betim", "Montes Claros", "Uberaba", "Governador Valadares"],
-        "DF": ["Brasília", "Taguatinga", "Ceilândia", "Águas Claras", "Gama", "Sobradinho"],
-        "CE": ["Fortaleza", "Caucaia", "Juazeiro do Norte", "Sobral", "Maracanaú"],
-        "PE": ["Recife", "Jaboatão dos Guararapes", "Olinda", "Caruaru", "Petrolina", "Paulista"],
-        "PR": ["Curitiba", "Londrina", "Maringá", "Ponta Grossa", "Cascavel", "São José dos Pinhais"],
-        "RS": ["Porto Alegre", "Caxias do Sul", "Canoas", "Pelotas", "Santa Maria", "Gravataí"],
-        "SC": ["Florianópolis", "Joinville", "Blumenau", "Chapecó", "Criciúma", "Itajaí"],
-        "GO": ["Goiânia", "Aparecida de Goiânia", "Anápolis", "Rio Verde", "Luziânia"],
-        "ES": ["Vitória", "Vila Velha", "Serra", "Cariacica", "Cachoeiro de Itapemirim"],
-        "MA": ["São Luís", "Imperatriz", "Timon", "Caxias", "Açailândia"],
-        "PA": ["Belém", "Ananindeua", "Santarém", "Marabá", "Parauapebas"],
-        "PB": ["João Pessoa", "Campina Grande", "Santa Rita", "Patos"],
-        "PI": ["Teresina", "Parnaíba", "Picos", "Floriano"],
-        "RN": ["Natal", "Mossoró", "Parnamirim", "Caicó"],
-        "AL": ["Maceió", "Arapiraca", "Rio Largo", "Palmeira dos Índios"],
-        "SE": ["Aracaju", "Nossa Senhora do Socorro", "Lagarto", "Itabaiana"],
-        "MT": ["Cuiabá", "Várzea Grande", "Rondonópolis", "Sinop", "Tangará da Serra"],
-        "MS": ["Campo Grande", "Dourados", "Três Lagoas", "Corumbá"],
-        "TO": ["Palmas", "Araguaína", "Gurupi", "Porto Nacional"],
-        "RO": ["Porto Velho", "Ji-Paraná", "Ariquemes", "Vilhena"],
-        "AC": ["Rio Branco", "Cruzeiro do Sul", "Sena Madureira"],
-        "AM": ["Manaus", "Parintins", "Itacoatiara", "Manacapuru"],
-        "AP": ["Macapá", "Santana", "Laranjal do Jari"],
-        "RR": ["Boa Vista", "Rorainópolis", "Caracaraí"]
-      };
-
-      const modalidadesTemplates = [
-        { id: 5, name: "Pregão Eletrônico" },
-        { id: 8, name: "Dispensa Eletrônica" },
-        { id: 4, name: "Concorrência Eletrônica" },
-        { id: 9, name: "Inexigibilidade de Licitação" },
-        { id: 1, name: "Leilão Eletrônico" }
-      ];
-
-      const templateObjects = [
-        { obj: "Aquisição de computadores portáteis corporativos e periféricos de última geração para as escolas públicas e unidades municipais de ensino.", val: 2450000.00, uasg: "925001" },
-        { obj: "Contratação de empresa especializada para prestação de serviços de suporte técnico, manutenção preventiva e corretiva de infraestrutura de TI.", val: 890000.00, uasg: "925002" },
-        { obj: "Aquisição de licenças de software de gerenciamento de dados de saúde, incluindo serviço de migração em nuvem, treinamento e suporte integral 24/7.", val: 1350000.00, uasg: "925003" },
-        { obj: "Serviços de consultoria e desenvolvimento de sistemas de inteligência artificial para otimização da gestão fiscal e arrecadação de tributos.", val: 450000.00, uasg: "925004" },
-        { obj: "Fornecimento de equipamentos hospitalares diversos (monitores multiparamétricos, desfibriladores e ventiladores pulmonares) para o pronto atendimento.", val: 3200000.00, uasg: "925005" },
-        { obj: "Aquisição de medicamentos essenciais da farmácia básica municipal para abastecimento continuado das unidades de saúde da família.", val: 1800000.00, uasg: "925006" },
-        { obj: "Contratação de empresa de engenharia para obras de reforma, adequação de acessibilidade e modernização do prédio da Prefeitura Municipal.", val: 4120000.00, uasg: "925007" },
-        { obj: "Fornecimento de gêneros alimentícios e insumos agrícolas destinados à merenda escolar da rede pública do município.", val: 680000.00, uasg: "925008" },
-        { obj: "Serviços continuados de limpeza urbana, varrição mecânica, coleta e destinação final de resíduos sólidos domiciliares.", val: 8900000.00, uasg: "925009" },
-        { obj: "Aquisição de veículos utilitários e vans adaptadas para transporte escolar de alunos da zona rural.", val: 1250000.00, uasg: "925010" },
-        { obj: "Contratação de serviço de vigilância patrimonial armada e desarmada com monitoramento eletrônico para os edifícios públicos.", val: 2150000.00, uasg: "925011" },
-        { obj: "Aquisição de mobiliário escolar (carteiras, mesas para professores e quadros brancos) para aparelhamento de salas de aula.", val: 540000.00, uasg: "925012" },
-        { obj: "Fornecimento de material de escritório, papelaria e suprimentos de impressão para atendimento das secretarias municipais.", val: 310000.00, uasg: "925013" },
-        { obj: "Contratação de serviços de engenharia civil para pavimentação asfáltica, recapeamento e sinalização viária urbana.", val: 5600000.00, uasg: "925014" },
-        { obj: "Aquisição de fardamento, uniformes escolares e equipamentos de proteção individual (EPIs) para servidores públicos.", val: 420000.00, uasg: "925015" }
-      ];
-
-      let generated: any[] = [];
-      let counter = 101;
-
-      for (const currentUf of activeUfs) {
-        const cities = cityMap[currentUf] || [currentUf + " Capital"];
-        for (let i = 0; i < templateObjects.length; i++) {
-          const tmpl = templateObjects[i];
-          const city = cities[i % cities.length];
-          const mod = modalidadesTemplates[i % modalidadesTemplates.length];
-          
-          const cnpjBase = Math.floor(10000000 + Math.random() * 89999999).toString();
-          const cnpj = `${cnpjBase}0001${Math.floor(10 + Math.random() * 89)}`;
-          const ano = 2026;
-          const seq = counter++;
-          const seqPadded = String(seq).padStart(6, '0');
-          const numControle = `${cnpj}-1-${seqPadded}/${ano}`;
-          const uasgNum = `${tmpl.uasg}`;
-
-          const pubDate = new Date();
-          pubDate.setDate(pubDate.getDate() - (i % 20));
-
-          const openDate = new Date();
-          openDate.setDate(openDate.getDate() + (5 + (i % 15)));
-
-          generated.push({
-            numeroControlePNCP: numControle,
-            idContratacaoPNCP: numControle,
-            cnpjOrgao: cnpj,
-            anoCompra: ano,
-            sequencialCompra: seq,
-            numeroCompra: String(i + 1),
-            processo: `${i + 1}/${ano}`,
-            orgaoEntidade: {
-              cnpj: cnpj,
-              razaoSocial: i % 2 === 0 ? `PREFEITURA MUNICIPAL DE ${city.toUpperCase()}` : `SECRETARIA DE ESTADO DE ${currentUf}`
-            },
-            unidadeOrgao: {
-              ufSigla: currentUf,
-              ufNome: currentUf,
-              municipioNome: city,
-              nomeUnidade: `Unidade de Licitações de ${city}`,
-              codigoUnidade: uasgNum
-            },
-            uasg: `UASG ${uasgNum} - Prefeitura de ${city}`,
-            objetoCompra: tmpl.obj,
-            valorTotalEstimado: tmpl.val,
-            dataPublicacaoPncp: pubDate.toISOString(),
-            dataAberturaProposta: openDate.toISOString(),
-            modalidadeId: mod.id,
-            modalidadeNome: mod.name,
-            situacaoCompraId: 1,
-            situacaoCompraNome: "Divulgada no PNCP",
-            linkPNCP: `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seqPadded}`
-          });
-        }
-      }
-
-      // Filter generated items based on user criteria
-      let filtered = generated;
-
-      if (q && typeof q === "string" && q.trim()) {
-        const kw = q.toLowerCase().trim();
-        filtered = filtered.filter(item => 
-          (item.objetoCompra || "").toLowerCase().includes(kw) ||
-          (item.orgaoEntidade?.razaoSocial || "").toLowerCase().includes(kw) ||
-          (item.numeroControlePNCP || "").toLowerCase().includes(kw)
+      // Filtro por palavra-chave sobre o conjunto agregado (a API do PNCP não
+      // oferece busca textual).
+      let filtrados = agregado.items;
+      const termo = String(q || "").trim().toLowerCase();
+      if (termo) {
+        filtrados = filtrados.filter(i =>
+          `${i.objetoCompra || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.unidadeOrgao?.nomeUnidade || ""} ${i.unidadeOrgao?.municipioNome || ""}`
+            .toLowerCase()
+            .includes(termo)
         );
       }
 
-      if (municipio && typeof municipio === "string" && municipio.trim()) {
-        const mun = municipio.toLowerCase().trim();
-        filtered = filtered.filter(item => 
-          (item.unidadeOrgao?.municipioNome || "").toLowerCase().includes(mun) ||
-          (item.orgaoEntidade?.razaoSocial || "").toLowerCase().includes(mun)
+      const municipioTermo = String(municipio || "").trim().toLowerCase();
+      if (municipioTermo && !/^\d+$/.test(municipioTermo)) {
+        filtrados = filtrados.filter(i =>
+          String(i.unidadeOrgao?.municipioNome || "").toLowerCase().includes(municipioTermo)
         );
       }
 
-      if (selectedModalidades.length > 0) {
-        filtered = filtered.filter(item => 
-          selectedModalidades.includes(String(item.modalidadeId)) ||
-          selectedModalidades.some(m => item.modalidadeNome.toLowerCase().includes(m.toLowerCase()))
-        );
-      }
+      const totalRegistros = filtrados.length;
+      const totalPaginas = Math.max(1, Math.ceil(totalRegistros / pageSize));
+      const inicioFatia = (pageNum - 1) * pageSize;
 
-      const totalRegs = filtered.length;
-      const totalPages = Math.max(1, Math.ceil(totalRegs / pageSize));
-      const startIdx = (pageNum - 1) * pageSize;
-      const paginatedData = filtered.slice(startIdx, startIdx + pageSize);
-
-      const resultObj = {
-        data: paginatedData,
-        totalRegistros: totalRegs,
-        totalPaginas: totalPages,
+      return res.json({
+        data: filtrados.slice(inicioFatia, inicioFatia + pageSize),
+        totalRegistros,
+        totalPaginas,
         numeroPagina: pageNum,
-        source: "pncp_local_registry"
-      };
-
-      pncpCache.set(cacheKey, { timestamp: Date.now(), data: resultObj });
-      return res.json(resultObj);
-
-    } catch (globalErr: any) {
-      console.error("[PNCP Proxy] Global Exception:", globalErr);
-      return res.status(500).json({ error: globalErr.message || "Erro ao consultar PNCP" });
+        // Quantos o PNCP diz existir no recorte, mesmo que nem todos tenham sido
+        // carregados — deixa explícito quando a busca foi limitada.
+        totalDisponivelPNCP: agregado.totalPNCP,
+        resultadoParcial: agregado.truncado,
+        fonte: endpoint,
+        source: "pncp_api_real"
+      });
+    } catch (error: any) {
+      console.error("[PNCP] Erro na busca de contratações:", error?.message || error);
+      return res.status(502).json({
+        error: `Falha ao consultar o PNCP: ${error?.message || "erro desconhecido"}`,
+        data: [],
+        totalRegistros: 0,
+        totalPaginas: 0,
+        source: "pncp_erro"
+      });
     }
   });
 
-  // API Route: Analyze Edital
+  /** Lista os documentos (edital, anexos) de uma contratação do PNCP. */
+  app.get("/api/pncp/arquivos", async (req, res): Promise<any> => {
+    try {
+      const { numeroControle, cnpj, ano, sequencial } = req.query;
+      let alvo = { cnpj: String(cnpj || ""), ano: String(ano || ""), sequencial: String(sequencial || "") };
+
+      if (numeroControle) {
+        const parsed = parseNumeroControlePNCP(String(numeroControle));
+        if (parsed) alvo = parsed;
+      }
+      if (!alvo.cnpj || !alvo.ano || !alvo.sequencial) {
+        return res.status(400).json({ error: "Informe numeroControle ou cnpj, ano e sequencial da contratação." });
+      }
+
+      const arquivos = await pncpFetchArquivos(alvo.cnpj, alvo.ano, alvo.sequencial);
+      return res.json({ arquivos, contratacao: alvo });
+    } catch (error: any) {
+      console.error("[PNCP] Erro ao listar arquivos:", error?.message || error);
+      return res.status(502).json({ error: `Não foi possível listar os arquivos no PNCP: ${error?.message || "erro desconhecido"}` });
+    }
+  });
+
+  /**
+   * Baixa um documento do PNCP através do servidor.
+   *
+   * O download precisa passar por aqui porque o navegador não consegue buscar o
+   * arquivo direto do domínio do PNCP (CORS), e porque o mesmo conteúdo é
+   * reaproveitado pela análise por IA.
+   */
+  app.get("/api/pncp/arquivo", async (req, res): Promise<any> => {
+    try {
+      const uri = String(req.query.uri || "");
+      if (!/^https:\/\/pncp\.gov\.br\//.test(uri)) {
+        // Só o domínio do PNCP: sem isso a rota viraria um proxy aberto.
+        return res.status(400).json({ error: "URI inválida: só são aceitos arquivos do domínio pncp.gov.br." });
+      }
+
+      const upstream = await fetch(uri, { headers: PNCP_HEADERS });
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `O PNCP respondeu ${upstream.status} ao baixar o arquivo.` });
+      }
+
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      const nome = String(req.query.nome || "edital.pdf").replace(/[^\w.\- ]/g, "_");
+      res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${nome}"`);
+      return res.send(buffer);
+    } catch (error: any) {
+      console.error("[PNCP] Erro ao baixar arquivo:", error?.message || error);
+      return res.status(502).json({ error: `Não foi possível baixar o arquivo do PNCP: ${error?.message || "erro desconhecido"}` });
+    }
+  });
+
   app.post("/api/analyze-edital", async (req, res): Promise<any> => {
     const tempFilesToDelete: string[] = [];
     const geminiFilesToDelete: string[] = [];
@@ -2867,6 +3002,87 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
         }
       }
 
+
+      /**
+       * Sobrepõe os campos FACTUAIS com o dado oficial do PNCP.
+       *
+       * Órgão, objeto, modalidade, valor estimado, datas e itens são publicados
+       * pelo próprio órgão e estão disponíveis de forma estruturada. Deixar a IA
+       * adivinhá-los a partir do PDF é trocar dado certo por dado provável. Aqui
+       * o julgamento continua com a IA (riscos, pegadinhas, parecer, estratégia)
+       * e os fatos passam a vir da fonte.
+       */
+      const numeroControleInformado =
+        String(req.body.numeroControlePNCP || "").trim() ||
+        String(parsedData.idContratacaoPNCP || "").trim();
+      const alvoPncp = numeroControleInformado ? parseNumeroControlePNCP(numeroControleInformado) : null;
+
+      if (alvoPncp) {
+        try {
+          const oficial = await pncpFetchContratacao(alvoPncp.cnpj, alvoPncp.ano, alvoPncp.sequencial);
+          if (oficial) {
+            if (!parsedData.identificacaoCertame) parsedData.identificacaoCertame = {};
+            const ident = parsedData.identificacaoCertame;
+            const camposOficiais: string[] = [];
+
+            const orgao = oficial.orgaoEntidade?.razaoSocial || oficial.orgaoEntidade?.nomeRazaoSocial;
+            if (orgao) { ident.orgaoComprador = orgao; camposOficiais.push("órgão comprador"); }
+
+            const modalidadeOficial = oficial.modalidadeNome || PNCP_MODALIDADES[String(oficial.modalidadeId)];
+            if (modalidadeOficial) { ident.modalidade = modalidadeOficial; camposOficiais.push("modalidade"); }
+
+            const numeroOficial = oficial.numeroCompra || oficial.processo;
+            if (numeroOficial) {
+              ident.identificacaoNumerica = `${modalidadeOficial || "Contratação"} nº ${numeroOficial}/${oficial.anoCompra || alvoPncp.ano}`;
+              camposOficiais.push("número do processo");
+            }
+
+            if (oficial.dataAberturaProposta) {
+              ident.dataHoraSessao = new Date(oficial.dataAberturaProposta).toLocaleString("pt-BR");
+              camposOficiais.push("data da sessão");
+            }
+
+            if (typeof oficial.valorTotalEstimado === "number" && oficial.valorTotalEstimado > 0) {
+              if (!parsedData.viabilidadeFinanceira) parsedData.viabilidadeFinanceira = {};
+              parsedData.viabilidadeFinanceira.valorEstimado =
+                `R$ ${oficial.valorTotalEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (valor oficial publicado no PNCP)`;
+              camposOficiais.push("valor estimado");
+            }
+
+            if (oficial.objetoCompra) {
+              parsedData.descricaoProduto = oficial.objetoCompra;
+              camposOficiais.push("objeto");
+            }
+
+            // Os itens oficiais substituem os inferidos: trazem número,
+            // descrição, quantidade, unidade e valor unitário conforme publicado.
+            if (Array.isArray(oficial.itens) && oficial.itens.length > 0) {
+              parsedData.itensEdital = oficial.itens.map((it: any, idx: number) => ({
+                numero: it.numeroItem ?? idx + 1,
+                descricao: it.descricao || it.materialOuServicoNome || "Item da contratação",
+                quantidade: Number(it.quantidade) || 0,
+                unidade: it.unidadeMedida || "Unidade",
+                valorEstimado:
+                  typeof it.valorUnitarioEstimado === "number"
+                    ? `R$ ${it.valorUnitarioEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    : "Não informado no PNCP"
+              }));
+              camposOficiais.push(`${parsedData.itensEdital.length} itens`);
+            }
+
+            parsedData.dadosOficiaisPNCP = {
+              numeroControlePNCP: numeroControleInformado,
+              camposSubstituidos: camposOficiais,
+              consultadoEm: new Date().toISOString()
+            };
+            console.log(`[PNCP] Análise enriquecida com dado oficial (${camposOficiais.join(", ")}).`);
+          }
+        } catch (err: any) {
+          // O enriquecimento é um bônus: se o PNCP não responder, a análise da
+          // IA segue valendo por si só.
+          console.warn("[PNCP] Não foi possível enriquecer a análise com dado oficial:", err?.message || err);
+        }
+      }
       return res.json({ analysis: parsedData });
     } catch (error: any) {
       console.error("[analyze-edital] Erro na análise do edital com a IA, aplicando fallback local:", error.message || error);
