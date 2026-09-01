@@ -1077,6 +1077,91 @@ export async function deleteDisputaFromSupabase(id: string): Promise<boolean> {
   }
 }
 
+// 6b. Tipos de Status de Disputas do Usuário (status_disputas_usuario)
+// Cada usuário tem sua própria lista de status (cor + rótulo), usada tanto
+// nos seletores de status quanto nas colunas do quadro Kanban.
+export async function fetchStatusDisputasFromSupabase(): Promise<any[]> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("status_disputas_usuario")) return [];
+  try {
+    const { data, error } = await client
+      .from("status_disputas_usuario")
+      .select("*")
+      .order("position", { ascending: true });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("status_disputas_usuario");
+      }
+      return [];
+    }
+
+    return (data || []).map((item: any) => ({
+      id: item.id,
+      label: item.label,
+      color: item.color || "#64748b",
+      position: Number(item.position) || 0
+    }));
+  } catch (err: any) {
+    if (isTableMissingError(err)) {
+      markTableMissing("status_disputas_usuario");
+    }
+    return [];
+  }
+}
+
+export async function saveStatusDisputaToSupabase(item: { id: string; label: string; color: string; position: number }): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  if (isTableMissing("status_disputas_usuario")) {
+    return { success: false, message: "Tabela status_disputas_usuario não existe no Supabase." };
+  }
+  try {
+    const user = await getActiveUser();
+    if (!user?.id) return { success: false, message: "Usuário não autenticado." };
+
+    const record = {
+      id: item.id,
+      user_id: user.id,
+      label: String(item.label || "").trim(),
+      color: String(item.color || "#64748b").trim(),
+      position: Number(item.position) || 0,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("status_disputas_usuario")
+      .upsert([record], { onConflict: "id" });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("status_disputas_usuario");
+      }
+      return { success: false, message: error.message };
+    }
+    return { success: true, message: "Status salvo com sucesso!" };
+  } catch (err: any) {
+    if (isTableMissingError(err)) {
+      markTableMissing("status_disputas_usuario");
+    }
+    return { success: false, message: err?.message || "Erro de conexão" };
+  }
+}
+
+export async function deleteStatusDisputaFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("status_disputas_usuario")) return false;
+  try {
+    const { error } = await client
+      .from("status_disputas_usuario")
+      .delete()
+      .eq("id", id);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 // 7. Simulações de Preços (simulacoes_precos)
 export async function fetchSimulacoesFromSupabase(): Promise<any[]> {
   const client = getSupabaseClient();
@@ -1316,6 +1401,16 @@ create table if not exists public.planilhas_disputas (
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- 2b. Tabela de Tipos de Status de Disputas do Usuário (Kanban)
+create table if not exists public.status_disputas_usuario (
+  id text primary key,
+  user_id text not null,
+  label text not null,
+  color text not null default '#64748b',
+  position numeric default 0,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 -- 3. Tabela de Editais Analisados
 create table if not exists public.editais_analisados (
   id text primary key,
@@ -1455,6 +1550,7 @@ create table if not exists public.lancebot_config (
 );
 
 -- 13. Habilitar RLS e Políticas Permissivas para Aplicação e Usuários
+alter table public.status_disputas_usuario enable row level security;
 alter table public.planilhas_disputas enable row level security;
 alter table public.editais_analisados enable row level security;
 alter table public.documentos_sincronizados enable row level security;
@@ -1473,6 +1569,11 @@ alter table public.lancebot_config enable row level security;
 -- publicável ler a tabela inteira — incluindo as chaves de API em
 -- configuracoes_usuario. O cast para text mantém a comparação válida tanto
 -- para colunas user_id uuid quanto text.
+drop policy if exists "Permitir tudo status_disputas_usuario" on public.status_disputas_usuario;
+drop policy if exists "Acesso proprio status_disputas_usuario" on public.status_disputas_usuario;
+create policy "Acesso proprio status_disputas_usuario" on public.status_disputas_usuario
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo planilhas_disputas" on public.planilhas_disputas;
 drop policy if exists "Acesso proprio planilhas_disputas" on public.planilhas_disputas;

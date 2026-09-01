@@ -1,19 +1,23 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { 
-  Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles, 
-  CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown, 
-  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database
+import {
+  Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
+  CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown,
+  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database,
+  Kanban, Palette, GripVertical, Pencil
 } from "lucide-react";
-import { DisputaRow, DisputaStatus, EditalAnalysis } from "../types";
+import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
-import { 
-  fetchDisputasFromSupabase, 
-  saveDisputaToSupabase, 
+import {
+  fetchDisputasFromSupabase,
+  saveDisputaToSupabase,
   deleteDisputaFromSupabase,
   subscribeToSupabaseTable,
   mapDisputaFromDb,
   generateUUID,
-  getSupabaseFullSchemaSQL
+  getSupabaseFullSchemaSQL,
+  fetchStatusDisputasFromSupabase,
+  saveStatusDisputaToSupabase,
+  deleteStatusDisputaFromSupabase
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 import { Button } from "./ui/button";
@@ -21,6 +25,8 @@ import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { Badge } from "./ui/badge";
 import { Card } from "./ui/card";
+import { Label } from "./ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 interface DisputasSheetTabProps {
   activeEdital?: EditalAnalysis | null;
@@ -113,11 +119,58 @@ function extractEditalFields(editalObj: EditalAnalysis, fileNameFallback?: strin
 // Initial empty array - only user/Supabase data exists
 const INITIAL_DISPUTAS: DisputaRow[] = [];
 
+// Status padrões, criados automaticamente na primeira vez que o usuário abre a planilha.
+// A partir daí são apenas registros normais do usuário: podem ser renomeados,
+// recoloridos ou excluídos livremente, como qualquer status criado por ele.
+const DEFAULT_STATUS_TYPES: Omit<DisputaStatusType, "id">[] = [
+  { label: "Agendada", color: "#64748b", position: 0 },
+  { label: "Em Disputa", color: "#f59e0b", position: 1 },
+  { label: "Vencida", color: "#22c55e", position: 2 },
+  { label: "Em Recurso", color: "#8b5cf6", position: 3 },
+  { label: "Homologada", color: "#10b981", position: 4 },
+  { label: "Perdida", color: "#ef4444", position: 5 },
+  { label: "Cancelada", color: "#71717a", position: 6 }
+];
+
+// Paleta de cores oferecida para o usuário escolher ao criar/editar um status.
+const STATUS_COLOR_PALETTE = [
+  "#ef4444", "#f97316", "#f59e0b", "#eab308", "#84cc16", "#22c55e", "#10b981",
+  "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1", "#8b5cf6", "#a855f7",
+  "#d946ef", "#ec4899", "#f43f5e", "#64748b"
+];
+
+// Escolhe texto claro ou escuro conforme a luminância da cor de fundo, para manter contraste legível.
+function getContrastTextColor(hex: string): string {
+  const clean = hex.replace("#", "");
+  if (clean.length !== 6) return "#ffffff";
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? "#0f172a" : "#ffffff";
+}
+
 export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps) {
-  // Mode Switcher: "spreadsheet" (Planilha Interativa Excel) vs "dashboard" (Painel Visual)
-  const [viewMode, setViewMode] = useState<"spreadsheet" | "dashboard">(() => {
-    return (localStorage.getItem("aip_disputas_view_mode") as "spreadsheet" | "dashboard") || "spreadsheet";
+  // Mode Switcher: "spreadsheet" (Planilha Interativa Excel), "dashboard" (Painel Visual) ou "kanban" (Quadro Kanban)
+  const [viewMode, setViewMode] = useState<"spreadsheet" | "dashboard" | "kanban">(() => {
+    return (localStorage.getItem("aip_disputas_view_mode") as "spreadsheet" | "dashboard" | "kanban") || "spreadsheet";
   });
+
+  // Tipos de status personalizados do usuário (rótulo + cor), usados nos seletores
+  // de status e como colunas do quadro Kanban.
+  const [statusTypes, setStatusTypes] = useState<DisputaStatusType[]>(() => {
+    const saved = localStorage.getItem("aip_disputas_status_types");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [];
+  });
+  const statusTypesSeededRef = useRef(false);
 
   // Initialize with empty array — Supabase is the source of truth
   // localStorage is used only as offline cache/fallback display until Supabase loads
@@ -292,6 +345,212 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     };
   }, [refreshFromSupabase]);
 
+  // Load the user's custom status types from Supabase. If they have none yet
+  // (first time using the feature), seed the defaults and persist them so
+  // this is a one-time migration per user.
+  useEffect(() => {
+    async function loadStatusTypes() {
+      try {
+        const dbTypes = await fetchStatusDisputasFromSupabase();
+        if (dbTypes.length > 0) {
+          setStatusTypes(dbTypes);
+          localStorage.setItem("aip_disputas_status_types", JSON.stringify(dbTypes));
+        } else if (!statusTypesSeededRef.current) {
+          statusTypesSeededRef.current = true;
+          const seeded: DisputaStatusType[] = DEFAULT_STATUS_TYPES.map(s => ({ ...s, id: generateUUID() }));
+          setStatusTypes(seeded);
+          localStorage.setItem("aip_disputas_status_types", JSON.stringify(seeded));
+          seeded.forEach(s => { saveStatusDisputaToSupabase(s).catch(() => {}); });
+        }
+      } catch (e) {
+        console.warn("Erro ao carregar tipos de status:", e);
+      }
+    }
+    loadStatusTypes();
+  }, []);
+
+  // Any status still referenced by a dispute but missing from statusTypes (e.g. data
+  // imported from elsewhere) gets an auto-generated grey column so nothing is hidden.
+  useEffect(() => {
+    if (statusTypes.length === 0) return;
+    const knownLabels = new Set(statusTypes.map(s => s.label));
+    const orphanLabels = Array.from(new Set(disputas.map(r => r.status).filter(s => s && !knownLabels.has(s))));
+    if (orphanLabels.length === 0) return;
+
+    const maxPosition = statusTypes.reduce((max, s) => Math.max(max, s.position), -1);
+    const orphanTypes: DisputaStatusType[] = orphanLabels.map((label, i) => ({
+      id: generateUUID(),
+      label,
+      color: "#71717a",
+      position: maxPosition + 1 + i
+    }));
+    setStatusTypes(prev => [...prev, ...orphanTypes]);
+    orphanTypes.forEach(s => { saveStatusDisputaToSupabase(s).catch(() => {}); });
+  }, [disputas, statusTypes]);
+
+  useEffect(() => {
+    localStorage.setItem("aip_disputas_status_types", JSON.stringify(statusTypes));
+  }, [statusTypes]);
+
+  // Cria um novo tipo de status (usado tanto pelo botão "Novo Status" quanto por "+ Nova Coluna" no Kanban)
+  const handleAddStatusType = (label: string, color: string) => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    if (statusTypes.some(s => s.label.toLowerCase() === trimmed.toLowerCase())) {
+      showToast("Já existe um status com esse nome.", "info");
+      return;
+    }
+    const maxPosition = statusTypes.reduce((max, s) => Math.max(max, s.position), -1);
+    const newType: DisputaStatusType = { id: generateUUID(), label: trimmed, color, position: maxPosition + 1 };
+    setStatusTypes(prev => [...prev, newType]);
+    saveStatusDisputaToSupabase(newType).catch(() => {});
+    showToast(`Status "${trimmed}" criado com sucesso.`);
+  };
+
+  // Renomeia e/ou recolore um status existente. Ao renomear, atualiza também
+  // todas as disputas que usam o rótulo antigo, para não perder a referência.
+  const handleUpdateStatusType = (id: string, updates: { label?: string; color?: string }) => {
+    const current = statusTypes.find(s => s.id === id);
+    if (!current) return;
+    const newLabel = updates.label?.trim();
+    const oldLabel = current.label;
+    const updated: DisputaStatusType = {
+      ...current,
+      label: newLabel || current.label,
+      color: updates.color || current.color
+    };
+
+    setStatusTypes(prev => prev.map(s => s.id === id ? updated : s));
+    saveStatusDisputaToSupabase(updated).catch(() => {});
+
+    if (newLabel && newLabel !== oldLabel) {
+      setDisputas(prev => prev.map(r => {
+        if (r.status === oldLabel) {
+          const renamed = { ...r, status: newLabel };
+          saveDisputaToSupabase(renamed).catch(() => {});
+          return renamed;
+        }
+        return r;
+      }));
+    }
+    showToast(`Status "${updated.label}" atualizado.`);
+  };
+
+  // Exclui um status, desde que nenhuma disputa esteja usando-o no momento.
+  const handleDeleteStatusType = (id: string) => {
+    const target = statusTypes.find(s => s.id === id);
+    if (!target) return;
+    const inUseCount = disputas.filter(r => r.status === target.label).length;
+    if (inUseCount > 0) {
+      showToast(`Mova as ${inUseCount} disputa(s) com status "${target.label}" para outro status antes de excluí-lo.`, "info");
+      return;
+    }
+    setStatusTypes(prev => prev.filter(s => s.id !== id));
+    deleteStatusDisputaFromSupabase(id).catch(() => {});
+    showToast(`Status "${target.label}" removido.`, "info");
+  };
+
+  // Reordena as colunas (drag-and-drop no Kanban) e persiste a nova posição de cada uma.
+  const handleReorderStatusTypes = (orderedIds: string[]) => {
+    setStatusTypes(prev => {
+      const byId = new Map(prev.map(s => [s.id, s]));
+      const reordered = orderedIds
+        .map((id, index) => {
+          const s = byId.get(id);
+          return s ? { ...s, position: index } : null;
+        })
+        .filter((s): s is DisputaStatusType => !!s);
+      reordered.forEach(s => { saveStatusDisputaToSupabase(s).catch(() => {}); });
+      return reordered;
+    });
+  };
+
+  // ─── Kanban board: drag-and-drop state & handlers (mesmo padrão nativo HTML5 usado no resto do app) ───
+  const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const [dragOverColumnLabel, setDragOverColumnLabel] = useState<string | null>(null);
+  const [draggingColumnId, setDraggingColumnId] = useState<string | null>(null);
+  const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null);
+
+  const [isAddColumnOpen, setIsAddColumnOpen] = useState(false);
+  const [newColumnLabel, setNewColumnLabel] = useState("");
+  const [newColumnColor, setNewColumnColor] = useState(STATUS_COLOR_PALETTE[0]);
+
+  const [editColumnLabel, setEditColumnLabel] = useState("");
+  const [editColumnColor, setEditColumnColor] = useState("");
+
+  const handleCardDragStart = (e: React.DragEvent, disputaId: string) => {
+    setDraggingCardId(disputaId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/x-disputa-id", disputaId);
+  };
+
+  const handleCardDragEnd = () => {
+    setDraggingCardId(null);
+    setDragOverColumnLabel(null);
+  };
+
+  const handleColumnBodyDragOver = (e: React.DragEvent, columnLabel: string) => {
+    e.preventDefault();
+    if (draggingCardId) setDragOverColumnLabel(columnLabel);
+  };
+
+  const handleColumnBodyDrop = (e: React.DragEvent, columnLabel: string) => {
+    e.preventDefault();
+    const disputaId = e.dataTransfer.getData("text/x-disputa-id") || draggingCardId;
+    setDraggingCardId(null);
+    setDragOverColumnLabel(null);
+    if (!disputaId) return;
+    const row = disputas.find(r => r.id === disputaId);
+    if (row && row.status !== columnLabel) {
+      handleStatusChange(disputaId, columnLabel);
+    }
+  };
+
+  const handleColumnHeaderDragStart = (e: React.DragEvent, columnId: string) => {
+    setDraggingColumnId(columnId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/x-column-id", columnId);
+  };
+
+  const handleColumnHeaderDragOver = (e: React.DragEvent, columnId: string) => {
+    e.preventDefault();
+    if (draggingColumnId && draggingColumnId !== columnId) setDragOverColumnId(columnId);
+  };
+
+  const handleColumnHeaderDrop = (e: React.DragEvent, targetColumnId: string) => {
+    e.preventDefault();
+    const sourceColumnId = e.dataTransfer.getData("text/x-column-id") || draggingColumnId;
+    setDraggingColumnId(null);
+    setDragOverColumnId(null);
+    if (!sourceColumnId || sourceColumnId === targetColumnId) return;
+
+    const ordered = [...statusTypes].sort((a, b) => a.position - b.position).map(s => s.id);
+    const sourceIndex = ordered.indexOf(sourceColumnId);
+    const targetIndex = ordered.indexOf(targetColumnId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+    ordered.splice(sourceIndex, 1);
+    ordered.splice(targetIndex, 0, sourceColumnId);
+    handleReorderStatusTypes(ordered);
+  };
+
+  const handleConfirmAddColumn = () => {
+    handleAddStatusType(newColumnLabel, newColumnColor);
+    setNewColumnLabel("");
+    setNewColumnColor(STATUS_COLOR_PALETTE[0]);
+    setIsAddColumnOpen(false);
+  };
+
+  const handleOpenColumnEditor = (statusType: DisputaStatusType) => {
+    setEditColumnLabel(statusType.label);
+    setEditColumnColor(statusType.color);
+  };
+
+  const handleConfirmEditColumn = (id: string) => {
+    handleUpdateStatusType(id, { label: editColumnLabel, color: editColumnColor });
+  };
+
+  const sortedStatusTypes = [...statusTypes].sort((a, b) => a.position - b.position);
+
   // History Editais list for auto-fill feature
   const [historyOptions, setHistoryOptions] = useState<AnalyzedEditalOption[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string>("");
@@ -399,7 +658,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   };
 
   // Open Add Modal
-  const handleOpenAddModal = () => {
+  const handleOpenAddModal = (defaultStatus?: string) => {
     setEditingRow(null);
     setSelectedHistoryId("");
     const now = new Date();
@@ -416,7 +675,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       nossoValorAlvo: 0,
       valorMinimoPiso: 0,
       dataHoraDisputa: formattedDate,
-      status: "Agendada",
+      status: defaultStatus || statusTypes[0]?.label || "Agendada",
       observacoes: "",
       linkPNCP: ""
     });
@@ -866,26 +1125,19 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     }
   };
 
-  // Badge status style
-  const getStatusBadge = (status: DisputaStatus) => {
-    switch (status) {
-      case "Agendada":
-        return "bg-secondary text-secondary-foreground border-transparent";
-      case "Em Disputa":
-        return "bg-warning text-warning-foreground border-transparent animate-pulse";
-      case "Vencida":
-        return "bg-success text-success-foreground border-transparent font-bold";
-      case "Homologada":
-        return "bg-success text-success-foreground border-transparent font-bold";
-      case "Em Recurso":
-        return "bg-accent text-accent-foreground border-transparent";
-      case "Perdida":
-        return "bg-destructive text-white border-transparent";
-      case "Cancelada":
-        return "bg-muted text-muted-foreground border-transparent";
-      default:
-        return "bg-muted text-muted-foreground border-transparent";
-    }
+  // Encontra a cor cadastrada para um status (ou cinza neutro, se ainda não sincronizada)
+  const getStatusColor = (status: DisputaStatus): string => {
+    return statusTypes.find(s => s.label === status)?.color || "#71717a";
+  };
+
+  // Estilo inline do badge/select de status, calculado a partir da cor cadastrada pelo usuário
+  const getStatusBadgeStyle = (status: DisputaStatus): React.CSSProperties => {
+    const color = getStatusColor(status);
+    return {
+      backgroundColor: color,
+      color: getContrastTextColor(color),
+      borderColor: color
+    };
   };
 
   // Find active cell object value for formula bar
@@ -906,7 +1158,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
               <h2 className="text-xl font-bold text-foreground tracking-tight flex items-center gap-2">
                 <span>Planilha de Disputas & Pregões</span>
                 <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/10 font-mono text-[10px] font-semibold uppercase text-primary">
-                  {viewMode === "spreadsheet" ? "Modo Planilha Interativa" : "Modo Painel / Dashboard"}
+                  {viewMode === "spreadsheet" ? "Modo Planilha Interativa" : viewMode === "kanban" ? "Modo Kanban" : "Modo Painel / Dashboard"}
                 </Badge>
               </h2>
               <p className="text-muted-foreground text-xs mt-0.5">
@@ -940,6 +1192,16 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             >
               <LayoutGrid className="w-3.5 h-3.5" />
               <span>Modelo Painel</span>
+            </Button>
+            <Button
+              type="button"
+              variant={viewMode === "kanban" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("kanban")}
+              className="h-auto gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold shadow-none"
+            >
+              <Kanban className="w-3.5 h-3.5" />
+              <span>Modo Kanban</span>
             </Button>
           </div>
 
@@ -1019,7 +1281,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           <Button
             type="button"
             size="sm"
-            onClick={handleOpenAddModal}
+            onClick={() => handleOpenAddModal()}
             className="font-bold"
           >
             <Plus className="w-4 h-4" />
@@ -1073,12 +1335,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                 className="bg-transparent text-xs text-foreground font-semibold focus:outline-none cursor-pointer"
               >
                 <option value="Todas">Todas</option>
-                <option value="Agendada">Agendadas</option>
-                <option value="Em Disputa">Em Disputa</option>
-                <option value="Vencida">Vencidas</option>
-                <option value="Em Recurso">Em Recurso</option>
-                <option value="Homologada">Homologadas</option>
-                <option value="Perdida">Perdidas</option>
+                {statusTypes.map(s => (
+                  <option key={s.id} value={s.label}>{s.label}</option>
+                ))}
               </select>
             </div>
 
@@ -1371,14 +1630,12 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                         <select
                           value={row.status}
                           onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
-                          className={`text-[10.5px] font-bold px-2 py-0.5 rounded-lg border focus:outline-none cursor-pointer ${getStatusBadge(row.status)}`}
+                          style={getStatusBadgeStyle(row.status)}
+                          className="text-[10.5px] font-bold px-2 py-0.5 rounded-lg border focus:outline-none cursor-pointer"
                         >
-                          <option value="Agendada">Agendada</option>
-                          <option value="Em Disputa">Em Disputa</option>
-                          <option value="Vencida">Vencida</option>
-                          <option value="Em Recurso">Em Recurso</option>
-                          <option value="Homologada">Homologada</option>
-                          <option value="Perdida">Perdida</option>
+                          {statusTypes.map(s => (
+                            <option key={s.id} value={s.label}>{s.label}</option>
+                          ))}
                         </select>
                       </td>
 
@@ -1424,6 +1681,205 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
               </div>
             </div>
 
+          </div>
+        ) : viewMode === "kanban" ? (
+          /* MODE 3: QUADRO KANBAN — colunas = status do usuário, arraste os cartões entre elas */
+          <div className="flex items-start gap-4 overflow-x-auto pb-4">
+            {sortedStatusTypes.map(col => {
+              const cards = filteredDisputas.filter(r => r.status === col.label);
+              const isCardDropTarget = dragOverColumnLabel === col.label && draggingCardId;
+              const isColumnDropTarget = dragOverColumnId === col.id && draggingColumnId;
+
+              return (
+                <div
+                  key={col.id}
+                  draggable
+                  onDragStart={(e) => handleColumnHeaderDragStart(e, col.id)}
+                  onDragOver={(e) => handleColumnHeaderDragOver(e, col.id)}
+                  onDrop={(e) => handleColumnHeaderDrop(e, col.id)}
+                  className={`flex w-72 shrink-0 flex-col rounded-xl border bg-muted/30 transition ${
+                    isColumnDropTarget ? "border-primary ring-2 ring-primary/40" : "border-border"
+                  } ${draggingColumnId === col.id ? "opacity-50" : ""}`}
+                >
+                  {/* Column header */}
+                  <div className="flex items-center justify-between gap-2 border-b border-border p-3 cursor-grab active:cursor-grabbing">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(col); }}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            title="Editar nome e cor do status"
+                            className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded-full border border-black/10"
+                            style={{ backgroundColor: col.color }}
+                          />
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-64 space-y-3">
+                          <div className="space-y-1.5">
+                            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Nome do Status</Label>
+                            <Input
+                              value={editColumnLabel}
+                              onChange={(e) => setEditColumnLabel(e.target.value)}
+                              onBlur={() => handleConfirmEditColumn(col.id)}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
+                            <div className="grid grid-cols-9 gap-1.5">
+                              {STATUS_COLOR_PALETTE.map(c => (
+                                <button
+                                  key={c}
+                                  type="button"
+                                  title={c}
+                                  onClick={() => { setEditColumnColor(c); handleUpdateStatusType(col.id, { color: c }); }}
+                                  className={`h-5 w-5 rounded-full border-2 cursor-pointer transition ${editColumnColor === c ? "border-foreground" : "border-transparent"}`}
+                                  style={{ backgroundColor: c }}
+                                />
+                              ))}
+                            </div>
+                            <input
+                              type="color"
+                              value={editColumnColor}
+                              onChange={(e) => { setEditColumnColor(e.target.value); handleUpdateStatusType(col.id, { color: e.target.value }); }}
+                              className="h-8 w-full cursor-pointer rounded-md border border-input bg-transparent"
+                              title="Escolher cor personalizada"
+                            />
+                          </div>
+                          <div className="flex justify-end border-t border-border pt-2.5">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteStatusType(col.id)}
+                              className="gap-1.5 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Excluir Status
+                            </Button>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                      <span className="truncate text-xs font-bold text-foreground">{col.label}</span>
+                    </div>
+                    <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">{cards.length}</Badge>
+                  </div>
+
+                  {/* Droppable card list */}
+                  <div
+                    onDragOver={(e) => handleColumnBodyDragOver(e, col.label)}
+                    onDrop={(e) => handleColumnBodyDrop(e, col.label)}
+                    className={`min-h-[100px] flex-1 space-y-2 overflow-y-auto p-2.5 scrollbar-thin ${
+                      isCardDropTarget ? "bg-primary/5" : ""
+                    }`}
+                    style={{ maxHeight: "60vh" }}
+                  >
+                    {cards.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-border py-6 text-center text-[11px] text-muted-foreground">
+                        Nenhuma disputa
+                      </div>
+                    ) : (
+                      cards.map(row => (
+                        <div
+                          key={row.id}
+                          draggable
+                          onDragStart={(e) => handleCardDragStart(e, row.id)}
+                          onDragEnd={handleCardDragEnd}
+                          onClick={() => handleOpenEditModal(row)}
+                          className={`cursor-grab space-y-1.5 rounded-lg border border-border bg-card p-2.5 shadow-2xs transition hover:border-primary/40 active:cursor-grabbing ${
+                            draggingCardId === row.id ? "opacity-40" : ""
+                          }`}
+                        >
+                          <p className="line-clamp-2 text-[11px] font-semibold leading-snug text-foreground" title={row.orgao}>
+                            {row.orgao || "Órgão não informado"}
+                          </p>
+                          <p className="truncate font-mono text-[10px] text-primary font-bold">{row.numeroLicitacao}</p>
+                          {row.produtoItem && (
+                            <p className="line-clamp-2 text-[10.5px] text-muted-foreground">{row.produtoItem}</p>
+                          )}
+                          <div className="flex items-center justify-between gap-2 pt-1">
+                            <span className="font-mono text-[10px] font-bold text-foreground">
+                              {row.nossoValorAlvo > 0
+                                ? row.nossoValorAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+                                : "—"}
+                            </span>
+                            {row.dataHoraDisputa && (
+                              <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+                                <Calendar className="h-3 w-3" />
+                                {row.dataHoraDisputa}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Add card directly into this column */}
+                  <button
+                    type="button"
+                    onClick={() => handleOpenAddModal(col.label)}
+                    className="flex cursor-pointer items-center justify-center gap-1.5 border-t border-border p-2.5 text-[11px] font-semibold text-muted-foreground transition hover:bg-muted/60 hover:text-primary"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Nova Disputa
+                  </button>
+                </div>
+              );
+            })}
+
+            {/* Add new column */}
+            <div className="w-72 shrink-0">
+              <Popover open={isAddColumnOpen} onOpenChange={setIsAddColumnOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-border p-3 text-xs font-bold text-muted-foreground transition hover:border-primary/40 hover:bg-muted/40 hover:text-primary"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Nova Coluna
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-64 space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">Nome do Novo Status</Label>
+                    <Input
+                      autoFocus
+                      value={newColumnLabel}
+                      onChange={(e) => setNewColumnLabel(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleConfirmAddColumn(); }}
+                      placeholder="Ex: Aguardando Recurso"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
+                    <div className="grid grid-cols-9 gap-1.5">
+                      {STATUS_COLOR_PALETTE.map(c => (
+                        <button
+                          key={c}
+                          type="button"
+                          title={c}
+                          onClick={() => setNewColumnColor(c)}
+                          className={`h-5 w-5 rounded-full border-2 cursor-pointer transition ${newColumnColor === c ? "border-foreground" : "border-transparent"}`}
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                    <input
+                      type="color"
+                      value={newColumnColor}
+                      onChange={(e) => setNewColumnColor(e.target.value)}
+                      className="h-8 w-full cursor-pointer rounded-md border border-input bg-transparent"
+                    />
+                  </div>
+                  <Button type="button" size="sm" onClick={handleConfirmAddColumn} disabled={!newColumnLabel.trim()} className="w-full">
+                    <Check className="h-3.5 w-3.5" />
+                    Criar Coluna
+                  </Button>
+                </PopoverContent>
+              </Popover>
+            </div>
           </div>
         ) : (
           /* MODE 2: MODELO PAINEL / DASHBOARD VISUAL */
@@ -1477,14 +1933,12 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           <select
                             value={row.status}
                             onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
-                            className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border focus:outline-none cursor-pointer transition ${getStatusBadge(row.status)}`}
+                            style={getStatusBadgeStyle(row.status)}
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-lg border focus:outline-none cursor-pointer transition"
                           >
-                            <option value="Agendada">Agendada</option>
-                            <option value="Em Disputa">Em Disputa</option>
-                            <option value="Vencida">Vencida</option>
-                            <option value="Em Recurso">Em Recurso</option>
-                            <option value="Homologada">Homologada</option>
-                            <option value="Perdida">Perdida</option>
+                            {statusTypes.map(s => (
+                              <option key={s.id} value={s.label}>{s.label}</option>
+                            ))}
                           </select>
                         </td>
 
@@ -1802,13 +2256,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       onChange={(e) => setFormData({ ...formData, status: e.target.value as DisputaStatus })}
                       className="w-full bg-card border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:border-primary"
                     >
-                      <option value="Agendada">Agendada</option>
-                      <option value="Em Disputa">Em Disputa</option>
-                      <option value="Vencida">Vencida</option>
-                      <option value="Em Recurso">Em Recurso</option>
-                      <option value="Homologada">Homologada</option>
-                      <option value="Perdida">Perdida</option>
-                      <option value="Cancelada">Cancelada</option>
+                      {statusTypes.map(s => (
+                        <option key={s.id} value={s.label}>{s.label}</option>
+                      ))}
                     </select>
                   </div>
 

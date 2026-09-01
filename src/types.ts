@@ -139,7 +139,17 @@ export interface CompetitorHistoryItem {
   analysis: CompetitorAnalysis;
 }
 
-export type DisputaStatus = "Agendada" | "Em Disputa" | "Vencida" | "Perdida" | "Em Recurso" | "Homologada" | "Cancelada";
+// Status livre: além dos padrões (Agendada, Em Disputa, Vencida, Perdida, Em Recurso,
+// Homologada, Cancelada), cada usuário pode criar seus próprios tipos de status —
+// ver DisputaStatusType abaixo.
+export type DisputaStatus = string;
+
+export interface DisputaStatusType {
+  id: string;
+  label: string;
+  color: string; // hex color, ex: "#f97316"
+  position: number;
+}
 
 export interface DisputaRow {
   id: string;
