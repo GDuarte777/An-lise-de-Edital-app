@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
-  CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown,
+  CheckCircle, Calendar, FileSpreadsheet, ArrowUpDown,
   Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database,
-  Kanban, Palette, GripVertical, Pencil, MoreHorizontal, Target
+  Kanban, Palette, GripVertical, Pencil, MoreHorizontal
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
@@ -155,9 +155,8 @@ const STATUS_COLOR_PALETTE = [
   "#d946ef", "#ec4899", "#f43f5e", "#64748b"
 ];
 
-const VIEW_MODES: { id: "spreadsheet" | "dashboard" | "kanban"; label: string; icon: typeof FileSpreadsheet }[] = [
-  { id: "spreadsheet", label: "Planilha", icon: FileSpreadsheet },
-  { id: "dashboard", label: "Painel", icon: LayoutGrid },
+const VIEW_MODES: { id: "spreadsheet" | "kanban"; label: string; icon: typeof FileSpreadsheet }[] = [
+  { id: "spreadsheet", label: "Painel", icon: LayoutGrid },
   { id: "kanban", label: "Kanban", icon: Kanban }
 ];
 
@@ -186,44 +185,6 @@ function SheetField({ label, className = "", children }: { label: string; classN
     <div className={`min-w-0 ${className}`}>
       <span className="mb-0.5 block text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground">{label}</span>
       {children}
-    </div>
-  );
-}
-
-// Campo monetário: prefixo "R$" fixo e milhares separados quando fora de foco,
-// para o valor ficar legível sem atrapalhar a digitação.
-function MoneyInput({
-  value,
-  onChange,
-  className = ""
-}: {
-  value: number;
-  onChange: (value: number) => void;
-  className?: string;
-}) {
-  const [editing, setEditing] = useState(false);
-  const display = editing
-    ? String(value ?? 0)
-    : (value || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  return (
-    <div className="flex items-center gap-1 rounded border border-transparent px-1.5 py-1 transition focus-within:border-primary focus-within:bg-background hover:border-input">
-      <span className="shrink-0 text-[10px] font-semibold text-muted-foreground">R$</span>
-      <input
-        type="text"
-        inputMode="decimal"
-        value={display}
-        onFocus={() => setEditing(true)}
-        onBlur={() => setEditing(false)}
-        onChange={(e) => {
-          const raw = e.target.value.replace(/[^\d.,-]/g, "").replace(",", ".");
-          onChange(Number(raw) || 0);
-        }}
-        className={cn(
-          "w-full min-w-0 border-0 bg-transparent p-0 font-mono text-xs text-foreground focus:outline-none",
-          className
-        )}
-      />
     </div>
   );
 }
@@ -309,9 +270,10 @@ function getContrastTextColor(hex: string): string {
 }
 
 export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps) {
-  // Mode Switcher: "spreadsheet" (Planilha Interativa Excel), "dashboard" (Painel Visual) ou "kanban" (Quadro Kanban)
-  const [viewMode, setViewMode] = useState<"spreadsheet" | "dashboard" | "kanban">(() => {
-    return (localStorage.getItem("aip_disputas_view_mode") as "spreadsheet" | "dashboard" | "kanban") || "spreadsheet";
+  // Mode Switcher: "spreadsheet" (Painel — cartões somente leitura, edição via ícone lápis) ou "kanban" (Quadro Kanban)
+  const [viewMode, setViewMode] = useState<"spreadsheet" | "kanban">(() => {
+    const stored = localStorage.getItem("aip_disputas_view_mode");
+    return stored === "kanban" ? "kanban" : "spreadsheet";
   });
 
   // Tipos de status personalizados do usuário (rótulo + cor), usados nos seletores
@@ -1030,47 +992,6 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     setIsModalOpen(false);
   };
 
-  // Add blank row directly in Spreadsheet mode
-  const handleAddBlankRow = () => {
-    const newRow: DisputaRow = {
-      id: generateUUID(),
-      orgao: "Novo Órgão Comprador",
-      uasgUndCompradora: "000000",
-      numeroLicitacao: "PE " + Math.floor(Math.random() * 800 + 100) + "/2026",
-      portal: "Compras.gov.br",
-      produtoItem: "Novo Item de Disputa",
-      quantidade: 1,
-      unidadeMedida: "Unidade",
-      valorEstimadoItem: 100000.00,
-      nossoValorAlvo: 90000.00,
-      valorMinimoPiso: 80000.00,
-      dataHoraDisputa: new Date().toLocaleDateString("pt-BR") + " 10:00",
-      status: "Agendada",
-      observacoes: "",
-      linkPNCP: ""
-    };
-    setDisputas(prev => [...prev, newRow]);
-    saveDisputaToSupabase(newRow).then(res => {
-      if (res.success) {
-        showToast("Nova linha salva no Supabase!");
-      } else {
-        showToast("Nova linha inserida na planilha local.");
-      }
-    }).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
-  };
-
-  // Inline Cell Edit handler for Spreadsheet mode
-  const handleCellChange = (id: string, field: keyof DisputaRow, value: any) => {
-    setDisputas(prev => prev.map(r => {
-      if (r.id === id) {
-        const updated = { ...r, [field]: value };
-        saveDisputaToSupabase(updated).catch(e => console.warn("Erro ao salvar célula no Supabase:", e));
-        return updated;
-      }
-      return r;
-    }));
-  };
-
   // Delete Row Trigger (opens in-app confirmation modal, no window.confirm)
   const handleDeleteRow = (id: string) => {
     const row = disputas.find(r => r.id === id);
@@ -1291,23 +1212,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     return 0;
   });
 
-  // KPI calculations
-  const totalMapeado = disputas.length;
+  // Totais exibidos no rodapé do Painel
   const valorTotalEstimado = disputas.reduce((sum, r) => sum + r.valorEstimadoItem, 0);
   const valorNossoAlvo = disputas.reduce((sum, r) => sum + r.nossoValorAlvo, 0);
-  const disputasVencidas = disputas.filter(r => r.status === "Vencida" || r.status === "Homologada");
-  const valorTotalVencido = disputasVencidas.reduce((sum, r) => sum + r.nossoValorAlvo, 0);
-  const winRate = totalMapeado > 0 ? Math.round((disputasVencidas.length / totalMapeado) * 100) : 0;
-
-  // Toggle sort
-  const handleSort = (field: keyof DisputaRow) => {
-    if (sortField === field) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortField(field);
-      setSortAsc(true);
-    }
-  };
 
   // Encontra a cor cadastrada para um status (ou cinza neutro, se ainda não sincronizada)
   const getStatusColor = (status: DisputaStatus): string => {
@@ -1337,11 +1244,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           <div className="min-w-0">
             <h2 className="text-lg font-bold tracking-tight sm:text-xl">Planilha de Disputas &amp; Pregões</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {viewMode === "spreadsheet"
-                ? "Edite cada disputa direto na grade, como em uma planilha."
-                : viewMode === "kanban"
+              {viewMode === "kanban"
                 ? "Arraste as disputas entre as colunas para mudar o status."
-                : "Visão geral com indicadores e um cartão para cada disputa."}
+                : "Consulte cada disputa e clique no lápis para editar."}
             </p>
           </div>
         </div>
@@ -1472,6 +1377,28 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             </select>
           </div>
 
+          <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
+            <ArrowUpDown className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <select
+              value={sortField}
+              onChange={(e) => setSortField(e.target.value as keyof DisputaRow)}
+              className="min-w-0 cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              title="Ordenar por"
+            >
+              {SORT_FIELDS.map(f => (
+                <option key={f.key} value={f.key}>{f.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setSortAsc(!sortAsc)}
+              title={sortAsc ? "Ordem crescente" : "Ordem decrescente"}
+              className="shrink-0 cursor-pointer text-[10px] font-bold text-muted-foreground hover:text-foreground"
+            >
+              {sortAsc ? "A→Z" : "Z→A"}
+            </button>
+          </div>
+
           <span className="text-[11px] text-muted-foreground">
             {filteredDisputas.length} de {disputas.length}
           </span>
@@ -1490,202 +1417,156 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
         </div>
       </Card>
 
-      {/* ─────────── MODO 1: PLANILHA (grade editável responsiva) ─────────── */}
+      {/* ─────────── MODO 1: PAINEL (cartões somente leitura — edição pelo ícone lápis) ─────────── */}
       {viewMode === "spreadsheet" ? (
         <div className="space-y-2.5">
 
           {filteredDisputas.length === 0 ? (
             <Card className="flex flex-col items-center gap-2 p-10 text-center">
-              <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
+              <LayoutGrid className="h-8 w-8 text-muted-foreground" />
               <p className="text-sm font-semibold text-muted-foreground">Nenhuma disputa encontrada</p>
-              <Button type="button" size="sm" onClick={handleAddBlankRow}>
+              <Button type="button" size="sm" onClick={() => handleOpenAddModal()}>
                 <Plus className="h-3.5 w-3.5" />
-                Adicionar primeira linha
+                Cadastrar disputa
               </Button>
             </Card>
           ) : (
             filteredDisputas.map((row, index) => (
               <Card key={row.id} className="gap-0 p-3 transition hover:border-primary/30">
 
-                {/* Linha principal: posição, órgão, status e exclusão.
+                {/* Linha principal: posição, órgão, status e ações.
                     Em telas estreitas o nome do órgão ocupa a linha inteira. */}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                     {index + 1}
                   </span>
-                  <input
-                    type="text"
-                    value={row.orgao}
-                    onChange={(e) => handleCellChange(row.id, "orgao", e.target.value)}
-                    placeholder="Órgão comprador"
-                    className={cn(CELL_INPUT, "order-3 w-full text-sm font-semibold sm:order-none sm:w-auto sm:min-w-0 sm:flex-1")}
-                  />
-                  <select
-                    value={row.status}
-                    onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
+                  <p
+                    className="order-3 w-full min-w-0 truncate text-sm font-semibold sm:order-none sm:w-auto sm:flex-1"
+                    title={row.orgao}
+                  >
+                    {row.orgao || "Órgão não informado"}
+                  </p>
+                  <span
                     style={getStatusBadgeStyle(row.status)}
-                    className="ml-auto cursor-pointer rounded-lg border px-2 py-1 text-[11px] font-bold focus:outline-none sm:ml-0"
+                    className="ml-auto rounded-lg border px-2 py-1 text-[11px] font-bold sm:ml-0"
                   >
-                    {sortedStatusTypes.map(s => (
-                      <option key={s.id} value={s.label}>{s.label}</option>
-                    ))}
-                  </select>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleDeleteRow(row.id)}
-                    className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    title="Excluir esta disputa"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                    {row.status}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleOpenEditModal(row)}
+                      className="h-7 w-7 text-muted-foreground hover:text-primary"
+                      title="Editar disputa"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleDeleteRow(row.id)}
+                      className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      title="Excluir esta disputa"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
 
                 {/* Produto / objeto */}
                 <div className="mt-2 sm:pl-7">
                   <SheetField label="Produto / Objeto">
-                    <textarea
-                      rows={2}
-                      value={row.produtoItem}
-                      onChange={(e) => handleCellChange(row.id, "produtoItem", e.target.value)}
-                      placeholder="Descrição do item disputado"
-                      className={cn(CELL_INPUT, "resize-none text-xs leading-snug")}
-                    />
+                    <p className="min-h-[2.4em] text-xs leading-snug text-foreground">
+                      {row.produtoItem || "Objeto não informado"}
+                    </p>
                   </SheetField>
                 </div>
 
                 {/* Demais campos, em grade que se reorganiza conforme a largura */}
                 <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 pl-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
                   <SheetField label="Nº Licitação">
-                    <input
-                      type="text"
-                      value={row.numeroLicitacao}
-                      onChange={(e) => handleCellChange(row.id, "numeroLicitacao", e.target.value)}
-                      className={cn(CELL_INPUT, "font-mono text-xs font-bold text-primary")}
-                    />
+                    <p className="truncate px-1.5 py-1 font-mono text-xs font-bold text-primary">
+                      {row.numeroLicitacao || "—"}
+                    </p>
                   </SheetField>
 
                   <SheetField label="UASG / Cód.">
-                    <input
-                      type="text"
-                      value={row.uasgUndCompradora}
-                      onChange={(e) => handleCellChange(row.id, "uasgUndCompradora", e.target.value)}
-                      className={cn(CELL_INPUT, "font-mono text-xs text-muted-foreground")}
-                    />
+                    <p className="truncate px-1.5 py-1 font-mono text-xs text-muted-foreground">
+                      {row.uasgUndCompradora || "—"}
+                    </p>
                   </SheetField>
 
                   <SheetField label="Portal">
-                    <select
-                      value={row.portal}
-                      onChange={(e) => handleCellChange(row.id, "portal", e.target.value)}
-                      className={cn(CELL_INPUT, "cursor-pointer text-xs")}
-                    >
-                      {PORTAL_OPTIONS.map(p => (
-                        <option key={p} value={p}>{p}</option>
-                      ))}
-                    </select>
+                    <p className="truncate px-1.5 py-1 text-xs">{row.portal || "—"}</p>
                   </SheetField>
 
                   <SheetField label="Data / Hora">
-                    <input
-                      type="text"
-                      value={row.dataHoraDisputa}
-                      onChange={(e) => handleCellChange(row.id, "dataHoraDisputa", e.target.value)}
-                      className={cn(CELL_INPUT, "font-mono text-xs")}
-                    />
+                    <p className="truncate px-1.5 py-1 font-mono text-xs">{row.dataHoraDisputa || "—"}</p>
                   </SheetField>
 
                   <SheetField label="Qtd / Unidade">
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        value={row.quantidade}
-                        onChange={(e) => handleCellChange(row.id, "quantidade", Number(e.target.value))}
-                        className={cn(CELL_INPUT, "w-16 shrink-0 text-center font-mono text-xs")}
-                      />
-                      <input
-                        type="text"
-                        value={row.unidadeMedida}
-                        onChange={(e) => handleCellChange(row.id, "unidadeMedida", e.target.value)}
-                        className={cn(CELL_INPUT, "min-w-0 flex-1 text-xs")}
-                      />
-                    </div>
+                    <p className="truncate px-1.5 py-1 font-mono text-xs">
+                      {row.quantidade} {row.unidadeMedida || "un."}
+                    </p>
                   </SheetField>
 
                   <SheetField label="Link PNCP">
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="url"
-                        value={row.linkPNCP || ""}
-                        onChange={(e) => handleCellChange(row.id, "linkPNCP", e.target.value)}
-                        placeholder="https://pncp.gov.br/..."
-                        className={cn(CELL_INPUT, "min-w-0 flex-1 text-xs")}
-                      />
-                      {row.linkPNCP && (
-                        <a
-                          href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Abrir edital no PNCP"
-                          className="shrink-0 rounded p-1 text-primary hover:bg-primary/10"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
-                    </div>
+                    {row.linkPNCP ? (
+                      <a
+                        href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Abrir edital no PNCP"
+                        className="flex items-center gap-1 truncate px-1.5 py-1 text-xs text-primary hover:underline"
+                      >
+                        <span className="truncate">{row.linkPNCP}</span>
+                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                      </a>
+                    ) : (
+                      <p className="truncate px-1.5 py-1 text-xs text-muted-foreground">—</p>
+                    )}
                   </SheetField>
 
                   <SheetField label="Valor Estimado">
-                    <MoneyInput
-                      value={row.valorEstimadoItem}
-                      onChange={(v) => handleCellChange(row.id, "valorEstimadoItem", v)}
-                    />
+                    <p className="truncate px-1.5 py-1 font-mono text-xs">{formatBRL(row.valorEstimadoItem)}</p>
                   </SheetField>
 
                   <SheetField label="Nosso Alvo">
-                    <MoneyInput
-                      value={row.nossoValorAlvo}
-                      onChange={(v) => handleCellChange(row.id, "nossoValorAlvo", v)}
-                      className="font-bold text-primary"
-                    />
+                    <p className="truncate px-1.5 py-1 font-mono text-xs font-bold text-primary">
+                      {formatBRL(row.nossoValorAlvo)}
+                    </p>
                   </SheetField>
 
                   <SheetField label="Preço Piso">
-                    <MoneyInput
-                      value={row.valorMinimoPiso}
-                      onChange={(v) => handleCellChange(row.id, "valorMinimoPiso", v)}
-                      className="text-muted-foreground"
-                    />
+                    <p className="truncate px-1.5 py-1 font-mono text-xs text-muted-foreground">
+                      {formatBRL(row.valorMinimoPiso)}
+                    </p>
                   </SheetField>
                 </div>
               </Card>
             ))
           )}
 
-          {/* Rodapé com totais da planilha */}
+          {/* Rodapé com totais */}
           {filteredDisputas.length > 0 && (
-            <Card className="flex flex-col gap-2 p-3 text-xs sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono">
-                <span className="text-muted-foreground">
-                  Estimado: <strong className="text-foreground">{formatBRL(valorTotalEstimado)}</strong>
-                </span>
-                <span className="text-muted-foreground">
-                  Nosso alvo: <strong className="text-primary">{formatBRL(valorNossoAlvo)}</strong>
-                </span>
-                <span className="text-muted-foreground">
-                  Linhas: <strong className="text-foreground">{filteredDisputas.length}</strong>
-                </span>
-              </div>
-              <Button type="button" size="sm" variant="outline" onClick={handleAddBlankRow} className="shrink-0">
-                <Plus className="h-3.5 w-3.5" />
-                Nova linha em branco
-              </Button>
+            <Card className="flex flex-wrap items-center gap-x-4 gap-y-1 p-3 text-xs font-mono">
+              <span className="text-muted-foreground">
+                Estimado: <strong className="text-foreground">{formatBRL(valorTotalEstimado)}</strong>
+              </span>
+              <span className="text-muted-foreground">
+                Nosso alvo: <strong className="text-primary">{formatBRL(valorNossoAlvo)}</strong>
+              </span>
+              <span className="text-muted-foreground">
+                Linhas: <strong className="text-foreground">{filteredDisputas.length}</strong>
+              </span>
             </Card>
           )}
         </div>
 
-      ) : viewMode === "kanban" ? (
+      ) : (
 
         /* ─────────── MODO 2: KANBAN (colunas = status, sem rolagem lateral) ─────────── */
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
@@ -1701,26 +1582,35 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                 onDragStart={(e) => handleColumnHeaderDragStart(e, col.id)}
                 onDragOver={(e) => handleColumnHeaderDragOver(e, col.id)}
                 onDrop={(e) => handleColumnHeaderDrop(e, col.id)}
-                className={`flex min-w-0 flex-col rounded-xl border bg-muted/30 transition ${
+                className={`flex min-w-0 flex-col overflow-hidden rounded-xl border bg-muted/30 transition ${
                   isColumnDropTarget ? "border-primary ring-2 ring-primary/40" : "border-border"
                 } ${draggingColumnId === col.id ? "opacity-50" : ""}`}
               >
-                {/* Cabeçalho da coluna */}
-                <div className="flex cursor-grab items-center justify-between gap-1.5 border-b border-border p-2.5 active:cursor-grabbing">
+                {/* Cabeçalho da coluna — usa a cor cadastrada do status como fundo */}
+                <div
+                  className="flex cursor-grab items-center justify-between gap-1.5 rounded-t-xl p-2 sm:p-2.5 active:cursor-grabbing"
+                  style={{ backgroundColor: col.color, color: getContrastTextColor(col.color) }}
+                >
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: col.color }} />
-                    <span className="truncate text-xs font-bold" title={col.label}>{col.label}</span>
+                    <GripVertical className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                    <span className="truncate text-xs font-bold sm:text-sm" title={col.label}>{col.label}</span>
                   </div>
                   <div className="flex shrink-0 items-center gap-0.5">
-                    <Badge variant="secondary" className="font-mono text-[10px]">{cards.length}</Badge>
+                    <Badge
+                      variant="secondary"
+                      className="border-0 bg-black/15 font-mono text-[10px]"
+                      style={{ color: getContrastTextColor(col.color) }}
+                    >
+                      {cards.length}
+                    </Badge>
                     <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(col); }}>
                       <PopoverTrigger asChild>
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                          className="h-6 w-6 opacity-80 hover:bg-black/15 hover:opacity-100"
+                          style={{ color: getContrastTextColor(col.color) }}
                           title="Editar nome e cor deste status"
                         >
                           <Pencil className="h-3 w-3" />
@@ -1874,165 +1764,6 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           </Popover>
         </div>
 
-      ) : (
-
-        /* ─────────── MODO 3: PAINEL (indicadores + cartões) ─────────── */
-        <div className="space-y-4">
-
-          {/* Indicadores */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Card className="gap-1 p-3.5">
-              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                <Landmark className="h-3.5 w-3.5" /> Disputas mapeadas
-              </span>
-              <strong className="text-xl font-bold">{totalMapeado}</strong>
-            </Card>
-            <Card className="gap-1 p-3.5">
-              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                <DollarSign className="h-3.5 w-3.5" /> Valor estimado
-              </span>
-              <strong className="font-mono text-lg font-bold">{formatBRL(valorTotalEstimado)}</strong>
-            </Card>
-            <Card className="gap-1 p-3.5">
-              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                <Target className="h-3.5 w-3.5" /> Nosso alvo total
-              </span>
-              <strong className="font-mono text-lg font-bold text-primary">{formatBRL(valorNossoAlvo)}</strong>
-            </Card>
-            <Card className="gap-1 p-3.5">
-              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                <CheckCircle className="h-3.5 w-3.5" /> Taxa de vitória
-              </span>
-              <strong className="text-xl font-bold text-success">{winRate}%</strong>
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {disputasVencidas.length} ganha(s) · {formatBRL(valorTotalVencido)}
-              </span>
-            </Card>
-          </div>
-
-          {/* Ordenação */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Ordenar por</span>
-            <div className="flex items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
-              <select
-                value={sortField}
-                onChange={(e) => setSortField(e.target.value as keyof DisputaRow)}
-                className="cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
-              >
-                {SORT_FIELDS.map(f => (
-                  <option key={f.key} value={f.key}>{f.label}</option>
-                ))}
-              </select>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setSortAsc(!sortAsc)}
-              title={sortAsc ? "Ordem crescente" : "Ordem decrescente"}
-            >
-              <ArrowUpDown className="h-3.5 w-3.5" />
-              {sortAsc ? "Crescente" : "Decrescente"}
-            </Button>
-          </div>
-
-          {/* Cartões das disputas */}
-          {filteredDisputas.length === 0 ? (
-            <Card className="flex flex-col items-center gap-2 p-10 text-center">
-              <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm font-semibold text-muted-foreground">Nenhuma disputa encontrada</p>
-              <Button type="button" size="sm" onClick={() => handleOpenAddModal()}>
-                <Plus className="h-3.5 w-3.5" />
-                Cadastrar disputa
-              </Button>
-            </Card>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {filteredDisputas.map(row => (
-                <Card key={row.id} className="gap-2.5 p-3.5 transition hover:border-primary/30">
-
-                  <div className="flex items-start justify-between gap-2">
-                    <select
-                      value={row.status}
-                      onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
-                      style={getStatusBadgeStyle(row.status)}
-                      className="min-w-0 cursor-pointer rounded-lg border px-2 py-1 text-[11px] font-bold focus:outline-none"
-                    >
-                      {sortedStatusTypes.map(s => (
-                        <option key={s.id} value={s.label}>{s.label}</option>
-                      ))}
-                    </select>
-                    <span className="shrink-0 font-mono text-[11px] font-bold text-primary">{row.numeroLicitacao}</span>
-                  </div>
-
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold" title={row.orgao}>{row.orgao || "Órgão não informado"}</p>
-                    <p className="truncate font-mono text-[10px] text-muted-foreground">
-                      UASG {row.uasgUndCompradora || "—"} · {row.portal}
-                    </p>
-                  </div>
-
-                  <p className="line-clamp-2 text-xs text-muted-foreground">{row.produtoItem || "Objeto não informado"}</p>
-
-                  <div className="grid grid-cols-3 gap-2 rounded-lg bg-muted/50 p-2 text-center">
-                    <div className="min-w-0">
-                      <span className="block text-[9.5px] font-bold uppercase text-muted-foreground">Estimado</span>
-                      <span className="block truncate font-mono text-[11px]">{formatBRL(row.valorEstimadoItem)}</span>
-                    </div>
-                    <div className="min-w-0">
-                      <span className="block text-[9.5px] font-bold uppercase text-muted-foreground">Alvo</span>
-                      <span className="block truncate font-mono text-[11px] font-bold text-primary">{formatBRL(row.nossoValorAlvo)}</span>
-                    </div>
-                    <div className="min-w-0">
-                      <span className="block text-[9.5px] font-bold uppercase text-muted-foreground">Piso</span>
-                      <span className="block truncate font-mono text-[11px]">{formatBRL(row.valorMinimoPiso)}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 border-t border-border pt-2.5">
-                    <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <Calendar className="h-3.5 w-3.5 shrink-0 text-primary" />
-                      <span className="truncate font-mono">{row.dataHoraDisputa || "Sem data"}</span>
-                    </span>
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      {row.linkPNCP && (
-                        <a
-                          href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Abrir edital no PNCP"
-                          className="rounded p-1.5 text-primary hover:bg-primary/10"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleOpenEditModal(row)}
-                        className="h-7 w-7 text-muted-foreground hover:text-primary"
-                        title="Editar disputa"
-                      >
-                        <Edit2 className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDeleteRow(row.id)}
-                        className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                        title="Excluir disputa"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </div>
       )}
 
       {/* ─────────── Gerenciador de Status (disponível em todos os modos) ─────────── */}
