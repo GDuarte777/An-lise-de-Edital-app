@@ -178,6 +178,62 @@ const CELL_INPUT =
 const formatBRL = (value: number) =>
   (value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+// Campo "Data / Hora da disputa" é texto livre (aceita formatos vindos de import
+// e digitação manual), então o calendário inteligente tenta os dois formatos
+// usados pelo próprio app: ISO "AAAA-MM-DD HH:MM" e BR "DD/MM/AAAA HH:MM".
+function parseDisputaDate(value: string): Date | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+
+  let m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+  if (m) {
+    const [, y, mo, d, h, mi] = m;
+    const date = new Date(Number(y), Number(mo) - 1, Number(d), h ? Number(h) : 0, mi ? Number(mi) : 0);
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  m = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:[, ]+(\d{2}):(\d{2}))?/);
+  if (m) {
+    const [, d, mo, y, h, mi] = m;
+    const date = new Date(Number(y), Number(mo) - 1, Number(d), h ? Number(h) : 0, mi ? Number(mi) : 0);
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  return null;
+}
+
+// "Hoje" (mesmo dia) ou "Amanhã" (dia seguinte) — comparação por dia de calendário,
+// não por 24h corridas, para não trocar de "Hoje" para "Amanhã" no meio da noite.
+function getDisputaDateTag(value: string): { label: string; tone: "today" | "tomorrow" } | null {
+  const date = parseDisputaDate(value);
+  if (!date) return null;
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfTarget = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayDiff = Math.round((startOfTarget.getTime() - startOfToday.getTime()) / 86400000);
+  if (dayDiff === 0) return { label: "Hoje", tone: "today" };
+  if (dayDiff === 1) return { label: "Amanhã", tone: "tomorrow" };
+  return null;
+}
+
+// Badge chamativo do calendário inteligente: vermelho para hoje (mais urgente),
+// âmbar para amanhã.
+function DisputaDateTag({ value, className = "" }: { value: string; className?: string }) {
+  const tag = getDisputaDateTag(value);
+  if (!tag) return null;
+  return (
+    <Badge
+      className={cn(
+        "border-0 font-bold",
+        tag.tone === "today" ? "bg-destructive text-destructive-foreground" : "bg-warning text-warning-foreground",
+        className
+      )}
+    >
+      {tag.label}
+    </Badge>
+  );
+}
+
 // Campo rotulado da grade editável — o rótulo mantém o dado compreensível
 // mesmo quando a grade se empilha em telas estreitas.
 function SheetField({ label, className = "", children }: { label: string; className?: string; children: React.ReactNode }) {
@@ -628,23 +684,29 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const [editColumnColor, setEditColumnColor] = useState("");
 
   const handleCardDragStart = (e: React.DragEvent, disputaId: string) => {
+    e.stopPropagation();
     setDraggingCardId(disputaId);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/x-disputa-id", disputaId);
   };
 
-  const handleCardDragEnd = () => {
+  const handleCardDragEnd = (e: React.DragEvent) => {
+    e.stopPropagation();
     setDraggingCardId(null);
     setDragOverColumnLabel(null);
   };
 
   const handleColumnBodyDragOver = (e: React.DragEvent, columnLabel: string) => {
+    if (!draggingCardId) return;
     e.preventDefault();
-    if (draggingCardId) setDragOverColumnLabel(columnLabel);
+    e.stopPropagation();
+    setDragOverColumnLabel(columnLabel);
   };
 
   const handleColumnBodyDrop = (e: React.DragEvent, columnLabel: string) => {
+    if (!draggingCardId) return;
     e.preventDefault();
+    e.stopPropagation();
     const disputaId = e.dataTransfer.getData("text/x-disputa-id") || draggingCardId;
     setDraggingCardId(null);
     setDragOverColumnLabel(null);
@@ -655,19 +717,32 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     }
   };
 
+  // Reordenar colunas só começa a partir da alça (GripVertical) do cabeçalho —
+  // nunca a partir de um card ou de um clique em botão dentro da coluna.
   const handleColumnHeaderDragStart = (e: React.DragEvent, columnId: string) => {
+    e.stopPropagation();
     setDraggingColumnId(columnId);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/x-column-id", columnId);
   };
 
+  const handleColumnHeaderDragEnd = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setDraggingColumnId(null);
+    setDragOverColumnId(null);
+  };
+
   const handleColumnHeaderDragOver = (e: React.DragEvent, columnId: string) => {
+    if (!draggingColumnId) return;
     e.preventDefault();
-    if (draggingColumnId && draggingColumnId !== columnId) setDragOverColumnId(columnId);
+    e.stopPropagation();
+    if (draggingColumnId !== columnId) setDragOverColumnId(columnId);
   };
 
   const handleColumnHeaderDrop = (e: React.DragEvent, targetColumnId: string) => {
+    if (!draggingColumnId) return;
     e.preventDefault();
+    e.stopPropagation();
     const sourceColumnId = e.dataTransfer.getData("text/x-column-id") || draggingColumnId;
     setDraggingColumnId(null);
     setDragOverColumnId(null);
@@ -1504,7 +1579,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   </SheetField>
 
                   <SheetField label="Data / Hora">
-                    <p className="truncate px-1.5 py-1 font-mono text-xs">{row.dataHoraDisputa || "—"}</p>
+                    <div className="flex flex-wrap items-center gap-1 px-1.5 py-1">
+                      <p className="truncate font-mono text-xs text-success">{row.dataHoraDisputa || "—"}</p>
+                      {row.dataHoraDisputa && <DisputaDateTag value={row.dataHoraDisputa} className="px-1.5 py-0 text-[9px]" />}
+                    </div>
                   </SheetField>
 
                   <SheetField label="Qtd / Unidade">
@@ -1578,21 +1656,31 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
             return (
               <div
                 key={col.id}
-                draggable
-                onDragStart={(e) => handleColumnHeaderDragStart(e, col.id)}
+                data-kanban-col={col.label}
                 onDragOver={(e) => handleColumnHeaderDragOver(e, col.id)}
                 onDrop={(e) => handleColumnHeaderDrop(e, col.id)}
                 className={`flex min-w-0 flex-col overflow-hidden rounded-xl border bg-muted/30 transition ${
                   isColumnDropTarget ? "border-primary ring-2 ring-primary/40" : "border-border"
                 } ${draggingColumnId === col.id ? "opacity-50" : ""}`}
               >
-                {/* Cabeçalho da coluna — usa a cor cadastrada do status como fundo */}
+                {/* Cabeçalho da coluna — usa a cor cadastrada do status como fundo.
+                    Só a alça (ícone de grip) inicia o arraste de coluna, para nunca
+                    ser confundida com o arraste de um card ou o clique em um botão. */}
                 <div
-                  className="flex cursor-grab items-center justify-between gap-1.5 rounded-t-xl p-2 sm:p-2.5 active:cursor-grabbing"
+                  className="flex items-center justify-between gap-1.5 rounded-t-xl p-2 sm:p-2.5"
                   style={{ backgroundColor: col.color, color: getContrastTextColor(col.color) }}
                 >
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <GripVertical className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                    <span
+                      draggable
+                      data-kanban-grip={col.label}
+                      onDragStart={(e) => handleColumnHeaderDragStart(e, col.id)}
+                      onDragEnd={handleColumnHeaderDragEnd}
+                      title="Arrastar para reordenar esta coluna"
+                      className="cursor-grab touch-none active:cursor-grabbing"
+                    >
+                      <GripVertical className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                    </span>
                     <span className="truncate text-xs font-bold sm:text-sm" title={col.label}>{col.label}</span>
                   </div>
                   <div className="flex shrink-0 items-center gap-0.5">
@@ -1643,6 +1731,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
                 {/* Cartões (área de soltura) */}
                 <div
+                  data-kanban-body
                   onDragOver={(e) => handleColumnBodyDragOver(e, col.label)}
                   onDrop={(e) => handleColumnBodyDrop(e, col.label)}
                   className={`min-h-[90px] flex-1 space-y-2 overflow-y-auto p-2 scrollbar-thin ${
@@ -1658,6 +1747,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     cards.map(row => (
                       <div
                         key={row.id}
+                        data-kanban-card={row.id}
                         draggable
                         onDragStart={(e) => handleCardDragStart(e, row.id)}
                         onDragEnd={handleCardDragEnd}
@@ -1706,9 +1796,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                             {row.nossoValorAlvo > 0 ? formatBRL(row.nossoValorAlvo) : "—"}
                           </span>
                           {row.dataHoraDisputa && (
-                            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                              <Calendar className="h-3 w-3" />
-                              {row.dataHoraDisputa}
+                            <span className="flex items-center gap-1 text-[10px]">
+                              <Calendar className="h-3 w-3 text-success" />
+                              <span className="text-success">{row.dataHoraDisputa}</span>
+                              <DisputaDateTag value={row.dataHoraDisputa} className="px-1.5 py-0 text-[9px]" />
                             </span>
                           )}
                         </div>
