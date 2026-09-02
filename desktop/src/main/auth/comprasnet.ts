@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, session, type Session, type WebContents } from "electron";
 import { join } from "node:path";
 
-import { FONTE_REGEX_HOST, RegistroEnderecos, URL_LOGIN_SSO } from "./endereco.js";
+import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, URL_LOGIN_SSO } from "./endereco.js";
 import { autenticadoPor, type Sondagem } from "./reconhecimento.js";
 
 /**
@@ -77,7 +77,7 @@ export function aprenderEnderecoDe(janela: BrowserWindow): void {
  * só de visitar o portal já são criados cookies de consentimento e analytics, e contá-los
  * fazia o aplicativo se declarar conectado sem ninguém ter entrado na conta.
  */
-const DOMINIOS_SESSAO = ["comprasnet.gov.br", "compras.gov.br"];
+const DOMINIOS_SESSAO = DOMINIOS_COOKIE;
 
 /** Nomes que caracterizam um cookie de sessão autenticada, e não de preferência. */
 const COOKIE_DE_SESSAO = /sess|token|auth|jwt|jsession|sso|acesso|logged|usuario/i;
@@ -139,6 +139,42 @@ export function habilitarCertificadoDigital(): void {
   });
 }
 
+/**
+ * Adota as janelas que o próprio portal abre.
+ *
+ * O fluxo do gov.br abre janela nova no meio do login (`window.open`). O aplicativo
+ * vigiava só a janela que ELE criou, então: o operador entrava na janela nova, a antiga
+ * ficava parada numa página de redirecionamento, e o robô nunca via login nenhum — a
+ * janela ficava aberta para sempre e a interface seguia dizendo "sem sessão".
+ *
+ * Dava para ver isso na tela: a janela do portal aparecia com barra de menu, e a janela
+ * que este arquivo cria tem `autoHideMenuBar`. Era outra janela.
+ *
+ * As filhas herdam a partition (mesma sessão) e passam a ser vigiadas igual à mãe.
+ */
+export function adotarFilhas(mae: BrowserWindow, aoAdotar: (filha: BrowserWindow) => void): void {
+  mae.webContents.setWindowOpenHandler(() => ({
+    action: "allow",
+    overrideBrowserWindowOptions: {
+      width: 1100,
+      height: 800,
+      autoHideMenuBar: true,
+      webPreferences: {
+        partition: PARTITION,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true
+      }
+    }
+  }));
+
+  mae.webContents.on("did-create-window", (filha) => {
+    aprenderEnderecoDe(filha);
+    adotarFilhas(filha, aoAdotar);   // o SSO pode abrir mais de um salto
+    aoAdotar(filha);
+  });
+}
+
 export interface StatusSessao {
   autenticado: boolean;
   verificadoEm: Date;
@@ -179,7 +215,7 @@ const SCRIPT_SONDA = `
 })()
 `;
 
-async function sondar(conteudo: WebContents): Promise<Sondagem | null> {
+export async function sondar(conteudo: WebContents): Promise<Sondagem | null> {
   try {
     return (await conteudo.executeJavaScript(SCRIPT_SONDA, true)) as Sondagem;
   } catch {
@@ -216,17 +252,10 @@ export async function verificarSessao(forcar = false): Promise<StatusSessao> {
 
   const cookies = await contarCookiesDeSessao();
 
-  // Sem nenhum cookie do portal não há o que sondar: é sessão inexistente, não expirada.
-  if (cookies === 0) {
-    const status: StatusSessao = {
-      autenticado: false,
-      verificadoEm: new Date(),
-      cookiesEncontrados: 0,
-      evidencia: "Nenhum cookie do portal — ninguém entrou nesta máquina ainda."
-    };
-    cache = { status, em: Date.now() };
-    return status;
-  }
+  // Nada de atalho por contagem de cookie. A versão anterior devolvia "ninguém entrou
+  // nesta máquina" sem nem abrir a página quando a contagem dava zero — e ela dava zero
+  // por um domínio que faltava na lista, com o operador logado na tela ao lado. Quem
+  // responde se há sessão é a página renderizada; cookie aqui é só diagnóstico.
 
   const janela = new BrowserWindow({
     show: false,
@@ -342,6 +371,9 @@ export async function abrirLogin(
   aprenderEnderecoDe(janela);
   aoAbrirJanela?.(janela.id);
 
+  // Todas as janelas do fluxo de login, não só esta.
+  const janelas: BrowserWindow[] = [janela];
+
   try {
     await janela.loadURL(URL_LOGIN);
   } catch {
@@ -365,44 +397,60 @@ export async function abrirLogin(
       resolve(await verificarSessao(true));
     };
 
+    const vivas = () => janelas.filter((j) => !j.isDestroyed());
+
+    // Só encerra quando TODAS as janelas do login sumirem. Fechar a intermediária,
+    // como o próprio SSO faz, não pode abortar o fluxo.
+    const talvezConcluir = () => { if (vivas().length === 0) void concluir(); };
+    janela.on("closed", talvezConcluir);
+    adotarFilhas(janela, (filha) => {
+      janelas.push(filha);
+      aoAbrirJanela?.(filha.id);
+      filha.on("closed", talvezConcluir);
+    });
+
     const timer = setInterval(() => {
       void (async () => {
-        if (janela.isDestroyed()) return void concluir();
+        const abertas = vivas();
+        if (abertas.length === 0) return void concluir();
 
-        const s = await sondar(janela.webContents);
-        if (!s || s.manterAberta) {
-          positivas = 0;
-          return;
+        // Procura o login em QUALQUER janela do fluxo, não só na que abrimos.
+        let logada: BrowserWindow | null = null;
+        let manter = false;
+        for (const j of abertas) {
+          const s = await sondar(j.webContents);
+          if (s?.manterAberta) manter = true;
+          if (!logada && autenticadoPor(s)) logada = j;
         }
+
+        if (manter) { positivas = 0; return; }
 
         // Duas leituras positivas seguidas, e nunca nos primeiros segundos. É o que
         // separa "logou" de "a SPA piscou uma tela intermediária".
-        positivas = autenticadoPor(s) ? positivas + 1 : 0;
-        if (positivas < 2 || Date.now() - abertaEm < 4000 || fechandoPorNos) return;
+        positivas = logada ? positivas + 1 : 0;
+        if (!logada || positivas < 2 || Date.now() - abertaEm < 4000 || fechandoPorNos) return;
 
         fechandoPorNos = true;
+        const alvo = logada;
         try {
-          await janela.webContents.executeJavaScript(SCRIPT_AVISO, true);
+          await alvo.webContents.executeJavaScript(SCRIPT_AVISO, true);
         } catch {
           // Aviso é cortesia; a ausência dele não impede o fechamento.
         }
         setTimeout(() => {
           void (async () => {
-            const ainda = await sondar(janela.webContents);
+            const ainda = await sondar(alvo.webContents);
             if (ainda?.manterAberta) {
               fechandoPorNos = false;
               positivas = 0;
               return;
             }
-            if (!janela.isDestroyed()) janela.close();
+            for (const j of vivas()) j.close();
             await concluir();
           })();
         }, 2200);
       })();
     }, 1200);
-
-    // Fechar na mão continua encerrando o fluxo: quem manda é o operador.
-    janela.on("closed", () => void concluir());
   });
 }
 
@@ -420,6 +468,7 @@ function abrirNoPortal(titulo: string, url: string): Promise<number> {
     }
   });
   aprenderEnderecoDe(janela);
+  adotarFilhas(janela, aprenderEnderecoDe);
   return janela.loadURL(url).then(() => janela.id);
 }
 

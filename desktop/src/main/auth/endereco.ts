@@ -55,6 +55,24 @@ export function urlDaSala(pregaoId: string): string {
 
 export const URL_LOGIN_SSO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
 
+/**
+ * Domínios onde procurar cookie de sessão.
+ *
+ * `estaleiro.serpro.gov.br` estava FALTANDO, e essa ausência sozinha fazia o aplicativo
+ * dizer "Nenhum cookie do portal — ninguém entrou nesta máquina ainda" com o operador
+ * logado na tela ao lado: é nesse domínio que o Compras.gov.br guarda a sessão de
+ * verdade, e a contagem dava zero.
+ *
+ * O `gov.br` genérico continua de fora de propósito: só de visitar o portal já nascem
+ * cookies de consentimento e analytics, e contá-los faria o aplicativo se declarar
+ * conectado sem ninguém ter entrado.
+ */
+export const DOMINIOS_COOKIE = [
+  "comprasnet.gov.br",
+  "compras.gov.br",
+  "estaleiro.serpro.gov.br"
+];
+
 export function ehHostDoPortal(host: string): boolean {
   return REGEX_HOST.test(String(host || "").toLowerCase());
 }

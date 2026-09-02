@@ -18,7 +18,8 @@
     "test:coletor": "electron scripts/teste-coletor.cjs --no-sandbox",
     "test:extensao": "electron scripts/teste-extensao.cjs --no-sandbox",
     "test:sessao": "electron scripts/teste-sessao-viva.cjs --no-sandbox",
-    "motor": "node scripts/gerar-motor.cjs"
+    "motor": "node scripts/gerar-motor.cjs",
+    "test:login": "electron scripts/teste-login-janelas.cjs --no-sandbox"
   },
   "dependencies": {
     "@supabase/auth-js": "^2.112.3"

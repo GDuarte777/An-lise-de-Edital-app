@@ -56,6 +56,11 @@ jobs:
       - name: Verificar que o robô consegue dar lance
         run: npm run test:sala
 
+      # O operador logou, o portal abriu janela nova, e o aplicativo ficou vigiando a
+      # janela errada dizendo "sem sessão". Este teste reproduz esse fluxo.
+      - name: Verificar que o login é reconhecido na janela certa
+        run: npm run test:login
+
       # O login do gov.br cai em poucos minutos. Este teste sobe um portal falso que
       # expira sozinho e prova que o guardião atravessa várias expirações — é a razão de
       # o robô ser aplicativo instalado, então não pode ser publicado quebrado.
