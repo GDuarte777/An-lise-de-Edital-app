@@ -3,7 +3,7 @@ import {
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
   CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown,
   Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database,
-  Kanban, Palette, GripVertical, Pencil
+  Kanban, Palette, GripVertical, Pencil, MoreHorizontal, Target
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
@@ -26,7 +26,23 @@ import { Textarea } from "./ui/textarea";
 import { Badge } from "./ui/badge";
 import { Card } from "./ui/card";
 import { Label } from "./ui/label";
+import { cn } from "../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog";
 
 interface DisputasSheetTabProps {
   activeEdital?: EditalAnalysis | null;
@@ -138,6 +154,148 @@ const STATUS_COLOR_PALETTE = [
   "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1", "#8b5cf6", "#a855f7",
   "#d946ef", "#ec4899", "#f43f5e", "#64748b"
 ];
+
+const VIEW_MODES: { id: "spreadsheet" | "dashboard" | "kanban"; label: string; icon: typeof FileSpreadsheet }[] = [
+  { id: "spreadsheet", label: "Planilha", icon: FileSpreadsheet },
+  { id: "dashboard", label: "Painel", icon: LayoutGrid },
+  { id: "kanban", label: "Kanban", icon: Kanban }
+];
+
+const PORTAL_OPTIONS = ["Compras.gov.br", "BLL Compras", "Licitações-e", "Bec SP", "PNCP", "Outro Portal"];
+
+const SORT_FIELDS: { key: keyof DisputaRow; label: string }[] = [
+  { key: "dataHoraDisputa", label: "Data da disputa" },
+  { key: "orgao", label: "Órgão comprador" },
+  { key: "status", label: "Status" },
+  { key: "valorEstimadoItem", label: "Valor estimado" },
+  { key: "nossoValorAlvo", label: "Nosso alvo" }
+];
+
+// Estilo comum dos campos editáveis da planilha: ocupam a largura disponível
+// e nunca ultrapassam a coluna, evitando rolagem horizontal.
+const CELL_INPUT =
+  "w-full min-w-0 rounded border border-transparent bg-transparent px-1.5 py-1 text-foreground transition hover:border-input focus:border-primary focus:bg-background focus:outline-none";
+
+const formatBRL = (value: number) =>
+  (value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+// Campo rotulado da grade editável — o rótulo mantém o dado compreensível
+// mesmo quando a grade se empilha em telas estreitas.
+function SheetField({ label, className = "", children }: { label: string; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <span className="mb-0.5 block text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+// Campo monetário: prefixo "R$" fixo e milhares separados quando fora de foco,
+// para o valor ficar legível sem atrapalhar a digitação.
+function MoneyInput({
+  value,
+  onChange,
+  className = ""
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  className?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const display = editing
+    ? String(value ?? 0)
+    : (value || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div className="flex items-center gap-1 rounded border border-transparent px-1.5 py-1 transition focus-within:border-primary focus-within:bg-background hover:border-input">
+      <span className="shrink-0 text-[10px] font-semibold text-muted-foreground">R$</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={display}
+        onFocus={() => setEditing(true)}
+        onBlur={() => setEditing(false)}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/[^\d.,-]/g, "").replace(",", ".");
+          onChange(Number(raw) || 0);
+        }}
+        className={cn(
+          "w-full min-w-0 border-0 bg-transparent p-0 font-mono text-xs text-foreground focus:outline-none",
+          className
+        )}
+      />
+    </div>
+  );
+}
+
+// Paleta de cores reaproveitada pelo Kanban e pelo gerenciador de status.
+function ColorSwatches({ color, onChange }: { color: string; onChange: (color: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="grid grid-cols-9 gap-1.5">
+        {STATUS_COLOR_PALETTE.map(c => (
+          <button
+            key={c}
+            type="button"
+            title={c}
+            onClick={() => onChange(c)}
+            className={`h-5 w-5 cursor-pointer rounded-full border-2 transition ${color === c ? "border-foreground" : "border-transparent"}`}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+      </div>
+      <input
+        type="color"
+        value={color}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8 w-full cursor-pointer rounded-md border border-input bg-transparent"
+        title="Escolher qualquer outra cor"
+      />
+    </div>
+  );
+}
+
+// Editor de nome + cor de um status.
+function StatusColorEditor({
+  label,
+  color,
+  labelPlaceholder,
+  autoFocus,
+  onLabelChange,
+  onLabelCommit,
+  onLabelSubmit,
+  onColorChange
+}: {
+  label: string;
+  color: string;
+  labelPlaceholder?: string;
+  autoFocus?: boolean;
+  onLabelChange: (value: string) => void;
+  onLabelCommit?: () => void;
+  onLabelSubmit?: () => void;
+  onColorChange: (color: string) => void;
+}) {
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Nome do status</Label>
+        <Input
+          autoFocus={autoFocus}
+          value={label}
+          placeholder={labelPlaceholder}
+          onChange={(e) => onLabelChange(e.target.value)}
+          onBlur={onLabelCommit}
+          onKeyDown={(e) => { if (e.key === "Enter" && onLabelSubmit) onLabelSubmit(); }}
+          className="h-8 text-xs"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
+        <ColorSwatches color={color} onChange={onColorChange} />
+      </div>
+    </>
+  );
+}
 
 // Escolhe texto claro ou escuro conforme a luminância da cor de fundo, para manter contraste legível.
 function getContrastTextColor(hex: string): string {
@@ -436,18 +594,47 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     showToast(`Status "${updated.label}" atualizado.`);
   };
 
-  // Exclui um status, desde que nenhuma disputa esteja usando-o no momento.
+  // Exclui um status. Se houver disputas usando-o, abre o diálogo que pergunta
+  // para qual status elas devem ser movidas antes da exclusão.
   const handleDeleteStatusType = (id: string) => {
     const target = statusTypes.find(s => s.id === id);
     if (!target) return;
-    const inUseCount = disputas.filter(r => r.status === target.label).length;
-    if (inUseCount > 0) {
-      showToast(`Mova as ${inUseCount} disputa(s) com status "${target.label}" para outro status antes de excluí-lo.`, "info");
+    if (statusTypes.length <= 1) {
+      showToast("É preciso manter ao menos um status cadastrado.", "info");
       return;
     }
-    setStatusTypes(prev => prev.filter(s => s.id !== id));
-    deleteStatusDisputaFromSupabase(id).catch(() => {});
+    const inUseCount = disputas.filter(r => r.status === target.label).length;
+    if (inUseCount > 0) {
+      setMoveCardsToStatus(statusTypes.find(s => s.id !== id)?.label || "");
+      setStatusToDelete(target);
+      return;
+    }
+    removeStatusType(target);
+  };
+
+  const removeStatusType = (target: DisputaStatusType) => {
+    setStatusTypes(prev => prev.filter(s => s.id !== target.id));
+    deleteStatusDisputaFromSupabase(target.id).catch(() => {});
     showToast(`Status "${target.label}" removido.`, "info");
+  };
+
+  // Confirma a exclusão de um status em uso, movendo antes as disputas afetadas.
+  const handleConfirmDeleteStatusType = () => {
+    if (!statusToDelete) return;
+    const target = statusToDelete;
+    const destination = moveCardsToStatus;
+
+    setDisputas(prev => prev.map(r => {
+      if (r.status === target.label) {
+        const moved = { ...r, status: destination };
+        saveDisputaToSupabase(moved).catch(() => {});
+        return moved;
+      }
+      return r;
+    }));
+
+    removeStatusType(target);
+    setStatusToDelete(null);
   };
 
   // Reordena as colunas (drag-and-drop no Kanban) e persiste a nova posição de cada uma.
@@ -562,14 +749,6 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const [sortField, setSortField] = useState<keyof DisputaRow>("dataHoraDisputa");
   const [sortAsc, setSortAsc] = useState(true);
 
-  // Active Cell state for Spreadsheet Mode Formula Bar
-  const [activeCell, setActiveCell] = useState<{ rowId: string; colKey: keyof DisputaRow; colName: string; colLetter: string } | null>({
-    rowId: disputas[0]?.id || "disp-101",
-    colKey: "orgao",
-    colName: "Órgão Comprador",
-    colLetter: "A"
-  });
-
   // Modal State for Add / Edit
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<DisputaRow | null>(null);
@@ -577,6 +756,11 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   // Modal State for Row Deletion & SQL Setup
   const [rowToDelete, setRowToDelete] = useState<DisputaRow | null>(null);
   const [showSqlSetupModal, setShowSqlSetupModal] = useState(false);
+
+  // Gerenciador de status (disponível em todos os modos) e exclusão de status em uso
+  const [showStatusManager, setShowStatusManager] = useState(false);
+  const [statusToDelete, setStatusToDelete] = useState<DisputaStatusType | null>(null);
+  const [moveCardsToStatus, setMoveCardsToStatus] = useState<string>("");
   const [copiedSql, setCopiedSql] = useState(false);
 
   // Form State
@@ -1140,912 +1324,846 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     };
   };
 
-  // Find active cell object value for formula bar
-  const activeRowObj = disputas.find(r => r.id === activeCell?.rowId) || disputas[0];
-  const activeCellValue = activeRowObj && activeCell ? activeRowObj[activeCell.colKey] : "";
-
   return (
-    <div id="disputas-sheet-view" className="flex-1 flex flex-col h-full bg-background overflow-y-auto select-text font-sans text-foreground">
-      
-      {/* Top Banner & Mode Switcher Bar */}
-      <div className="p-5 border-b border-border bg-card flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-xs">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <span className="bg-primary/10 text-primary p-2 rounded-xl border border-primary/20">
-              <FileSpreadsheet className="w-5 h-5" />
-            </span>
-            <div>
-              <h2 className="text-xl font-bold text-foreground tracking-tight flex items-center gap-2">
-                <span>Planilha de Disputas & Pregões</span>
-                <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/10 font-mono text-[10px] font-semibold uppercase text-primary">
-                  {viewMode === "spreadsheet" ? "Modo Planilha Interativa" : viewMode === "kanban" ? "Modo Kanban" : "Modo Painel / Dashboard"}
-                </Badge>
-              </h2>
-              <p className="text-muted-foreground text-xs mt-0.5">
-                Alterne livremente entre a visão de **Planilha Excel em Grade** ou a **Visão Painel Visual**.
-              </p>
-            </div>
+    <div id="disputas-sheet-view" className="flex flex-col gap-5 select-text font-sans text-foreground">
+
+      {/* ─────────── Cabeçalho: título, modos e ações ─────────── */}
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+
+        <div className="flex items-start gap-3 min-w-0">
+          <span className="shrink-0 rounded-xl border border-primary/20 bg-primary/10 p-2 text-primary">
+            <FileSpreadsheet className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold tracking-tight sm:text-xl">Planilha de Disputas &amp; Pregões</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {viewMode === "spreadsheet"
+                ? "Edite cada disputa direto na grade, como em uma planilha."
+                : viewMode === "kanban"
+                ? "Arraste as disputas entre as colunas para mudar o status."
+                : "Visão geral com indicadores e um cartão para cada disputa."}
+            </p>
           </div>
         </div>
 
-        {/* Mode Selector Toggle + Action Buttons */}
-        <div className="flex flex-wrap items-center gap-3">
-          
-          {/* Mode Switcher Buttons */}
-          <div className="flex items-center bg-muted p-1 rounded-xl border border-border">
-            <Button
-              type="button"
-              variant={viewMode === "spreadsheet" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("spreadsheet")}
-              className="h-auto gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>Modelo Planilha</span>
-            </Button>
-            <Button
-              type="button"
-              variant={viewMode === "dashboard" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("dashboard")}
-              className="h-auto gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold shadow-none"
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Modelo Painel</span>
-            </Button>
-            <Button
-              type="button"
-              variant={viewMode === "kanban" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("kanban")}
-              className="h-auto gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold shadow-none"
-            >
-              <Kanban className="w-3.5 h-3.5" />
-              <span>Modo Kanban</span>
-            </Button>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+
+          {/* Alternador de modo — ocupa a linha inteira em telas estreitas */}
+          <div className="flex w-full items-center rounded-xl border border-border bg-muted p-1 sm:w-auto">
+            {VIEW_MODES.map(mode => {
+              const Icon = mode.icon;
+              return (
+                <Button
+                  key={mode.id}
+                  type="button"
+                  variant={viewMode === mode.id ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode(mode.id)}
+                  title={`Modo ${mode.label}`}
+                  className="h-auto flex-1 gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold shadow-none sm:flex-none"
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{mode.label}</span>
+                </Button>
+              );
+            })}
           </div>
 
-          <div className="h-6 w-px bg-muted hidden sm:block" />
-
-          {/* Supabase Realtime live connection badge */}
-          <div 
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold border bg-card border-border text-foreground shadow-2xs"
-            title={realtimeConnected ? "Supabase Realtime ativo: alterações, criações e exclusões sincronizam automaticamente em tempo real." : "Conectando ao Supabase Realtime..."}
-          >
-            <span className="relative flex h-2 w-2">
-              {realtimeConnected && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
-              )}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${realtimeConnected ? "bg-success" : "bg-warning"}`}></span>
-            </span>
-            <span className="text-[11px] font-medium tracking-tight">
-              {realtimeConnected ? "Sincronização Automática Ativa" : "Conectando..."}
-            </span>
-          </div>
-
-          {lastRealtimeEvent && (Date.now() - lastRealtimeEvent.time < 12000) && (
-            <div className="hidden lg:flex items-center gap-1 text-[11px] font-medium text-success bg-success/10 border border-success/30 px-2 py-1 rounded-lg shadow-2xs">
-              <Sparkles className="w-3 h-3 text-success" />
-              <span>{lastRealtimeEvent.type}: {lastRealtimeEvent.label.slice(0, 26)}</span>
-            </div>
-          )}
-
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={handleImportFromAnalyzedEditais}
-            className="font-semibold"
-            title="Importar itens de todos os Editais Analisados para esta planilha"
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Importar dos Editais</span>
-          </Button>
-
           <Button
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => setShowSqlSetupModal(true)}
-            className="font-semibold"
-            title="Ver/Copiar script SQL para criar tabelas no Supabase"
+            onClick={() => setShowStatusManager(true)}
+            title="Criar, renomear, recolorir ou excluir os status das disputas"
           >
-            <Database className="w-3.5 h-3.5 text-primary" />
-            <span>Banco de Dados</span>
+            <Palette className="h-3.5 w-3.5" />
+            <span>Status</span>
           </Button>
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleCopyClipboard}
-            className="font-semibold"
-            title="Copiar dados para colar direto no Excel ou Google Sheets"
-          >
-            <Copy className="w-3.5 h-3.5 text-muted-foreground" />
-            <span>Copiar Tabela</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleExportCSV}
-            className="border-success/30 bg-success/10 font-bold text-success hover:bg-success/20 hover:text-success"
-            title="Baixar arquivo .CSV para Excel"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Exportar CSV</span>
-          </Button>
-
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => handleOpenAddModal()}
-            className="font-bold"
-          >
-            <Plus className="w-4 h-4" />
+          <Button type="button" size="sm" onClick={() => handleOpenAddModal()} className="font-semibold">
+            <Plus className="h-4 w-4" />
             <span>Nova Disputa</span>
           </Button>
+
+          {/* Ações secundárias agrupadas para não poluir a barra */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="icon" title="Mais ações">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={handleImportFromAnalyzedEditais} className="cursor-pointer">
+                <Layers />
+                Importar dos Editais
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleCopyClipboard} className="cursor-pointer">
+                <Copy />
+                Copiar tabela
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportCSV} className="cursor-pointer">
+                <Download />
+                Exportar CSV
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setShowSqlSetupModal(true)} className="cursor-pointer">
+                <Database />
+                Script do banco de dados
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
         </div>
       </div>
 
-      {/* Toast Notification */}
+      {/* Aviso temporário de ação concluída */}
       {notification && (
-        <div className={`mx-6 mt-4 p-3.5 rounded-xl border flex items-center gap-2.5 animate-fade-in ${
-          notification.type === "success" 
-            ? "bg-success/10 border-success/30 text-success" 
-            : "bg-primary/10 border-primary/20 text-primary"
+        <div className={`flex items-center gap-2.5 rounded-xl border p-3 ${
+          notification.type === "success"
+            ? "border-success/30 bg-success/10 text-success"
+            : "border-primary/20 bg-primary/10 text-primary"
         }`}>
-          <CheckCircle className="w-4 h-4 shrink-0 text-success" />
+          <CheckCircle className="h-4 w-4 shrink-0" />
           <span className="text-xs font-semibold">{notification.text}</span>
         </div>
       )}
 
+      {/* ─────────── Busca e filtros ─────────── */}
+      <Card className="flex flex-col gap-3 p-3 lg:flex-row lg:items-center">
 
+        <div className="relative min-w-0 flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder="Buscar por órgão, UASG, nº da licitação, produto..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-9 w-full pl-9 text-xs"
+          />
+        </div>
 
-      {/* Filter Toolbar & Search */}
-      <div className="p-6 space-y-4">
-        
-        <Card className="flex flex-col items-stretch justify-between gap-3 p-3.5 shadow-xs md:flex-row md:items-center">
-
-          {/* Search box */}
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Buscar por órgão, UASG, nº da licitação, produto..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-auto w-full rounded-lg pl-9 pr-3 py-1.5 text-xs"
-            />
-          </div>
-
-          {/* Filter Dropdowns */}
-          <div className="flex flex-wrap items-center gap-2">
-            
-            {/* Status Filter */}
-            <div className="flex items-center gap-1.5 bg-muted border border-input rounded-lg px-2.5 py-1 text-xs text-foreground">
-              <Filter className="w-3.5 h-3.5 text-primary shrink-0" />
-              <span className="text-[10px] uppercase font-bold text-muted-foreground">Status:</span>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-transparent text-xs text-foreground font-semibold focus:outline-none cursor-pointer"
-              >
-                <option value="Todas">Todas</option>
-                {statusTypes.map(s => (
-                  <option key={s.id} value={s.label}>{s.label}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Portal Filter */}
-            <div className="flex items-center gap-1.5 bg-muted border border-input rounded-lg px-2.5 py-1 text-xs text-foreground">
-              <span className="text-[10px] uppercase font-bold text-muted-foreground">Portal:</span>
-              <select
-                value={portalFilter}
-                onChange={(e) => setPortalFilter(e.target.value)}
-                className="bg-transparent text-xs text-foreground font-semibold focus:outline-none cursor-pointer"
-              >
-                <option value="Todos">Todos</option>
-                <option value="Compras.gov.br">Compras.gov.br</option>
-                <option value="BLL Compras">BLL Compras</option>
-                <option value="Licitações-e">Licitações-e</option>
-                <option value="Bec SP">Bec SP</option>
-                <option value="PNCP">PNCP</option>
-              </select>
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleAddBlankRow}
-              className="border-success/30 bg-success/10 font-bold text-success hover:bg-success/20 hover:text-success"
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
+            <Filter className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="min-w-0 cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              title="Filtrar por status"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>+ Inserir Linha</span>
-            </Button>
-
+              <option value="Todas">Todos os status</option>
+              {sortedStatusTypes.map(s => (
+                <option key={s.id} value={s.label}>{s.label}</option>
+              ))}
+            </select>
           </div>
 
-        </Card>
+          <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
+            <select
+              value={portalFilter}
+              onChange={(e) => setPortalFilter(e.target.value)}
+              className="min-w-0 cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              title="Filtrar por portal"
+            >
+              <option value="Todos">Todos os portais</option>
+              {PORTAL_OPTIONS.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </div>
 
-        {/* MODE 1: MODELO PLANILHA INTERATIVA EXCEL */}
-        {viewMode === "spreadsheet" ? (
-          <div className="bg-card border border-border rounded-xl overflow-hidden shadow-xs flex flex-col">
-            
-            {/* Spreadsheet Top Excel-Style Formula & Active Cell Bar */}
-            <div className="bg-muted px-4 py-2 border-b border-border flex items-center gap-3 font-mono text-xs">
-              
-              {/* Selected Cell Tag */}
-              <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 text-primary font-bold px-2.5 py-1 rounded-md text-[11px] min-w-[110px]">
-                <span className="font-mono">fx</span>
-                <span>{activeCell ? `Célula ${activeCell.colLetter}${disputas.findIndex(r => r.id === activeCell.rowId) + 1}` : 'A1'}</span>
-              </div>
+          <span className="text-[11px] text-muted-foreground">
+            {filteredDisputas.length} de {disputas.length}
+          </span>
 
-              {/* Formula input box for active cell */}
-              <div className="flex-1 flex items-center gap-2 bg-card border border-input rounded-md px-3 py-1">
-                <span className="text-muted-foreground text-[11px] font-bold">
-                  {activeCell?.colName || 'Valor'}:
+          <span
+            className="flex items-center gap-1.5 rounded-lg border border-border px-2 py-1.5"
+            title={realtimeConnected
+              ? "Sincronização em tempo real ativa com o Supabase."
+              : "Conectando ao Supabase..."}
+          >
+            <span className={`h-2 w-2 rounded-full ${realtimeConnected ? "bg-success" : "bg-warning"}`} />
+            <span className="hidden text-[11px] font-medium text-muted-foreground sm:inline">
+              {realtimeConnected ? "Sincronizado" : "Conectando"}
+            </span>
+          </span>
+        </div>
+      </Card>
+
+      {/* ─────────── MODO 1: PLANILHA (grade editável responsiva) ─────────── */}
+      {viewMode === "spreadsheet" ? (
+        <div className="space-y-2.5">
+
+          {filteredDisputas.length === 0 ? (
+            <Card className="flex flex-col items-center gap-2 p-10 text-center">
+              <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-semibold text-muted-foreground">Nenhuma disputa encontrada</p>
+              <Button type="button" size="sm" onClick={handleAddBlankRow}>
+                <Plus className="h-3.5 w-3.5" />
+                Adicionar primeira linha
+              </Button>
+            </Card>
+          ) : (
+            filteredDisputas.map((row, index) => (
+              <Card key={row.id} className="gap-0 p-3 transition hover:border-primary/30">
+
+                {/* Linha principal: posição, órgão, status e exclusão.
+                    Em telas estreitas o nome do órgão ocupa a linha inteira. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                    {index + 1}
+                  </span>
+                  <input
+                    type="text"
+                    value={row.orgao}
+                    onChange={(e) => handleCellChange(row.id, "orgao", e.target.value)}
+                    placeholder="Órgão comprador"
+                    className={cn(CELL_INPUT, "order-3 w-full text-sm font-semibold sm:order-none sm:w-auto sm:min-w-0 sm:flex-1")}
+                  />
+                  <select
+                    value={row.status}
+                    onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
+                    style={getStatusBadgeStyle(row.status)}
+                    className="ml-auto cursor-pointer rounded-lg border px-2 py-1 text-[11px] font-bold focus:outline-none sm:ml-0"
+                  >
+                    {sortedStatusTypes.map(s => (
+                      <option key={s.id} value={s.label}>{s.label}</option>
+                    ))}
+                  </select>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDeleteRow(row.id)}
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title="Excluir esta disputa"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+
+                {/* Produto / objeto */}
+                <div className="mt-2 sm:pl-7">
+                  <SheetField label="Produto / Objeto">
+                    <textarea
+                      rows={2}
+                      value={row.produtoItem}
+                      onChange={(e) => handleCellChange(row.id, "produtoItem", e.target.value)}
+                      placeholder="Descrição do item disputado"
+                      className={cn(CELL_INPUT, "resize-none text-xs leading-snug")}
+                    />
+                  </SheetField>
+                </div>
+
+                {/* Demais campos, em grade que se reorganiza conforme a largura */}
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 pl-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+                  <SheetField label="Nº Licitação">
+                    <input
+                      type="text"
+                      value={row.numeroLicitacao}
+                      onChange={(e) => handleCellChange(row.id, "numeroLicitacao", e.target.value)}
+                      className={cn(CELL_INPUT, "font-mono text-xs font-bold text-primary")}
+                    />
+                  </SheetField>
+
+                  <SheetField label="UASG / Cód.">
+                    <input
+                      type="text"
+                      value={row.uasgUndCompradora}
+                      onChange={(e) => handleCellChange(row.id, "uasgUndCompradora", e.target.value)}
+                      className={cn(CELL_INPUT, "font-mono text-xs text-muted-foreground")}
+                    />
+                  </SheetField>
+
+                  <SheetField label="Portal">
+                    <select
+                      value={row.portal}
+                      onChange={(e) => handleCellChange(row.id, "portal", e.target.value)}
+                      className={cn(CELL_INPUT, "cursor-pointer text-xs")}
+                    >
+                      {PORTAL_OPTIONS.map(p => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                  </SheetField>
+
+                  <SheetField label="Data / Hora">
+                    <input
+                      type="text"
+                      value={row.dataHoraDisputa}
+                      onChange={(e) => handleCellChange(row.id, "dataHoraDisputa", e.target.value)}
+                      className={cn(CELL_INPUT, "font-mono text-xs")}
+                    />
+                  </SheetField>
+
+                  <SheetField label="Qtd / Unidade">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        value={row.quantidade}
+                        onChange={(e) => handleCellChange(row.id, "quantidade", Number(e.target.value))}
+                        className={cn(CELL_INPUT, "w-16 shrink-0 text-center font-mono text-xs")}
+                      />
+                      <input
+                        type="text"
+                        value={row.unidadeMedida}
+                        onChange={(e) => handleCellChange(row.id, "unidadeMedida", e.target.value)}
+                        className={cn(CELL_INPUT, "min-w-0 flex-1 text-xs")}
+                      />
+                    </div>
+                  </SheetField>
+
+                  <SheetField label="Link PNCP">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="url"
+                        value={row.linkPNCP || ""}
+                        onChange={(e) => handleCellChange(row.id, "linkPNCP", e.target.value)}
+                        placeholder="https://pncp.gov.br/..."
+                        className={cn(CELL_INPUT, "min-w-0 flex-1 text-xs")}
+                      />
+                      {row.linkPNCP && (
+                        <a
+                          href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Abrir edital no PNCP"
+                          className="shrink-0 rounded p-1 text-primary hover:bg-primary/10"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                    </div>
+                  </SheetField>
+
+                  <SheetField label="Valor Estimado">
+                    <MoneyInput
+                      value={row.valorEstimadoItem}
+                      onChange={(v) => handleCellChange(row.id, "valorEstimadoItem", v)}
+                    />
+                  </SheetField>
+
+                  <SheetField label="Nosso Alvo">
+                    <MoneyInput
+                      value={row.nossoValorAlvo}
+                      onChange={(v) => handleCellChange(row.id, "nossoValorAlvo", v)}
+                      className="font-bold text-primary"
+                    />
+                  </SheetField>
+
+                  <SheetField label="Preço Piso">
+                    <MoneyInput
+                      value={row.valorMinimoPiso}
+                      onChange={(v) => handleCellChange(row.id, "valorMinimoPiso", v)}
+                      className="text-muted-foreground"
+                    />
+                  </SheetField>
+                </div>
+              </Card>
+            ))
+          )}
+
+          {/* Rodapé com totais da planilha */}
+          {filteredDisputas.length > 0 && (
+            <Card className="flex flex-col gap-2 p-3 text-xs sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono">
+                <span className="text-muted-foreground">
+                  Estimado: <strong className="text-foreground">{formatBRL(valorTotalEstimado)}</strong>
                 </span>
-                <input
-                  type="text"
-                  value={activeCellValue || ""}
-                  onChange={(e) => {
-                    if (activeCell && activeRowObj) {
-                      const fieldKey = activeCell.colKey;
-                      let val: any = e.target.value;
-                      if (fieldKey === "quantidade" || fieldKey === "valorEstimadoItem" || fieldKey === "nossoValorAlvo" || fieldKey === "valorMinimoPiso") {
-                        val = Number(e.target.value) || 0;
-                      }
-                      handleCellChange(activeCell.rowId, fieldKey, val);
-                    }
-                  }}
-                  placeholder="Edite o valor da célula diretamente aqui ou clique na tabela..."
-                  className="w-full bg-transparent text-foreground font-mono text-xs focus:outline-none"
-                />
+                <span className="text-muted-foreground">
+                  Nosso alvo: <strong className="text-primary">{formatBRL(valorNossoAlvo)}</strong>
+                </span>
+                <span className="text-muted-foreground">
+                  Linhas: <strong className="text-foreground">{filteredDisputas.length}</strong>
+                </span>
               </div>
+              <Button type="button" size="sm" variant="outline" onClick={handleAddBlankRow} className="shrink-0">
+                <Plus className="h-3.5 w-3.5" />
+                Nova linha em branco
+              </Button>
+            </Card>
+          )}
+        </div>
 
-            </div>
+      ) : viewMode === "kanban" ? (
 
-            {/* Interactive Grid Table */}
-            <div className="overflow-x-auto max-h-[600px] scrollbar-thin">
-              <table className="w-full border-collapse font-mono text-xs select-none">
-                
-                {/* Spreadsheet Column Headers (A, B, C, D...) */}
-                <thead>
-                  <tr className="bg-muted border-b border-border text-foreground text-[10.5px] font-bold">
-                    <th className="w-12 py-2 px-2 text-center border-r border-border bg-muted text-muted-foreground">#</th>
-                    <th className="py-2 px-3 border-r border-border text-left min-w-[200px]">A - Órgão Comprador</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-36">B - UASG/Cod</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-32">C - Nº Licitação</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-32">D - Portal</th>
-                    <th className="py-2 px-3 border-r border-border text-left min-w-[180px]">E - Link PNCP</th>
-                    <th className="py-2 px-3 border-r border-border text-left min-w-[240px]">F - Produto / Item</th>
-                    <th className="py-2 px-2 border-r border-border text-center w-20">G - Qtd</th>
-                    <th className="py-2 px-2 border-r border-border text-center w-20">H - Und</th>
-                    <th className="py-2 px-3 border-r border-border text-right w-36">I - Val. Estimado</th>
-                    <th className="py-2 px-3 border-r border-border text-right w-36">J - Nosso Alvo</th>
-                    <th className="py-2 px-3 border-r border-border text-right w-36">K - Preço Piso</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-36">L - Data/Hora</th>
-                    <th className="py-2 px-3 border-r border-border text-center w-32">M - Status</th>
-                    <th className="py-2 px-2 text-center w-16">Ações</th>
-                  </tr>
-                </thead>
+        /* ─────────── MODO 2: KANBAN (colunas = status, sem rolagem lateral) ─────────── */
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
+          {sortedStatusTypes.map(col => {
+            const cards = filteredDisputas.filter(r => r.status === col.label);
+            const isCardDropTarget = dragOverColumnLabel === col.label && draggingCardId;
+            const isColumnDropTarget = dragOverColumnId === col.id && draggingColumnId;
 
-                {/* Grid Rows */}
-                <tbody className="divide-y divide-border bg-card text-foreground">
-                  {filteredDisputas.map((row, index) => (
-                    <tr key={row.id} className="hover:bg-primary/10 transition-colors group">
-                      
-                      {/* Row Index # */}
-                      <td className="py-2 px-2 text-center font-bold text-muted-foreground border-r border-border bg-muted text-[11px]">
-                        {index + 1}
-                      </td>
-
-                      {/* Col A: Órgão */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "orgao" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "orgao", colName: "Órgão Comprador", colLetter: "A" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.orgao}
-                          onChange={(e) => handleCellChange(row.id, "orgao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col B: UASG */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "uasgUndCompradora" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "uasgUndCompradora", colName: "UASG/Cod Unidade", colLetter: "B" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.uasgUndCompradora}
-                          onChange={(e) => handleCellChange(row.id, "uasgUndCompradora", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col C: Nº Licitação */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "numeroLicitacao" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "numeroLicitacao", colName: "Nº Licitação", colLetter: "C" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.numeroLicitacao}
-                          onChange={(e) => handleCellChange(row.id, "numeroLicitacao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-primary font-bold focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col D: Portal */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "portal" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "portal", colName: "Portal", colLetter: "D" })}
-                      >
-                        <select
-                          value={row.portal}
-                          onChange={(e) => handleCellChange(row.id, "portal", e.target.value)}
-                          className="w-full bg-transparent text-xs text-foreground px-1 py-1 focus:outline-none focus:bg-background rounded cursor-pointer"
-                        >
-                          <option value="Compras.gov.br">Compras.gov.br</option>
-                          <option value="BLL Compras">BLL Compras</option>
-                          <option value="Licitações-e">Licitações-e</option>
-                          <option value="Bec SP">Bec SP</option>
-                          <option value="PNCP">PNCP</option>
-                        </select>
-                      </td>
-
-                      {/* Col E: Link PNCP */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "linkPNCP" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "linkPNCP", colName: "Link PNCP", colLetter: "E" })}
-                      >
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="text"
-                            placeholder="https://..."
-                            value={row.linkPNCP || ""}
-                            onChange={(e) => handleCellChange(row.id, "linkPNCP", e.target.value)}
-                            className="w-full bg-transparent px-2 py-1 text-xs text-primary underline focus:no-underline focus:outline-none focus:bg-background rounded font-mono truncate"
-                          />
-                          {row.linkPNCP && (
-                            <a
-                              href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="p-1 text-primary hover:text-primary/70 rounded shrink-0 cursor-pointer"
-                              title="Abrir Link PNCP"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Col F: Produto / Item */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "produtoItem" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "produtoItem", colName: "Produto / Item", colLetter: "F" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.produtoItem}
-                          onChange={(e) => handleCellChange(row.id, "produtoItem", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col G: Qtd */}
-                      <td 
-                        className={`p-1 border-r border-border text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "quantidade" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "quantidade", colName: "Quantidade", colLetter: "G" })}
-                      >
-                        <input
-                          type="number"
-                          value={row.quantidade}
-                          onChange={(e) => handleCellChange(row.id, "quantidade", Number(e.target.value))}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col H: Und */}
-                      <td 
-                        className={`p-1 border-r border-border text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "unidadeMedida" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "unidadeMedida", colName: "Unidade", colLetter: "H" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.unidadeMedida}
-                          onChange={(e) => handleCellChange(row.id, "unidadeMedida", e.target.value)}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col I: Val. Estimado */}
-                      <td 
-                        className={`p-1 border-r border-border text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorEstimadoItem" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorEstimadoItem", colName: "Valor Estimado (R$)", colLetter: "I" })}
-                      >
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.valorEstimadoItem}
-                          onChange={(e) => handleCellChange(row.id, "valorEstimadoItem", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded font-mono"
-                        />
-                      </td>
-
-                      {/* Col J: Nosso Alvo */}
-                      <td 
-                        className={`p-1 border-r border-border text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "nossoValorAlvo" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "nossoValorAlvo", colName: "Nosso Valor Alvo (R$)", colLetter: "J" })}
-                      >
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.nossoValorAlvo}
-                          onChange={(e) => handleCellChange(row.id, "nossoValorAlvo", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-primary font-bold focus:outline-none focus:bg-background rounded font-mono"
-                        />
-                      </td>
-
-                      {/* Col K: Preço Piso */}
-                      <td 
-                        className={`p-1 border-r border-border text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorMinimoPiso" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorMinimoPiso", colName: "Preço Piso (R$)", colLetter: "K" })}
-                      >
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.valorMinimoPiso}
-                          onChange={(e) => handleCellChange(row.id, "valorMinimoPiso", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded font-mono"
-                        />
-                      </td>
-
-                      {/* Col L: Data/Hora */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "dataHoraDisputa" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "dataHoraDisputa", colName: "Data e Hora Disputa", colLetter: "L" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.dataHoraDisputa}
-                          onChange={(e) => handleCellChange(row.id, "dataHoraDisputa", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col L: Status */}
-                      <td className="p-1 border-r border-border text-center">
-                        <select
-                          value={row.status}
-                          onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
-                          style={getStatusBadgeStyle(row.status)}
-                          className="text-[10.5px] font-bold px-2 py-0.5 rounded-lg border focus:outline-none cursor-pointer"
-                        >
-                          {statusTypes.map(s => (
-                            <option key={s.id} value={s.label}>{s.label}</option>
-                          ))}
-                        </select>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="p-1 text-center">
+            return (
+              <div
+                key={col.id}
+                draggable
+                onDragStart={(e) => handleColumnHeaderDragStart(e, col.id)}
+                onDragOver={(e) => handleColumnHeaderDragOver(e, col.id)}
+                onDrop={(e) => handleColumnHeaderDrop(e, col.id)}
+                className={`flex min-w-0 flex-col rounded-xl border bg-muted/30 transition ${
+                  isColumnDropTarget ? "border-primary ring-2 ring-primary/40" : "border-border"
+                } ${draggingColumnId === col.id ? "opacity-50" : ""}`}
+              >
+                {/* Cabeçalho da coluna */}
+                <div className="flex cursor-grab items-center justify-between gap-1.5 border-b border-border p-2.5 active:cursor-grabbing">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: col.color }} />
+                    <span className="truncate text-xs font-bold" title={col.label}>{col.label}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <Badge variant="secondary" className="font-mono text-[10px]">{cards.length}</Badge>
+                    <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(col); }}>
+                      <PopoverTrigger asChild>
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          onClick={() => handleDeleteRow(row.id)}
-                          className="h-auto w-auto p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                          title="Excluir Linha"
+                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                          title="Editar nome e cor deste status"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Pencil className="h-3 w-3" />
                         </Button>
-                      </td>
-
-                    </tr>
-                  ))}
-                </tbody>
-
-              </table>
-            </div>
-
-            {/* Bottom Excel Totals Summary Bar */}
-            <div className="bg-muted px-4 py-2 border-t border-border flex flex-wrap items-center justify-between text-xs font-mono text-muted-foreground gap-4">
-              <div className="flex items-center gap-4">
-                <span className="text-primary font-bold">∑ Fórmulas de Totais:</span>
-                <span>Soma (H): <strong className="text-foreground">{valorTotalEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
-                <span>Soma (I): <strong className="text-primary">{valorNossoAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-muted-foreground">Linhas Totais: {filteredDisputas.length}</span>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleAddBlankRow}
-                  className="h-auto gap-1 rounded px-3 py-1 text-[11px] font-bold"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Nova Linha</span>
-                </Button>
-              </div>
-            </div>
-
-          </div>
-        ) : viewMode === "kanban" ? (
-          /* MODE 3: QUADRO KANBAN — colunas = status do usuário, arraste os cartões entre elas */
-          <div className="flex items-start gap-4 overflow-x-auto pb-4">
-            {sortedStatusTypes.map(col => {
-              const cards = filteredDisputas.filter(r => r.status === col.label);
-              const isCardDropTarget = dragOverColumnLabel === col.label && draggingCardId;
-              const isColumnDropTarget = dragOverColumnId === col.id && draggingColumnId;
-
-              return (
-                <div
-                  key={col.id}
-                  draggable
-                  onDragStart={(e) => handleColumnHeaderDragStart(e, col.id)}
-                  onDragOver={(e) => handleColumnHeaderDragOver(e, col.id)}
-                  onDrop={(e) => handleColumnHeaderDrop(e, col.id)}
-                  className={`flex w-72 shrink-0 flex-col rounded-xl border bg-muted/30 transition ${
-                    isColumnDropTarget ? "border-primary ring-2 ring-primary/40" : "border-border"
-                  } ${draggingColumnId === col.id ? "opacity-50" : ""}`}
-                >
-                  {/* Column header */}
-                  <div className="flex items-center justify-between gap-2 border-b border-border p-3 cursor-grab active:cursor-grabbing">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(col); }}>
-                        <PopoverTrigger asChild>
-                          <button
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-64 space-y-3">
+                        <StatusColorEditor
+                          label={editColumnLabel}
+                          color={editColumnColor}
+                          onLabelChange={setEditColumnLabel}
+                          onLabelCommit={() => handleConfirmEditColumn(col.id)}
+                          onColorChange={(c) => { setEditColumnColor(c); handleUpdateStatusType(col.id, { color: c }); }}
+                        />
+                        <div className="flex justify-end border-t border-border pt-2.5">
+                          <Button
                             type="button"
-                            title="Editar nome e cor do status"
-                            className="h-3.5 w-3.5 shrink-0 cursor-pointer rounded-full border border-black/10"
-                            style={{ backgroundColor: col.color }}
-                          />
-                        </PopoverTrigger>
-                        <PopoverContent align="start" className="w-64 space-y-3">
-                          <div className="space-y-1.5">
-                            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Nome do Status</Label>
-                            <Input
-                              value={editColumnLabel}
-                              onChange={(e) => setEditColumnLabel(e.target.value)}
-                              onBlur={() => handleConfirmEditColumn(col.id)}
-                              className="h-8 text-xs"
-                            />
-                          </div>
-                          <div className="space-y-1.5">
-                            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
-                            <div className="grid grid-cols-9 gap-1.5">
-                              {STATUS_COLOR_PALETTE.map(c => (
-                                <button
-                                  key={c}
-                                  type="button"
-                                  title={c}
-                                  onClick={() => { setEditColumnColor(c); handleUpdateStatusType(col.id, { color: c }); }}
-                                  className={`h-5 w-5 rounded-full border-2 cursor-pointer transition ${editColumnColor === c ? "border-foreground" : "border-transparent"}`}
-                                  style={{ backgroundColor: c }}
-                                />
-                              ))}
-                            </div>
-                            <input
-                              type="color"
-                              value={editColumnColor}
-                              onChange={(e) => { setEditColumnColor(e.target.value); handleUpdateStatusType(col.id, { color: e.target.value }); }}
-                              className="h-8 w-full cursor-pointer rounded-md border border-input bg-transparent"
-                              title="Escolher cor personalizada"
-                            />
-                          </div>
-                          <div className="flex justify-end border-t border-border pt-2.5">
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteStatusType(col.id)}
+                            className="gap-1.5 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Excluir status
+                          </Button>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                </div>
+
+                {/* Cartões (área de soltura) */}
+                <div
+                  onDragOver={(e) => handleColumnBodyDragOver(e, col.label)}
+                  onDrop={(e) => handleColumnBodyDrop(e, col.label)}
+                  className={`min-h-[90px] flex-1 space-y-2 overflow-y-auto p-2 scrollbar-thin ${
+                    isCardDropTarget ? "bg-primary/5" : ""
+                  }`}
+                  style={{ maxHeight: "58vh" }}
+                >
+                  {cards.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border py-5 text-center text-[11px] text-muted-foreground">
+                      Nenhuma disputa
+                    </div>
+                  ) : (
+                    cards.map(row => (
+                      <div
+                        key={row.id}
+                        draggable
+                        onDragStart={(e) => handleCardDragStart(e, row.id)}
+                        onDragEnd={handleCardDragEnd}
+                        className={`group cursor-grab space-y-1.5 rounded-lg border border-border bg-card p-2.5 shadow-2xs transition hover:border-primary/40 active:cursor-grabbing ${
+                          draggingCardId === row.id ? "opacity-40" : ""
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-1">
+                          <p
+                            className="line-clamp-2 min-w-0 cursor-pointer text-[11px] font-semibold leading-snug"
+                            title={row.orgao}
+                            onClick={() => handleOpenEditModal(row)}
+                          >
+                            {row.orgao || "Órgão não informado"}
+                          </p>
+                          {/* Em telas sem hover (toque) as ações ficam sempre visíveis */}
+                          <div className="flex shrink-0 items-center gap-0.5 transition lg:opacity-0 lg:group-hover:opacity-100 lg:focus-within:opacity-100">
                             <Button
                               type="button"
                               variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteStatusType(col.id)}
-                              className="gap-1.5 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                              size="icon"
+                              onClick={(e) => { e.stopPropagation(); handleOpenEditModal(row); }}
+                              className="h-6 w-6 text-muted-foreground hover:text-primary"
+                              title="Editar disputa"
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Excluir Status
+                              <Edit2 className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={(e) => { e.stopPropagation(); handleDeleteRow(row.id); }}
+                              className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              title="Excluir disputa"
+                            >
+                              <Trash2 className="h-3 w-3" />
                             </Button>
                           </div>
-                        </PopoverContent>
-                      </Popover>
-                      <span className="truncate text-xs font-bold text-foreground">{col.label}</span>
-                    </div>
-                    <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">{cards.length}</Badge>
-                  </div>
-
-                  {/* Droppable card list */}
-                  <div
-                    onDragOver={(e) => handleColumnBodyDragOver(e, col.label)}
-                    onDrop={(e) => handleColumnBodyDrop(e, col.label)}
-                    className={`min-h-[100px] flex-1 space-y-2 overflow-y-auto p-2.5 scrollbar-thin ${
-                      isCardDropTarget ? "bg-primary/5" : ""
-                    }`}
-                    style={{ maxHeight: "60vh" }}
-                  >
-                    {cards.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-border py-6 text-center text-[11px] text-muted-foreground">
-                        Nenhuma disputa
-                      </div>
-                    ) : (
-                      cards.map(row => (
-                        <div
-                          key={row.id}
-                          draggable
-                          onDragStart={(e) => handleCardDragStart(e, row.id)}
-                          onDragEnd={handleCardDragEnd}
-                          onClick={() => handleOpenEditModal(row)}
-                          className={`cursor-grab space-y-1.5 rounded-lg border border-border bg-card p-2.5 shadow-2xs transition hover:border-primary/40 active:cursor-grabbing ${
-                            draggingCardId === row.id ? "opacity-40" : ""
-                          }`}
-                        >
-                          <p className="line-clamp-2 text-[11px] font-semibold leading-snug text-foreground" title={row.orgao}>
-                            {row.orgao || "Órgão não informado"}
-                          </p>
-                          <p className="truncate font-mono text-[10px] text-primary font-bold">{row.numeroLicitacao}</p>
-                          {row.produtoItem && (
-                            <p className="line-clamp-2 text-[10.5px] text-muted-foreground">{row.produtoItem}</p>
-                          )}
-                          <div className="flex items-center justify-between gap-2 pt-1">
-                            <span className="font-mono text-[10px] font-bold text-foreground">
-                              {row.nossoValorAlvo > 0
-                                ? row.nossoValorAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                                : "—"}
-                            </span>
-                            {row.dataHoraDisputa && (
-                              <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
-                                <Calendar className="h-3 w-3" />
-                                {row.dataHoraDisputa}
-                              </span>
-                            )}
-                          </div>
                         </div>
-                      ))
-                    )}
+                        <p className="truncate font-mono text-[10px] font-bold text-primary">{row.numeroLicitacao}</p>
+                        {row.produtoItem && (
+                          <p className="line-clamp-2 text-[10.5px] text-muted-foreground">{row.produtoItem}</p>
+                        )}
+                        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pt-0.5">
+                          <span className="font-mono text-[10px] font-bold">
+                            {row.nossoValorAlvo > 0 ? formatBRL(row.nossoValorAlvo) : "—"}
+                          </span>
+                          {row.dataHoraDisputa && (
+                            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                              <Calendar className="h-3 w-3" />
+                              {row.dataHoraDisputa}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleOpenAddModal(col.label)}
+                  className="flex cursor-pointer items-center justify-center gap-1.5 border-t border-border p-2 text-[11px] font-semibold text-muted-foreground transition hover:bg-muted/60 hover:text-primary"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Nova disputa
+                </button>
+              </div>
+            );
+          })}
+
+          {/* Criar nova coluna / status */}
+          <Popover open={isAddColumnOpen} onOpenChange={setIsAddColumnOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex min-h-[120px] w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border p-3 text-xs font-bold text-muted-foreground transition hover:border-primary/40 hover:bg-muted/40 hover:text-primary"
+              >
+                <Plus className="h-5 w-5" />
+                Nova coluna
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-64 space-y-3">
+              <StatusColorEditor
+                label={newColumnLabel}
+                color={newColumnColor}
+                labelPlaceholder="Ex: Aguardando recurso"
+                autoFocus
+                onLabelChange={setNewColumnLabel}
+                onLabelSubmit={handleConfirmAddColumn}
+                onColorChange={setNewColumnColor}
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleConfirmAddColumn}
+                disabled={!newColumnLabel.trim()}
+                className="w-full"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Criar coluna
+              </Button>
+            </PopoverContent>
+          </Popover>
+        </div>
+
+      ) : (
+
+        /* ─────────── MODO 3: PAINEL (indicadores + cartões) ─────────── */
+        <div className="space-y-4">
+
+          {/* Indicadores */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Card className="gap-1 p-3.5">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                <Landmark className="h-3.5 w-3.5" /> Disputas mapeadas
+              </span>
+              <strong className="text-xl font-bold">{totalMapeado}</strong>
+            </Card>
+            <Card className="gap-1 p-3.5">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                <DollarSign className="h-3.5 w-3.5" /> Valor estimado
+              </span>
+              <strong className="font-mono text-lg font-bold">{formatBRL(valorTotalEstimado)}</strong>
+            </Card>
+            <Card className="gap-1 p-3.5">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                <Target className="h-3.5 w-3.5" /> Nosso alvo total
+              </span>
+              <strong className="font-mono text-lg font-bold text-primary">{formatBRL(valorNossoAlvo)}</strong>
+            </Card>
+            <Card className="gap-1 p-3.5">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                <CheckCircle className="h-3.5 w-3.5" /> Taxa de vitória
+              </span>
+              <strong className="text-xl font-bold text-success">{winRate}%</strong>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {disputasVencidas.length} ganha(s) · {formatBRL(valorTotalVencido)}
+              </span>
+            </Card>
+          </div>
+
+          {/* Ordenação */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Ordenar por</span>
+            <div className="flex items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
+              <select
+                value={sortField}
+                onChange={(e) => setSortField(e.target.value as keyof DisputaRow)}
+                className="cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              >
+                {SORT_FIELDS.map(f => (
+                  <option key={f.key} value={f.key}>{f.label}</option>
+                ))}
+              </select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setSortAsc(!sortAsc)}
+              title={sortAsc ? "Ordem crescente" : "Ordem decrescente"}
+            >
+              <ArrowUpDown className="h-3.5 w-3.5" />
+              {sortAsc ? "Crescente" : "Decrescente"}
+            </Button>
+          </div>
+
+          {/* Cartões das disputas */}
+          {filteredDisputas.length === 0 ? (
+            <Card className="flex flex-col items-center gap-2 p-10 text-center">
+              <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-semibold text-muted-foreground">Nenhuma disputa encontrada</p>
+              <Button type="button" size="sm" onClick={() => handleOpenAddModal()}>
+                <Plus className="h-3.5 w-3.5" />
+                Cadastrar disputa
+              </Button>
+            </Card>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {filteredDisputas.map(row => (
+                <Card key={row.id} className="gap-2.5 p-3.5 transition hover:border-primary/30">
+
+                  <div className="flex items-start justify-between gap-2">
+                    <select
+                      value={row.status}
+                      onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
+                      style={getStatusBadgeStyle(row.status)}
+                      className="min-w-0 cursor-pointer rounded-lg border px-2 py-1 text-[11px] font-bold focus:outline-none"
+                    >
+                      {sortedStatusTypes.map(s => (
+                        <option key={s.id} value={s.label}>{s.label}</option>
+                      ))}
+                    </select>
+                    <span className="shrink-0 font-mono text-[11px] font-bold text-primary">{row.numeroLicitacao}</span>
                   </div>
 
-                  {/* Add card directly into this column */}
-                  <button
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold" title={row.orgao}>{row.orgao || "Órgão não informado"}</p>
+                    <p className="truncate font-mono text-[10px] text-muted-foreground">
+                      UASG {row.uasgUndCompradora || "—"} · {row.portal}
+                    </p>
+                  </div>
+
+                  <p className="line-clamp-2 text-xs text-muted-foreground">{row.produtoItem || "Objeto não informado"}</p>
+
+                  <div className="grid grid-cols-3 gap-2 rounded-lg bg-muted/50 p-2 text-center">
+                    <div className="min-w-0">
+                      <span className="block text-[9.5px] font-bold uppercase text-muted-foreground">Estimado</span>
+                      <span className="block truncate font-mono text-[11px]">{formatBRL(row.valorEstimadoItem)}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block text-[9.5px] font-bold uppercase text-muted-foreground">Alvo</span>
+                      <span className="block truncate font-mono text-[11px] font-bold text-primary">{formatBRL(row.nossoValorAlvo)}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="block text-[9.5px] font-bold uppercase text-muted-foreground">Piso</span>
+                      <span className="block truncate font-mono text-[11px]">{formatBRL(row.valorMinimoPiso)}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 border-t border-border pt-2.5">
+                    <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <Calendar className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      <span className="truncate font-mono">{row.dataHoraDisputa || "Sem data"}</span>
+                    </span>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      {row.linkPNCP && (
+                        <a
+                          href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Abrir edital no PNCP"
+                          className="rounded p-1.5 text-primary hover:bg-primary/10"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleOpenEditModal(row)}
+                        className="h-7 w-7 text-muted-foreground hover:text-primary"
+                        title="Editar disputa"
+                      >
+                        <Edit2 className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDeleteRow(row.id)}
+                        className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        title="Excluir disputa"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─────────── Gerenciador de Status (disponível em todos os modos) ─────────── */}
+      <Dialog open={showStatusManager} onOpenChange={setShowStatusManager}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Palette className="h-4 w-4 text-primary" />
+              Status das disputas
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Estes status valem apenas para a sua conta e são usados na planilha, no painel e como colunas do Kanban.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            {sortedStatusTypes.map(s => {
+              const emUso = disputas.filter(r => r.status === s.label).length;
+              return (
+                <div key={s.id} className="flex items-center gap-2 rounded-lg border border-border p-2">
+                  <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(s); }}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        title="Alterar cor"
+                        className="h-6 w-6 shrink-0 cursor-pointer rounded-full border border-black/10"
+                        style={{ backgroundColor: s.color }}
+                      />
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-60 space-y-2">
+                      <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
+                      <ColorSwatches
+                        color={editColumnColor}
+                        onChange={(c) => { setEditColumnColor(c); handleUpdateStatusType(s.id, { color: c }); }}
+                      />
+                    </PopoverContent>
+                  </Popover>
+
+                  <input
+                    type="text"
+                    defaultValue={s.label}
+                    title="Clique para renomear este status"
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value && value !== s.label) handleUpdateStatusType(s.id, { label: value });
+                    }}
+                    className={cn(CELL_INPUT, "min-w-0 flex-1 text-xs font-semibold")}
+                  />
+
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {emUso} disputa{emUso === 1 ? "" : "s"}
+                  </span>
+
+                  <Button
                     type="button"
-                    onClick={() => handleOpenAddModal(col.label)}
-                    className="flex cursor-pointer items-center justify-center gap-1.5 border-t border-border p-2.5 text-[11px] font-semibold text-muted-foreground transition hover:bg-muted/60 hover:text-primary"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDeleteStatusType(s.id)}
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title="Excluir status"
                   >
-                    <Plus className="h-3.5 w-3.5" />
-                    Nova Disputa
-                  </button>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
               );
             })}
-
-            {/* Add new column */}
-            <div className="w-72 shrink-0">
-              <Popover open={isAddColumnOpen} onOpenChange={setIsAddColumnOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-border p-3 text-xs font-bold text-muted-foreground transition hover:border-primary/40 hover:bg-muted/40 hover:text-primary"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Nova Coluna
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-64 space-y-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">Nome do Novo Status</Label>
-                    <Input
-                      autoFocus
-                      value={newColumnLabel}
-                      onChange={(e) => setNewColumnLabel(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") handleConfirmAddColumn(); }}
-                      placeholder="Ex: Aguardando Recurso"
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
-                    <div className="grid grid-cols-9 gap-1.5">
-                      {STATUS_COLOR_PALETTE.map(c => (
-                        <button
-                          key={c}
-                          type="button"
-                          title={c}
-                          onClick={() => setNewColumnColor(c)}
-                          className={`h-5 w-5 rounded-full border-2 cursor-pointer transition ${newColumnColor === c ? "border-foreground" : "border-transparent"}`}
-                          style={{ backgroundColor: c }}
-                        />
-                      ))}
-                    </div>
-                    <input
-                      type="color"
-                      value={newColumnColor}
-                      onChange={(e) => setNewColumnColor(e.target.value)}
-                      className="h-8 w-full cursor-pointer rounded-md border border-input bg-transparent"
-                    />
-                  </div>
-                  <Button type="button" size="sm" onClick={handleConfirmAddColumn} disabled={!newColumnLabel.trim()} className="w-full">
-                    <Check className="h-3.5 w-3.5" />
-                    Criar Coluna
-                  </Button>
-                </PopoverContent>
-              </Popover>
-            </div>
           </div>
-        ) : (
-          /* MODE 2: MODELO PAINEL / DASHBOARD VISUAL */
-          <div className="bg-card border border-border rounded-xl overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                
-                {/* Header */}
-                <thead>
-                  <tr className="border-b border-border bg-muted text-[10.5px] uppercase tracking-wider font-bold text-muted-foreground select-none">
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-foreground transition" onClick={() => handleSort("status")}>
-                      <div className="flex items-center gap-1">
-                        <span>Status</span>
-                        <ArrowUpDown className="w-3 h-3 text-muted-foreground" />
-                      </div>
-                    </th>
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-foreground transition" onClick={() => handleSort("orgao")}>
-                      <div className="flex items-center gap-1">
-                        <span>Órgão Comprador</span>
-                        <ArrowUpDown className="w-3 h-3 text-muted-foreground" />
-                      </div>
-                    </th>
-                    <th className="py-3.5 px-4">UASG / Und</th>
-                    <th className="py-3.5 px-4">Nº Licitação</th>
-                    <th className="py-3.5 px-4">Portal</th>
-                    <th className="py-3.5 px-4">Link PNCP</th>
-                    <th className="py-3.5 px-4 min-w-[200px]">Produto / Objeto</th>
-                    <th className="py-3.5 px-4 text-center">Qtd / Und</th>
-                    <th className="py-3.5 px-4 text-right">Val. Estimado</th>
-                    <th className="py-3.5 px-4 text-right">Nosso Alvo</th>
-                    <th className="py-3.5 px-4 text-right">Preço Piso</th>
-                    <th className="py-3.5 px-4">Data / Hora Disputa</th>
-                    <th className="py-3.5 px-4 text-center">Ações</th>
-                  </tr>
-                </thead>
 
-                {/* Body */}
-                <tbody className="divide-y divide-border text-xs text-foreground bg-card">
-                  {filteredDisputas.length === 0 ? (
-                    <tr>
-                      <td colSpan={12} className="py-12 text-center text-muted-foreground">
-                        <FileSpreadsheet className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-                        <p className="font-bold text-sm text-muted-foreground">Nenhum registro encontrado</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredDisputas.map((row) => (
-                      <tr key={row.id} className="hover:bg-muted transition-colors group">
-                        
-                        <td className="py-3 px-4">
-                          <select
-                            value={row.status}
-                            onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
-                            style={getStatusBadgeStyle(row.status)}
-                            className="text-[11px] font-bold px-2.5 py-1 rounded-lg border focus:outline-none cursor-pointer transition"
-                          >
-                            {statusTypes.map(s => (
-                              <option key={s.id} value={s.label}>{s.label}</option>
-                            ))}
-                          </select>
-                        </td>
-
-                        <td className="py-3 px-4 font-semibold text-foreground max-w-[180px] truncate" title={row.orgao}>
-                          {row.orgao}
-                        </td>
-
-                        <td className="py-3 px-4 font-mono text-muted-foreground text-[11px]">
-                          {row.uasgUndCompradora}
-                        </td>
-
-                        <td className="py-3 px-4 font-mono font-bold text-primary text-[11px]">
-                          {row.numeroLicitacao}
-                        </td>
-
-                        <td className="py-3 px-4 text-foreground text-[11px]">
-                          <span className="bg-muted px-2 py-0.5 rounded border border-border text-[10.5px]">
-                            {row.portal}
-                          </span>
-                        </td>
-
-                        <td className="py-3 px-4">
-                          {row.linkPNCP ? (
-                            <a 
-                              href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 text-primary border border-primary/30 rounded-lg text-xs font-semibold hover:bg-primary/20 transition cursor-pointer"
-                              title={row.linkPNCP}
-                            >
-                              <ExternalLink className="w-3.5 h-3.5 shrink-0 text-primary" />
-                              <span>Abrir PNCP</span>
-                            </a>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">—</span>
-                          )}
-                        </td>
-
-                        <td className="py-3 px-4 max-w-[240px]">
-                          <p className="line-clamp-2 text-foreground leading-snug">{row.produtoItem}</p>
-                        </td>
-
-                        <td className="py-3 px-4 text-center font-mono text-[11px] text-foreground">
-                          {row.quantidade} <span className="text-[10px] text-muted-foreground">{row.unidadeMedida}</span>
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono text-foreground">
-                          {row.valorEstimadoItem > 0 
-                            ? row.valorEstimadoItem.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                            : "—"}
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono font-bold text-primary">
-                          {row.nossoValorAlvo > 0 
-                            ? row.nossoValorAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                            : "—"}
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono text-muted-foreground text-[11px]">
-                          {row.valorMinimoPiso > 0 
-                            ? row.valorMinimoPiso.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                            : "—"}
-                        </td>
-
-                        <td className="py-3 px-4 font-mono text-foreground text-[11px] whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            <Calendar className="w-3.5 h-3.5 text-primary shrink-0" />
-                            <span>{row.dataHoraDisputa}</span>
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-4 text-center">
-                          <div className="flex items-center justify-center gap-1.5 opacity-80 group-hover:opacity-100 transition">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleOpenEditModal(row)}
-                              className="h-auto w-auto rounded-lg bg-muted p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                              title="Editar linha"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDeleteRow(row.id)}
-                              className="h-auto w-auto rounded-lg bg-muted p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                              title="Excluir da planilha"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        </td>
-
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-
-              </table>
+          <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
+            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Criar novo status</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={newColumnColor}
+                onChange={(e) => setNewColumnColor(e.target.value)}
+                className="h-8 w-10 shrink-0 cursor-pointer rounded-md border border-input bg-transparent"
+                title="Escolher cor"
+              />
+              <Input
+                value={newColumnLabel}
+                onChange={(e) => setNewColumnLabel(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleConfirmAddColumn(); }}
+                placeholder="Ex: Aguardando recurso"
+                className="h-8 min-w-0 flex-1 text-xs"
+              />
+              <Button type="button" size="sm" onClick={handleConfirmAddColumn} disabled={!newColumnLabel.trim()} className="shrink-0">
+                <Plus className="h-3.5 w-3.5" />
+                Criar
+              </Button>
             </div>
+            <ColorSwatches color={newColumnColor} onChange={setNewColumnColor} />
           </div>
-        )}
+        </DialogContent>
+      </Dialog>
 
-      </div>
+      {/* Exclusão de status que ainda está em uso */}
+      <Dialog open={!!statusToDelete} onOpenChange={(open) => { if (!open) setStatusToDelete(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <AlertCircle className="h-4 w-4 text-warning" />
+              Excluir o status "{statusToDelete?.label}"
+            </DialogTitle>
+            <DialogDescription className="text-xs leading-relaxed">
+              {disputas.filter(r => r.status === statusToDelete?.label).length} disputa(s) usam este status.
+              Escolha para qual status elas devem ser movidas antes da exclusão.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Mover disputas para</Label>
+            <select
+              value={moveCardsToStatus}
+              onChange={(e) => setMoveCardsToStatus(e.target.value)}
+              className="w-full cursor-pointer rounded-lg border border-input bg-card px-3 py-2 text-xs font-semibold focus:outline-none"
+            >
+              {sortedStatusTypes.filter(s => s.id !== statusToDelete?.id).map(s => (
+                <option key={s.id} value={s.label}>{s.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setStatusToDelete(null)}>Cancelar</Button>
+            <Button type="button" variant="destructive" onClick={handleConfirmDeleteStatusType} disabled={!moveCardsToStatus}>
+              Mover e excluir
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
 
       {/* Add / Edit Form Modal with History Pull & Attachment AI Extractions */}
       {isModalOpen && (
