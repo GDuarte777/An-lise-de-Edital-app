@@ -32,6 +32,12 @@ ok("caminho de disputa vira sala",
 ok("landing nao e sala",
    !ehSalaDeDisputa("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/landing"));
 
+// Endereços reais, tirados da coleta feita em disputa ao vivo.
+ok("a sala real e reconhecida",
+   ehSalaDeDisputa("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=90013"));
+ok("acompanhamento pos-disputa NAO e sala",
+   !ehSalaDeDisputa("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/acompanhamento-compra?compra=90013"));
+
 console.log("\n[aprendizado]");
 let e = aprenderCom({}, "https://sso.acesso.gov.br/login");
 ok("nao aprende endereco do SSO", e.portal === undefined, e);

@@ -49,11 +49,27 @@ divergirem.
   importa mais — os campos dele não podem ser confundidos com o campo de lance do item,
   porque `querySelector` não atravessa shadow root.
 
+## A tela real (coleta em disputa ao vivo)
+
+O campo e o botão finalmente foram observados, e nenhum dos dois era o que se supunha:
+
+- **não existe `app-card-item`** na tela de disputa — os itens são `div` dentro de
+  `p-dataview`. Procurar por esse componente devolvia lista vazia;
+- o **campo de lance** é um `input` sem rótulo, sem `aria-label` e sem `formcontrolname`,
+  cujo **`id` é o número do item** (`2`, `3`). É a melhor âncora possível: o campo já diz
+  de que item ele é. Cuidado: `#2` não é seletor CSS válido, então em todo lugar se usa
+  `input[id]` + teste do valor;
+- o **botão** só se identifica pelo
+  `title="Clique aqui ou tecle enter para enviar seu lance."`;
+- **não há modal de confirmação**: o POST sai direto do clique, em ~86ms, para
+  `POST /comprasnet-disputa/v1/compras/<n>/itens/<item>/lances`;
+- o desfecho aparece num toast: **"Lance registrado com sucesso."**
+
 ## O que falta
 
-- **Campo e botão de lance numa disputa ao vivo.** Nunca vi um. O robô procura dentro do
-  cartão do item e **aprende** os seletores no primeiro lance que der certo, guardando
-  para as próximas. Se não achar, recusa operar em vez de improvisar.
+- Layouts que o portal ainda não mostrou. Fora das regras acima o robô cai na heurística
+  antiga e **aprende** os seletores no primeiro lance que der certo; se não achar nada,
+  recusa operar em vez de improvisar.
 
 ## Instalar
 

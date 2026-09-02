@@ -91,8 +91,74 @@
   const RE_ABERTO = /em\s+disputa|aberto|recebendo|em\s+andamento/i;
   const RE_FECHADO = /encerrad|finalizad|suspens|cancelad|homologad|adjudicad|julgad|deserto|fracassad|aguardando/i;
 
-  const cartoes = () =>
-    Array.prototype.filter.call(document.querySelectorAll("app-card-item"), visivel);
+  /**
+   * Campo de lance, como o portal REALMENTE entrega (coleta feita em disputa ao vivo):
+   * um `input` SEM formcontrolname, SEM aria-label, SEM placeholder e SEM rótulo — cujo
+   * `id` é o NÚMERO DO ITEM ("2", "3"). O campo já diz de que item ele é.
+   *
+   * Detalhe que sozinho quebrava tudo: `#2` NÃO é seletor CSS válido (id não pode
+   * começar com dígito), então `querySelector("#2")` lança erro. Por isso aqui se usa
+   * sempre `input[id]` + teste do valor, nunca `#` + id.
+   */
+  const ehNumeroDeItem = (v) => /^\d{1,5}$/.test(String(v == null ? "" : v));
+
+  function camposDeLance(raiz) {
+    return Array.prototype.filter.call((raiz || document).querySelectorAll("input[id]"), (el) => {
+      if (!ehNumeroDeItem(el.id)) return false;
+      const tipo = (el.getAttribute("type") || "text").toLowerCase();
+      return ["text", "number", "tel", ""].indexOf(tipo) !== -1 && visivel(el);
+    });
+  }
+
+  /**
+   * Botão de envio. Na disputa ao vivo ele não tem aria-label, nem id estável, nem
+   * classe própria — o que tem é
+   * `title="Clique aqui ou tecle enter para enviar seu lance."`. É essa a âncora.
+   */
+  const RE_BOTAO_LANCE = /enviar\s+(seu\s+)?lance|ofertar|registrar\s+lance/i;
+
+  function botaoDeLance(raiz) {
+    return Array.prototype.filter.call(
+      raiz.querySelectorAll('button,[role="button"],input[type="submit"]'),
+      (b) => {
+        if (!visivel(b)) return false;
+        const t = texto(b) + " " + (b.getAttribute("title") || "") + " " + (b.getAttribute("aria-label") || "");
+        return RE_BOTAO_LANCE.test(t) && !RE_BOTAO_NAO.test(t);
+      }
+    )[0] || null;
+  }
+
+  /**
+   * Bloco do item: o MENOR ancestral do campo que também contém o botão de envio, sem
+   * englobar o campo de outro item.
+   *
+   * Substitui o `app-card-item` que o robô procurava: na tela de disputa que o operador
+   * capturou esse componente NÃO EXISTE — os itens são `div` dentro de `p-dataview`.
+   * Procurar por ele devolvia lista vazia, e o robô não enxergava item nenhum.
+   */
+  const CONTAINERS = /^(p-dataview|app-disputa-fornecedor-itens|app-root|main|body|html)$/i;
+
+  function escopoDoCampo(campo) {
+    // O MAIOR bloco que ainda pertence só a este item — não o menor. O menor contém
+    // apenas o campo e o botão, e deixa os valores do item de fora: o robô achava os
+    // controles e não achava preço nenhum.
+    let n = campo.parentElement;
+    let melhor = null;
+    for (let i = 0; i < 14 && n; i++) {
+      if (CONTAINERS.test(n.tagName)) break;                  // passou do cartão do item
+      if (camposDeLance(n).some((c) => c !== campo)) break;    // englobaria outro item
+      if (botaoDeLance(n)) melhor = n;                         // ainda é só deste item
+      n = n.parentElement;
+    }
+    return melhor || campo.parentElement || campo;
+  }
+
+  const cartoes = () => {
+    const campos = camposDeLance(document);
+    if (campos.length) return campos.map(escopoDoCampo);
+    // Sem campo de lance na tela (disputa encerrada, ou layout antigo com app-card-item).
+    return Array.prototype.filter.call(document.querySelectorAll("app-card-item"), visivel);
+  };
 
   /**
    * Histórico de lances do item, no componente `app-todos-lances` — uma p-table com
@@ -110,7 +176,11 @@
   function lerCartao(cartao) {
     const t = texto(cartao);
     const fase = texto(cartao.querySelector("app-identificacao-e-fase-item")) || t.slice(0, 120);
-    const numero = (fase.match(/\b(\d{1,5})\b/) || [])[1] || (t.match(/\b(\d{1,5})\b/) || [])[1] || "";
+
+    const c = controles(cartao, estado.aprendido);
+    const numero = c.campo && ehNumeroDeItem(c.campo.id)
+      ? c.campo.id
+      : ((fase.match(/\b(\d{1,5})\b/) || [])[1] || (t.match(/\b(\d{1,5})\b/) || [])[1] || "");
 
     let melhor = valorRotulado(cartao, RE_MELHOR);
     if (melhor === null) melhor = melhorDoHistorico();
@@ -119,7 +189,11 @@
       melhor = todos.length ? Math.min.apply(null, todos) : null;
     }
 
-    const aberto = RE_ABERTO.test(fase) && !RE_FECHADO.test(fase);
+    // Fecha por evidência, não por texto. Quando a disputa encerrou, a coleta mostrou a
+    // tela SEM nenhum campo de lance: sem campo e botão habilitados não há lance a dar,
+    // e dizer "aberto" só faria o robô tentar e falhar.
+    const operavel = Boolean(c.campo && c.botao && habilitado(c.campo) && habilitado(c.botao));
+    const aberto = operavel && !RE_FECHADO.test(fase);
 
     return {
       numero: String(numero),
@@ -160,7 +234,11 @@
       } catch (e) { return null; }
     };
 
-    let campo = dentro(aprendido && aprendido.campo);
+    // 1) A regra que veio da disputa ao vivo: o id do input É o número do item.
+    let campo = camposDeLance(cartao)[0] || null;
+    // 2) Seletor aprendido num envio anterior.
+    if (!campo) campo = dentro(aprendido && aprendido.campo);
+    // 3) Heurística por rótulo, para telas que ainda não vimos.
     if (!campo) {
       const entradas = Array.prototype.filter.call(cartao.querySelectorAll("input"), (el) => {
         const tipo = (el.getAttribute("type") || "text").toLowerCase();
@@ -169,7 +247,8 @@
       campo = entradas.find((el) => RE_CAMPO.test(rotuloDe(el))) || (entradas.length === 1 ? entradas[0] : null);
     }
 
-    let botao = dentro(aprendido && aprendido.botao);
+    let botao = botaoDeLance(cartao);
+    if (!botao) botao = dentro(aprendido && aprendido.botao);
     if (!botao) {
       botao = Array.prototype.filter.call(
         cartao.querySelectorAll('button,[role="button"],input[type="submit"]'), (b) => visivel(b) && habilitado(b)
@@ -239,16 +318,43 @@
     el.click();
   }
 
-  const RE_CONFIRMA = /^(sim|confirmar|confirmo|ok|enviar|continuar)\b/i;
+  const RE_CONFIRMA = /^(sim|confirmar|confirmo|enviar|continuar)\b/i;
+  const RE_MODAL_LANCE = /lance|oferta|valor/i;
+  const RE_MODAL_NAO = /encerrad|aguarde|julgamento|sess[aã]o\s+p[uú]blica/i;
+
+  /**
+   * Só clica em modal que seja de fato confirmação de LANCE.
+   *
+   * A coleta em disputa ao vivo mostrou que não existe modal de confirmação de lance: o
+   * POST sai direto do clique, em ~86ms. O único diálogo que aparece é o de fim de
+   * sessão ("todos os itens estão encerrados"), com um botão "Ok" — e a versão anterior
+   * daqui aceitava "ok", ou seja, dispensaria sozinha um aviso que o operador precisa
+   * ver, achando que estava confirmando um lance.
+   */
   function botaoConfirmacao() {
-    const sel = '[role="dialog"],[role="alertdialog"],.p-dialog,.modal,.br-modal';
+    const sel = '[role="dialog"],[role="alertdialog"],.p-dialog,.modal,.br-modal,app-dialog-confirmacao';
     const modais = Array.prototype.filter.call(document.querySelectorAll(sel), visivel);
     for (let i = modais.length - 1; i >= 0; i--) {
+      const t = texto(modais[i]);
+      if (!RE_MODAL_LANCE.test(t) || RE_MODAL_NAO.test(t)) continue;
       const b = Array.prototype.filter.call(modais[i].querySelectorAll('button,[role="button"]'), (x) => visivel(x) && habilitado(x))
         .find((x) => RE_CONFIRMA.test(texto(x)));
       if (b) return b;
     }
     return null;
+  }
+
+  /**
+   * O portal avisa o desfecho num toast: "Lance registrado com sucesso." É a segunda
+   * testemunha do envio, além do POST — e a única que sobra se a resposta HTTP não for
+   * espelhada.
+   */
+  const RE_SUCESSO = /lance\s+registrado\s+com\s+sucesso|lance\s+registrado|lance\s+enviado\s+com\s+sucesso/i;
+  const RE_RECUSA = /erro|falha|n[aã]o\s+foi\s+poss[ií]vel|inv[aá]lid|recusad|menor\s+que|superior\s+a/i;
+
+  function avisoDoPortal() {
+    const el = document.querySelector("#toast-msgs") || document.querySelector("p-toast");
+    return el && visivel(el) ? texto(el) : "";
   }
 
   /* ------------------------------------------------------------ estado */
@@ -290,22 +396,54 @@
 
     estado.ultimaResposta = null;
     const marco = Date.now();
+    // O POST do lance carrega o número do item na URL:
+    // POST /comprasnet-disputa/v1/compras/{n}/itens/{item}/lances
+    // Conferir isso é o que impede a resposta de OUTRO item de contar como confirmação
+    // deste — numa disputa com vários itens abertos, é fácil acontecer.
+    const alvo = "/itens/" + item.numero + "/lances";
+
+    // O toast do lance ANTERIOR fica na tela. Sem guardar o texto de antes, ele contaria
+    // como confirmação deste envio — o robô diria "aceito" sem ter mandado nada, e
+    // seguiria baixando preço em cima de um lance que não existe.
+    const avisoAntes = avisoDoPortal();
     clicar(botao);
 
-    for (let i = 0; i < 20; i++) {
-      await espera(200);
-      const c = botaoConfirmacao();
-      if (c) { clicar(c); break; }
-      if (estado.ultimaResposta && estado.ultimaResposta.em >= marco) break;
-    }
+    const respostaDoItem = () => {
+      const r = estado.ultimaResposta;
+      if (!r || r.em < marco) return null;
+      if (item.numero && r.url && String(r.url).indexOf(alvo) === -1) return null;
+      return r;
+    };
 
     for (let i = 0; i < 30; i++) {
-      if (estado.ultimaResposta && estado.ultimaResposta.em >= marco) {
-        const r = estado.ultimaResposta;
+      const r = respostaDoItem();
+      if (r) {
         const aceito = r.status >= 200 && r.status < 300;
-        if (aceito && !estado.aprendido) guardarAprendido(seletorDe(campo), seletorDe(botao));
-        return { ok: true, aceito, confirmado: true, motivo: `HTTP ${r.status} · ${r.url.slice(-70)}` };
+        if (aceito && !estado.aprendido) {
+          // Só aprende seletor específico. "input" ou "button" pelados pegariam o
+          // controle errado no próximo item.
+          const sc = seletorDe(campo), sb = seletorDe(botao);
+          if (/[[#]/.test(sc) && /[[#]/.test(sb)) guardarAprendido(sc, sb);
+        }
+        return { ok: true, aceito, confirmado: true, motivo: `HTTP ${r.status} · ${String(r.url).slice(-70)}` };
       }
+
+      // A resposta HTTP é a testemunha principal, porque traz o número do item. O toast
+      // só entra depois de um tempo e só se MUDOU — nunca o que já estava na tela.
+      const aviso = i >= 5 ? avisoDoPortal() : "";
+      if (aviso && aviso === avisoAntes) {
+        await espera(200);
+        continue;
+      }
+      if (RE_SUCESSO.test(aviso)) {
+        return { ok: true, aceito: true, confirmado: true, motivo: "O portal respondeu: “Lance registrado com sucesso.”" };
+      }
+      if (RE_RECUSA.test(aviso)) {
+        return { ok: true, aceito: false, confirmado: true, motivo: "O portal recusou: " + aviso.slice(0, 140) };
+      }
+
+      const c = botaoConfirmacao();
+      if (c) clicar(c);
       await espera(200);
     }
 
@@ -325,6 +463,9 @@
     if (fc) return el.tagName.toLowerCase() + '[formcontrolname="' + fc + '"]';
     const al = el.getAttribute("aria-label");
     if (al) return el.tagName.toLowerCase() + '[aria-label="' + al + '"]';
+    // O botão de lance real não tem aria-label — tem title.
+    const ti = el.getAttribute("title");
+    if (ti) return el.tagName.toLowerCase() + '[title="' + ti + '"]';
     if (el.id && !/\d/.test(el.id)) return "#" + el.id;
     return el.tagName.toLowerCase();
   }
@@ -405,7 +546,7 @@
 
   window.__lancebot = {
     estado, ciclo, acharItem, cartoes, lerCartao, controles, enviarLance, melhorDoHistorico,
-    conexaoCaiu, registrar,
+    conexaoCaiu, registrar, botaoConfirmacao, avisoDoPortal, camposDeLance, botaoDeLance,
     ligar: (item, cfg) => { estado.item = String(item); estado.cfg = cfg; estado.ligado = true; registrar("sistema", `Robô ligado no item ${item}.`); void ciclo("inicio"); },
     parar: (motivo) => { estado.ligado = false; registrar("sistema", motivo || "Parado pelo operador."); }
   };

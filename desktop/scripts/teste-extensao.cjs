@@ -106,6 +106,73 @@ const PAGINA = `<!doctype html>
 </script>
 </body></html>`;
 
+/**
+ * A tela de disputa REAL, como a coleta do operador mostrou em fase de lances:
+ *
+ *  - NÃO existe `app-card-item` — os itens são `div` dentro de `p-dataview`;
+ *  - o campo de lance é um `input` sem rótulo, sem aria-label e sem formcontrolname,
+ *    cujo `id` é o NÚMERO DO ITEM ("2", "3") — e `#2` nem seletor CSS válido é;
+ *  - o botão só se identifica pelo `title="Clique aqui ou tecle enter para enviar
+ *    seu lance."`;
+ *  - o desfecho aparece num toast: "Lance registrado com sucesso.";
+ *  - não há modal de confirmação: o POST sai direto do clique.
+ */
+const TELA_REAL = `<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Compras.gov.br</title></head><body>
+<app-root><main><div><div>
+ <app-cabecalho-disputa-fornecedor><app-cabecalho-compra>
+   <app-situacao-conexao-sistema><span id="conexao"></span></app-situacao-conexao-sistema>
+   <app-tempo-restante><div><label>Tempo restante para envio de lances:</label><span>00:02:41</span></div></app-tempo-restante>
+ </app-cabecalho-compra></app-cabecalho-disputa-fornecedor>
+
+ <app-disputa-fornecedor-itens><div><p-dataview><div>
+   <div>
+     <div><span>Valor do lance (unitário)</span><span>R$ 1.500,0000</span></div>
+     <div><span>Seu lance</span><span>R$ 1.700,0000</span></div>
+     <div><div><div>
+       <input id="2" maxlength="15" class="ng-tns-c1-1 p-component p-inputtext" autocomplete="off">
+       <button type="button" title="Clique aqui ou tecle enter para enviar seu lance." class="br-button p-2">Enviar lance</button>
+     </div></div></div>
+   </div>
+   <div>
+     <div><span>Valor do lance (unitário)</span><span>R$ 2.000,0000</span></div>
+     <div><div><div>
+       <input id="3" maxlength="15" class="ng-tns-c1-2 p-component p-inputtext" autocomplete="off">
+       <button type="button" title="Clique aqui ou tecle enter para enviar seu lance." class="br-button p-2">Enviar lance</button>
+     </div></div></div>
+   </div>
+ </div></p-dataview></div></app-disputa-fornecedor-itens>
+</div></div></main></app-root>
+
+<div id="toast-msgs"></div>
+
+<div id="fim" role="dialog" style="display:none"><app-dialog-confirmacao>
+  <span>A sessão pública foi aberta e todos os itens estão encerrados. Aguarde o início da etapa de julgamento de propostas.</span>
+  <button type="button">Ok</button>
+</app-dialog-confirmacao></div>
+
+<script>
+  // Mascara de QUATRO casas, como o portal usa em valor unitario.
+  ["2","3"].forEach(function (id) {
+    var c = document.getElementById(id);
+    c.addEventListener("input", function () {
+      var d = c.value.replace(/\\D/g, "").slice(0, 12);
+      c.value = d ? (Number(d) / 10000).toLocaleString("pt-BR", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "";
+    });
+    c.nextElementSibling.addEventListener("click", function () {
+      var x = new XMLHttpRequest();
+      x.open("POST", "/comprasnet-disputa/v1/compras/900/itens/" + id + "/lances");
+      x.onload = function () {
+        document.getElementById("toast-msgs").innerHTML =
+          '<p-toastitem><div><div>Lance registrado com sucesso.</div></div></p-toastitem>';
+      };
+      x.send(JSON.stringify({ item: id, valor: c.value }));
+    });
+  });
+  window.__abrirFimDeSessao = function () { document.getElementById("fim").style.display = "block"; };
+</script>
+</body></html>`;
+
 let recebido = null;
 function servidor() {
   return new Promise((r) => {
@@ -114,7 +181,8 @@ function servidor() {
         let c = ""; req.on("data", (d) => (c += d));
         return req.on("end", () => { recebido = c; res.writeHead(200, { "Content-Type": "application/json" }); res.end('{"ok":true}'); });
       }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(PAGINA);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(req.url === "/real" ? TELA_REAL : PAGINA);
     });
     s.listen(0, "127.0.0.1", () => r(s));
   });
@@ -291,6 +359,52 @@ app.whenReady().then(async () => {
     })()`);
     ok("piso alto some com a previsao e explica o motivo",
        trava.previsto === "\u2014" && /[Mm]argem/.test(trava.erro), trava);
+
+    console.log("\n[10] A TELA REAL da disputa (coleta em fase de lances)");
+    await janela.loadURL(`http://127.0.0.1:${s.address().port}/real`);
+    await rodar(ler("pagina.js"));
+    await rodar(ler("margem.js"));
+    await rodar(ler("conteudo.js"));
+
+    // Sem app-card-item na tela: o robô tinha que enxergar os itens assim mesmo.
+    ok("nao existe app-card-item nesta tela",
+       (await rodar('document.querySelectorAll("app-card-item").length')) === 0);
+    ok("mesmo assim achou os 2 itens", (await rodar("__lancebot.cartoes().length")) === 2);
+
+    const r2 = await rodar('(() => { const i = __lancebot.acharItem("2"); return {n:i.numero, m:i.melhorValor, meu:i.meuValor, a:i.aberto}; })()');
+    ok("item 2 identificado pelo id do campo", r2.n === "2", r2);
+    ok("le 1.500,0000 sem truncar", r2.m === 1500, r2);
+    ok("le o proprio lance (1.700,0000)", r2.meu === 1700, r2);
+    ok("item aberto", r2.a === true, r2);
+
+    ok("acha o campo pelo id numerico",
+       (await rodar('(() => { const i = __lancebot.acharItem("2"); return __lancebot.controles(i.cartao, null).campo.id; })()')) === "2");
+    ok("acha o botao pelo title",
+       (await rodar('(() => { const i = __lancebot.acharItem("2"); return __lancebot.controles(i.cartao, null).botao.getAttribute("title"); })()'))
+         .indexOf("enviar seu lance") !== -1);
+
+    // O escopo do item nao pode vazar para o vizinho.
+    ok("o item 3 usa o campo 3, nao o 2",
+       (await rodar('(() => { const i = __lancebot.acharItem("3"); return __lancebot.controles(i.cartao, null).campo.id; })()')) === "3");
+
+    console.log("\n[11] Envio real: valor certo, item certo, confirmacao certa");
+    recebido = null;
+    const envReal = await rodar('(async () => { const i = __lancebot.acharItem("2"); return await __lancebot.enviarLance(i, 1490.5); })()');
+    ok("envio confirmado", envReal.ok === true && envReal.confirmado === true, envReal);
+    ok("lance aceito", envReal.aceito === true, envReal.motivo);
+    ok("chegou no item 2, com 4 casas", recebido === '{"item":"2","valor":"1.490,5000"}', recebido);
+
+    recebido = null;
+    const env3 = await rodar('(async () => { const i = __lancebot.acharItem("3"); return await __lancebot.enviarLance(i, 1980.25); })()');
+    ok("lance do item 3 vai para o item 3", recebido === '{"item":"3","valor":"1.980,2500"}', recebido);
+    ok("item 3 aceito", env3.aceito === true, env3.motivo);
+
+    console.log("\n[12] O aviso de fim de sessao NAO e clicado como se fosse lance");
+    await rodar("window.__abrirFimDeSessao()");
+    ok("modal de fim de sessao esta na tela",
+       (await rodar('document.getElementById("fim").style.display')) === "block");
+    ok("o robo NAO trata o 'Ok' dele como confirmacao de lance",
+       (await rodar("__lancebot.botaoConfirmacao() === null")) === true);
 
   } catch (e) {
     console.log("  ❌ excecao:", e && e.message); falhas++;

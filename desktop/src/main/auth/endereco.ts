@@ -34,11 +34,24 @@ export const FONTE_REGEX_HOST =
 
 const REGEX_HOST = new RegExp(FONTE_REGEX_HOST.replace(/\\\\/g, "\\"), "i");
 
-/** Primeira visita apenas. Depois disso quem manda é o endereço aprendido. */
+/**
+ * Primeira visita apenas. Depois disso quem manda é o endereço aprendido.
+ *
+ * Os dois primeiros vieram de uma coleta feita pelo operador DENTRO de uma disputa em
+ * fase de lances — não são chute. A sala é
+ * `/comprasnet-web/seguro/fornecedor/disputa?compra=<n>`, e depois de encerrada o portal
+ * leva para `/acompanhamento-compra?compra=<n>`.
+ */
 export const SEMENTES_PORTAL = [
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa",
   "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/landing",
   "https://www.gov.br/compras/pt-br/"
 ];
+
+/** Sala de uma compra específica, no formato que a coleta mostrou. */
+export function urlDaSala(pregaoId: string): string {
+  return `https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=${encodeURIComponent(pregaoId)}`;
+}
 
 export const URL_LOGIN_SSO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
 
@@ -65,6 +78,9 @@ export function ehSalaDeDisputa(url: string): boolean {
   if (!ehEnderecoDoPortal(url)) return false;
   try {
     const u = new URL(url);
+    // "acompanhamento-compra" é para onde o portal leva DEPOIS de a disputa encerrar:
+    // não é sala de lances, e voltar para lá não devolve o robô à disputa.
+    if (/acompanhamento/i.test(u.pathname)) return false;
     return /disputa|sala|sessao|sessão|lance|prega|pregao/i.test(u.pathname + u.search);
   } catch {
     return false;
