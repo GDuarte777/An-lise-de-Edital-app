@@ -79,21 +79,94 @@ async function loadPdfParse(): Promise<PdfExtractor | null> {
  */
 const MAX_DOCUMENT_CHARS = Number(process.env.MAX_DOCUMENT_CHARS || 400_000);
 
+/**
+ * Sinais de que um trecho contém a planilha de itens/lotes do edital.
+ *
+ * O corte anterior era cego: mantinha começo e fim e jogava fora o miolo. Só que
+ * é justamente no miolo que ficam o Termo de Referência e as tabelas de itens —
+ * em edital grande, a plataforma descartava exatamente a parte que precisava ler
+ * e depois relatava um item só. Agora o miolo é selecionado por relevância.
+ */
+const SINAIS_DE_ITENS = [
+  /\bitem\s*n?[ºo°]?\s*\d+/gi,
+  /\blote\s*n?[ºo°]?\s*\d+/gi,
+  /\bquantidade\b/gi,
+  /\bunidade\s+de\s+medida\b/gi,
+  /\bvalor\s+unit[áa]rio\b/gi,
+  /\bplanilha\b/gi,
+  /termo\s+de\s+refer[êe]ncia/gi,
+  /\banexo\s+[ivx]+\b/gi,
+  /\bespecifica[çc][õo]es?\s+t[ée]cnicas?\b/gi,
+  /\bdescri[çc][ãa]o\s+do\s+objeto\b/gi
+];
+
+function pontuarTrecho(trecho: string): number {
+  let pontos = 0;
+  for (const padrao of SINAIS_DE_ITENS) {
+    const encontrados = trecho.match(padrao);
+    if (encontrados) pontos += encontrados.length;
+  }
+  return pontos;
+}
+
+/**
+ * Reduz um documento ao teto de caracteres preservando o que importa.
+ *
+ * Mantém sempre o começo (identificação, objeto, valor) e o fim (anexos), e
+ * preenche o restante do orçamento com os trechos do miolo que mais parecem
+ * conter itens, remontando tudo na ordem original do documento.
+ */
 function capDocumentText(text: string, label: string): string {
   const full = String(text || "");
   if (full.length <= MAX_DOCUMENT_CHARS) return full;
 
-  const headChars = Math.floor(MAX_DOCUMENT_CHARS * 0.65);
-  const tailChars = MAX_DOCUMENT_CHARS - headChars;
-  const omitted = full.length - MAX_DOCUMENT_CHARS;
-  console.log(`[PDF Parser] ${label}: ${full.length} caracteres excedem o teto de ${MAX_DOCUMENT_CHARS}; ${omitted} caracteres do miolo foram elididos.`);
+  const TAMANHO_TRECHO = 8_000;
+  const trechos: string[] = [];
+  for (let i = 0; i < full.length; i += TAMANHO_TRECHO) {
+    trechos.push(full.slice(i, i + TAMANHO_TRECHO));
+  }
 
-  return (
-    full.slice(0, headChars) +
-    `\n\n[... ${omitted} caracteres do miolo deste documento foram omitidos por limite de tamanho. ` +
-    `Se a informação procurada estiver nesta parte, analise o trecho correspondente separadamente. ...]\n\n` +
-    full.slice(-tailChars)
+  const orcamentoTrechos = Math.floor(MAX_DOCUMENT_CHARS / TAMANHO_TRECHO);
+  // Cabeça e cauda são sempre preservadas.
+  const nCabeca = Math.min(trechos.length, Math.floor(orcamentoTrechos * 0.35));
+  const nCauda = Math.min(trechos.length - nCabeca, Math.floor(orcamentoTrechos * 0.15));
+
+  const selecionados = new Set<number>();
+  for (let i = 0; i < nCabeca; i++) selecionados.add(i);
+  for (let i = trechos.length - nCauda; i < trechos.length; i++) selecionados.add(i);
+
+  // O que sobrar do orçamento vai para os trechos do miolo com mais sinais de
+  // tabela de itens.
+  const candidatos = trechos
+    .map((trecho, indice) => ({ indice, pontos: pontuarTrecho(trecho) }))
+    .filter(c => !selecionados.has(c.indice) && c.pontos > 0)
+    .sort((a, b) => b.pontos - a.pontos);
+
+  for (const candidato of candidatos) {
+    if (selecionados.size >= orcamentoTrechos) break;
+    selecionados.add(candidato.indice);
+  }
+
+  const ordenados = Array.from(selecionados).sort((a, b) => a - b);
+  let saida = "";
+  let anterior = -1;
+  let omitidos = 0;
+
+  for (const indice of ordenados) {
+    if (anterior >= 0 && indice > anterior + 1) {
+      const pulados = indice - anterior - 1;
+      omitidos += pulados * TAMANHO_TRECHO;
+      saida += `\n\n[... trecho intermediário omitido por limite de tamanho ...]\n\n`;
+    }
+    saida += trechos[indice];
+    anterior = indice;
+  }
+
+  console.log(
+    `[PDF Parser] ${label}: ${full.length} caracteres excedem o teto de ${MAX_DOCUMENT_CHARS}; ` +
+    `mantidos ${ordenados.length}/${trechos.length} trechos (priorizando tabelas de itens), ~${omitidos} caracteres omitidos.`
   );
+  return saida;
 }
 
 /** Extrai o texto de um PDF. Devolve "" se o extrator não estiver disponível. */
@@ -2650,13 +2723,34 @@ A sua análise e o relatório markdown GERADOS DEVEM FOCAR EXCLUSIVAMENTE nos it
 Você é um Analista de Licitações Públicas sênior, inteligente, moderno e altamente focado em estratégia de mercado e mitigação de riscos.
 Sua missão é ler o edital/termo de referência anexado e gerar uma análise executiva completa no campo "reportMarkdown".
 
-⚠️ REGRAS CRÍTICAS E INVIOLAVEIS:
-1. NUNCA retorne campos vazios, nulos ou ausentes. Se um dado não estiver no edital, use o valor padrão: "Não especificado no edital".
-2. SEMPRE retorne um JSON válido, completo, sem truncar. Todos os campos marcados como required DEVEM estar presentes.
-3. O campo "itensEdital" DEVE conter pelo menos 1 item. Se o edital não listar itens separados, crie 1 item com a descrição do objeto principal.
-4. O campo "documentosExigidos" DEVE conter pelo menos as certidões básicas (Receita Federal, FGTS, CNDT, Estadual, Municipal).
-5. "pontosPositivos" e "pontosAlerta" DEVEM ter pelo menos 3 itens cada.
-6. Nunca use valores literáteis como "undefined", "null", "N/A", "n/a" — use a descrição real ou "Não especificado no edital".
+⚠️ REGRAS CRÍTICAS E INVIOLÁVEIS:
+
+1. **FIDELIDADE ABSOLUTA AO EDITAL. NUNCA INVENTE.**
+   - Todo dado que você retornar tem que estar escrito no documento anexado.
+   - Se uma informação não estiver no edital, escreva exatamente "Não especificado no edital".
+   - É MUITO melhor devolver "Não especificado no edital" do que um valor plausível porém inventado. O usuário toma decisão de negócio e monta proposta com base nisso: um dado inventado causa prejuízo real.
+   - Não complete listas para "ficar bonito". Uma lista com 1 item verdadeiro vale mais que uma com 5, sendo 4 supostos.
+
+2. **ITENS E LOTES — ENUMERE TODOS, SEM EXCEÇÃO.**
+   - Percorra o edital inteiro, incluindo ANEXOS, TERMO DE REFERÊNCIA e PLANILHAS/TABELAS de itens.
+   - "itensEdital" DEVE conter TODOS os itens/lotes do certame, um por um, na ordem do edital. Se o edital tem 47 itens, retorne os 47. Se tem 3 lotes com subitens, retorne cada subitem.
+   - NUNCA agrupe itens diferentes em um só, e NUNCA repita a mesma descrição em itens diferentes: cada item tem a SUA descrição, a SUA quantidade e a SUA unidade, exatamente como na planilha.
+   - Copie a quantidade e a unidade exatamente como estão. Se a quantidade não estiver legível, use 0 — não chute 1.
+   - Só use uma lista com 1 item quando o edital realmente tiver objeto único e indivisível.
+
+3. **VALORES — DISTINGA UNITÁRIO DE TOTAL.**
+   - Em "valorEstimado" de cada item, informe o valor UNITÁRIO daquele item.
+   - Em "viabilidadeFinanceira.valorEstimado", informe o valor TOTAL/GLOBAL estimado da contratação, deixando explícito que é o total (ex.: "Valor total estimado: R$ 250.000,00").
+   - Jamais confunda com multas, garantias, faturamento mínimo ou índices contábeis: esses números NÃO são o valor estimado.
+   - Se o edital não trouxer valor estimado (contratação com orçamento sigiloso, por exemplo), escreva "Orçamento sigiloso / não divulgado no edital".
+
+4. **DOCUMENTOS EXIGIDOS — SOMENTE OS QUE O EDITAL EXIGE.**
+   - Liste apenas as certidões e documentos efetivamente citados no instrumento convocatório, com a redação do edital.
+   - NÃO inclua as certidões "de praxe" por suposição. Se o edital não pede certidão estadual, ela não entra na lista.
+
+5. SEMPRE retorne um JSON válido e completo, sem truncar.
+
+6. Nunca use os literais "undefined", "null", "N/A" ou "n/a" — use a informação real ou "Não especificado no edital".
 
 O campo "reportMarkdown" DEVE SEGUIR RIGOROSAMENTE E EXATAMENTE ESTE MODELO DE RESPOSTA FORMATADO EM MARKDOWN (substituindo os colchetes com os dados reais do edital):
 
@@ -2858,114 +2952,150 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
         parsedData = parseEditalLocally(textForLocal.length > 20 ? textForLocal : "Edital de Licitação");
       }
 
-      // Sanitize and guarantee all required fields for frontend UI
-      if (!Array.isArray(parsedData.pontosPositivos) || parsedData.pontosPositivos.length === 0) {
-        parsedData.pontosPositivos = ["Processo licitório formalizado conforme a Lei 14.133/21.", "Presença de especificações técnicas no Termo de Referência.", "Licitação aberta a empresas de pequeno porte (ME/EPP)."];
-      } else {
-        parsedData.pontosPositivos = parsedData.pontosPositivos.filter((v: any) => typeof v === "string" && v.trim() && v.trim() !== "null" && v.trim() !== "undefined");
-      }
-      if (!Array.isArray(parsedData.pontosAlerta) || parsedData.pontosAlerta.length === 0) {
-        parsedData.pontosAlerta = ["Verifique os prazos de validade das certidões negativas antes da data do certame.", "Atente-se às exigências de capacidade técnica e atestados.", "Confirme prazo de entrega e penalidades por atraso no Termo de Referência."];
-      } else {
-        parsedData.pontosAlerta = parsedData.pontosAlerta.filter((v: any) => typeof v === "string" && v.trim() && v.trim() !== "null" && v.trim() !== "undefined");
-      }
-      if (!Array.isArray(parsedData.documentosExigidos) || parsedData.documentosExigidos.length === 0) {
-        parsedData.documentosExigidos = ["Certidão Conjunta de Tributos Federais e Dívida Ativa da União (SRF/PGFN)", "Certidão de Regularidade do FGTS (CRF/CEF)", "Certidão Negativa de Débitos Trabalhistas (CNDT)", "Certidão Negativa de Débitos Estaduais (SEFAZ)", "Certidão Negativa de Débitos Municipais", "Contrato Social Consolidado ou Estatuto Social"];
-      } else {
-        parsedData.documentosExigidos = parsedData.documentosExigidos.filter((v: any) => typeof v === "string" && v.trim() && v.trim() !== "null" && v.trim() !== "undefined");
-      }
-      if (!Array.isArray(parsedData.itensEdital) || parsedData.itensEdital.length === 0) {
+      /**
+       * Normalização do resultado da IA.
+       *
+       * ⚠️ Esta etapa NÃO INVENTA MAIS NADA. A versão anterior preenchia todo
+       * campo ausente com conteúdo plausível: três "pontos positivos"
+       * genéricos, seis certidões "de praxe" como se fossem exigidas por
+       * aquele edital, modalidade caindo em "Pregão Eletrônico", garantia em
+       * "12 meses" e — o mais grave — o parecer final caindo em "Vale a pena
+       * participar!". Eram dados errados apresentados ao usuário com a mesma
+       * cara de dados lidos do edital.
+       *
+       * Agora um campo que a IA não conseguiu extrair fica vazio ou marcado
+       * como não identificado, e a interface mostra isso como tal.
+       */
+      const NAO_IDENTIFICADO = "Não identificado no edital";
+
+      /** Aceita apenas texto real; descarta os literais de "vazio". */
+      const textoOuNulo = (valor: any): string => {
+        const t = String(valor ?? "").trim();
+        if (!t) return "";
+        const baixo = t.toLowerCase();
+        if (baixo === "null" || baixo === "undefined" || baixo === "n/a" || baixo === "na") return "";
+        return t;
+      };
+
+      /**
+       * Reconhece os textos de preenchimento ("Não especificado no edital" e
+       * variantes) que a IA devolve quando não achou a informação.
+       *
+       * A checagem exige que a frase COMECE com a negativa, para não confundir
+       * com respostas informativas legítimas: "Orçamento sigiloso / não
+       * divulgado no edital" é um dado de verdade sobre o certame, não uma
+       * falha de leitura.
+       */
+      const ehPlaceholder = (valor: string): boolean =>
+        /^n[ãa]o\s+(especificad|identificad|informad|localizad|consta|h[áa]\b)/i.test(valor.trim());
+
+      const listaDeTextos = (valor: any): string[] =>
+        Array.isArray(valor)
+          ? valor.map(textoOuNulo).filter(t => Boolean(t) && !ehPlaceholder(t))
+          : [];
+
+      parsedData.pontosPositivos = listaDeTextos(parsedData.pontosPositivos);
+      parsedData.pontosAlerta = listaDeTextos(parsedData.pontosAlerta);
+      parsedData.documentosExigidos = listaDeTextos(parsedData.documentosExigidos);
+
+      if (!Array.isArray(parsedData.itensEdital)) {
         parsedData.itensEdital = [];
       } else {
-        // Sanitize each item: ensure required fields present
+        const vistos = new Set<string>();
         parsedData.itensEdital = parsedData.itensEdital
           .filter((it: any) => it && typeof it === "object")
-          .map((it: any, idx: number) => ({
-            numero: Number(it.numero) || idx + 1,
-            descricao: (it.descricao || it.descrição || parsedData.descricaoProduto || "Item da Licitação").toString().trim(),
-            quantidade: Number(it.quantidade) || 1,
-            unidade: (it.unidade || "Unidade").toString().trim(),
-            valorEstimado: it.valorEstimado ? it.valorEstimado.toString().trim() : "Não especificado"
-          }))
-          .slice(0, 100); // safety limit
+          .map((it: any, idx: number) => {
+            // A descrição do item NÃO herda mais o objeto geral da licitação:
+            // era isso que fazia todos os itens aparecerem com o mesmo texto,
+            // exatamente o "dados duplicados" relatado.
+            const descricao = textoOuNulo(it.descricao ?? it.descrição) || NAO_IDENTIFICADO;
+            // Quantidade ausente vira 0, não 1: um número inventado aqui vira
+            // preço de proposta errado lá na frente.
+            const quantidadeBruta = Number(it.quantidade);
+            return {
+              numero: Number.isFinite(Number(it.numero)) ? Number(it.numero) : idx + 1,
+              descricao,
+              quantidade: Number.isFinite(quantidadeBruta) && quantidadeBruta >= 0 ? quantidadeBruta : 0,
+              unidade: textoOuNulo(it.unidade) || "Não especificado",
+              valorEstimado: textoOuNulo(it.valorEstimado) || "Não especificado no edital"
+            };
+          })
+          // Remove repetições exatas que a IA às vezes emite ao percorrer tabelas.
+          .filter((it: any) => {
+            const chave = `${it.numero}|${it.descricao}|${it.quantidade}|${it.unidade}`;
+            if (vistos.has(chave)) return false;
+            vistos.add(chave);
+            return true;
+          })
+          .slice(0, 500); // editais grandes chegam a centenas de itens
       }
-      
-      if (!parsedData.identificacaoCertame || typeof parsedData.identificacaoCertame !== "object") {
-        parsedData.identificacaoCertame = {
-          orgaoComprador: "Órgão Licitante",
-          modalidade: "Pregão Eletrônico",
-          identificacaoNumerica: "Edital / Processo Licitório",
-          dataHoraSessao: "A definir em edital"
-        };
-      } else {
-        // Sanitize nested fields
-        const ic = parsedData.identificacaoCertame;
-        ic.orgaoComprador = ic.orgaoComprador && ic.orgaoComprador !== "null" ? ic.orgaoComprador : "Órgão Licitante";
-        ic.modalidade = ic.modalidade && ic.modalidade !== "null" ? ic.modalidade : "Pregão Eletrônico";
-        ic.identificacaoNumerica = ic.identificacaoNumerica && ic.identificacaoNumerica !== "null" ? ic.identificacaoNumerica : "Não especificado";
-        ic.dataHoraSessao = ic.dataHoraSessao && ic.dataHoraSessao !== "null" ? ic.dataHoraSessao : "A definir em edital";
-      }
-      if (!parsedData.especificacoesTecnicas || typeof parsedData.especificacoesTecnicas !== "object") {
-        parsedData.especificacoesTecnicas = {
-          exigenciasFisicas: [],
-          pegadinhasOcultas: []
-        };
-      } else {
-        if (!Array.isArray(parsedData.especificacoesTecnicas.exigenciasFisicas)) parsedData.especificacoesTecnicas.exigenciasFisicas = [];
-        if (!Array.isArray(parsedData.especificacoesTecnicas.pegadinhasOcultas)) parsedData.especificacoesTecnicas.pegadinhasOcultas = [];
-      }
-      if (!parsedData.burocraciaBarreiras || typeof parsedData.burocraciaBarreiras !== "object") {
-        parsedData.burocraciaBarreiras = {
-          exigeAmostra: "Não especificado",
-          exigeCartaSolidariedade: "Não especificado",
-          exigenciaGarantia: "Não especificado",
-          consorcioSubcontratacao: "Não especificado"
-        };
-      } else {
-        const bb = parsedData.burocraciaBarreiras;
-        bb.exigeAmostra = bb.exigeAmostra && bb.exigeAmostra !== "null" ? bb.exigeAmostra : "Não especificado";
-        bb.exigeCartaSolidariedade = bb.exigeCartaSolidariedade && bb.exigeCartaSolidariedade !== "null" ? bb.exigeCartaSolidariedade : "Não especificado";
-        bb.exigenciaGarantia = bb.exigenciaGarantia && bb.exigenciaGarantia !== "null" ? bb.exigenciaGarantia : "Não especificado";
-        bb.consorcioSubcontratacao = bb.consorcioSubcontratacao && bb.consorcioSubcontratacao !== "null" ? bb.consorcioSubcontratacao : "Não especificado";
-      }
-      if (!parsedData.logisticaCronograma || typeof parsedData.logisticaCronograma !== "object") {
-        parsedData.logisticaCronograma = {
-          prazoEntregaReal: parsedData.prazoEntrega || "Conforme edital",
-          classificacaoPrazo: "Aceitável",
-          enderecoEntrega: "Conforme edital",
-          prazoGarantia: "12 meses"
-        };
-      } else {
-        const lc = parsedData.logisticaCronograma;
-        lc.prazoEntregaReal = lc.prazoEntregaReal && lc.prazoEntregaReal !== "null" ? lc.prazoEntregaReal : (parsedData.prazoEntrega || "Conforme edital");
-        lc.classificacaoPrazo = lc.classificacaoPrazo && lc.classificacaoPrazo !== "null" ? lc.classificacaoPrazo : "Aceitável";
-        lc.enderecoEntrega = lc.enderecoEntrega && lc.enderecoEntrega !== "null" ? lc.enderecoEntrega : "Conforme edital";
-        lc.prazoGarantia = lc.prazoGarantia && lc.prazoGarantia !== "null" ? lc.prazoGarantia : "12 meses";
-      }
-      if (!parsedData.viabilidadeFinanceira || typeof parsedData.viabilidadeFinanceira !== "object") {
-        parsedData.viabilidadeFinanceira = {
-          valorEstimado: "Conforme edital",
-          distorcoesPreco: "Sem distorções aparentes",
-          prazoPagamento: parsedData.prazoPagamento || "30 dias"
-        };
-      } else {
-        const vf = parsedData.viabilidadeFinanceira;
-        vf.valorEstimado = vf.valorEstimado && vf.valorEstimado !== "null" ? vf.valorEstimado : "Conforme edital";
-        vf.distorcoesPreco = vf.distorcoesPreco && vf.distorcoesPreco !== "null" ? vf.distorcoesPreco : "Não especificado";
-        vf.prazoPagamento = vf.prazoPagamento && vf.prazoPagamento !== "null" ? vf.prazoPagamento : (parsedData.prazoPagamento || "30 dias");
-      }
-      if (!parsedData.parecerFinal || typeof parsedData.parecerFinal !== "object") {
-        parsedData.parecerFinal = {
-          veredito: "Vale a pena participar!",
-          grauRisco: "Médio",
-          estrategiaLances: "Acompanhar a disputa de lances com base na planilha de custos."
-        };
-      } else {
-        const pf = parsedData.parecerFinal;
-        pf.veredito = pf.veredito && pf.veredito !== "null" ? pf.veredito : "Vale a pena participar!";
-        pf.grauRisco = pf.grauRisco && pf.grauRisco !== "null" ? pf.grauRisco : "Médio";
-        pf.estrategiaLances = pf.estrategiaLances && pf.estrategiaLances !== "null" ? pf.estrategiaLances : "Acompanhar a disputa de lances com base na planilha de custos.";
-      }
+
+      const objetoOuNulo = (valor: any) => (valor && typeof valor === "object" ? valor : {});
+
+      const ic = objetoOuNulo(parsedData.identificacaoCertame);
+      parsedData.identificacaoCertame = {
+        ...ic,
+        orgaoComprador: textoOuNulo(ic.orgaoComprador) || NAO_IDENTIFICADO,
+        // Sem cair em "Pregão Eletrônico": uma dispensa exibida como pregão
+        // muda o entendimento do usuário sobre o rito do certame.
+        modalidade: textoOuNulo(ic.modalidade) || NAO_IDENTIFICADO,
+        identificacaoNumerica: textoOuNulo(ic.identificacaoNumerica) || NAO_IDENTIFICADO,
+        dataHoraSessao: textoOuNulo(ic.dataHoraSessao) || NAO_IDENTIFICADO
+      };
+
+      const et = objetoOuNulo(parsedData.especificacoesTecnicas);
+      parsedData.especificacoesTecnicas = {
+        exigenciasFisicas: listaDeTextos(et.exigenciasFisicas),
+        pegadinhasOcultas: listaDeTextos(et.pegadinhasOcultas)
+      };
+
+      const bb = objetoOuNulo(parsedData.burocraciaBarreiras);
+      parsedData.burocraciaBarreiras = {
+        exigeAmostra: textoOuNulo(bb.exigeAmostra) || NAO_IDENTIFICADO,
+        exigeCartaSolidariedade: textoOuNulo(bb.exigeCartaSolidariedade) || NAO_IDENTIFICADO,
+        exigenciaGarantia: textoOuNulo(bb.exigenciaGarantia) || NAO_IDENTIFICADO,
+        consorcioSubcontratacao: textoOuNulo(bb.consorcioSubcontratacao) || NAO_IDENTIFICADO
+      };
+
+      const lc = objetoOuNulo(parsedData.logisticaCronograma);
+      parsedData.logisticaCronograma = {
+        prazoEntregaReal: textoOuNulo(lc.prazoEntregaReal) || textoOuNulo(parsedData.prazoEntrega) || NAO_IDENTIFICADO,
+        classificacaoPrazo: textoOuNulo(lc.classificacaoPrazo) || NAO_IDENTIFICADO,
+        enderecoEntrega: textoOuNulo(lc.enderecoEntrega) || NAO_IDENTIFICADO,
+        // "12 meses" era chute puro; garantia varia de 3 meses a 5 anos.
+        prazoGarantia: textoOuNulo(lc.prazoGarantia) || NAO_IDENTIFICADO
+      };
+
+      const vf = objetoOuNulo(parsedData.viabilidadeFinanceira);
+      parsedData.viabilidadeFinanceira = {
+        valorEstimado: textoOuNulo(vf.valorEstimado) || NAO_IDENTIFICADO,
+        distorcoesPreco: textoOuNulo(vf.distorcoesPreco) || NAO_IDENTIFICADO,
+        prazoPagamento: textoOuNulo(vf.prazoPagamento) || textoOuNulo(parsedData.prazoPagamento) || NAO_IDENTIFICADO
+      };
+
+      const pf = objetoOuNulo(parsedData.parecerFinal);
+      parsedData.parecerFinal = {
+        // Um veredito é uma RECOMENDAÇÃO de negócio. Se a IA não emitiu um, a
+        // plataforma não pode emitir por ela — antes o padrão era "Vale a pena
+        // participar!", ou seja, a ferramenta recomendava participar sem ter
+        // analisado nada.
+        veredito: textoOuNulo(pf.veredito) || "Sem parecer conclusivo — revise o edital manualmente",
+        grauRisco: textoOuNulo(pf.grauRisco) || NAO_IDENTIFICADO,
+        estrategiaLances: textoOuNulo(pf.estrategiaLances) || NAO_IDENTIFICADO
+      };
+
+      // Campos que ficaram sem informação, para a interface poder avisar o
+      // usuário em vez de deixá-lo achar que a leitura foi completa.
+      const naoLocalizado = (valor: string) => !valor || valor === NAO_IDENTIFICADO || ehPlaceholder(valor);
+
+      parsedData.camposNaoIdentificados = [
+        ...(parsedData.itensEdital.length === 0 ? ["itens do edital"] : []),
+        ...(parsedData.documentosExigidos.length === 0 ? ["documentos exigidos"] : []),
+        ...(naoLocalizado(parsedData.viabilidadeFinanceira.valorEstimado) ? ["valor estimado"] : []),
+        ...(naoLocalizado(parsedData.identificacaoCertame.orgaoComprador) ? ["órgão comprador"] : []),
+        ...(naoLocalizado(parsedData.identificacaoCertame.modalidade) ? ["modalidade"] : []),
+        ...(naoLocalizado(parsedData.identificacaoCertame.dataHoraSessao) ? ["data da sessão"] : [])
+      ];
 
       // Preserve or extract direct PNCP URL or PNCP control number / ID contratação PNCP if present in input text
       const textForUrl = ((req.body.textInput || "") + "\n" + (req.body.editalText || "")).trim();

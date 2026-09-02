@@ -1061,6 +1061,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           pontosAlerta: Array.isArray(data.analysis.pontosAlerta) ? data.analysis.pontosAlerta : [],
           documentosExigidos: Array.isArray(data.analysis.documentosExigidos) ? data.analysis.documentosExigidos : [],
           itensEdital: Array.isArray(data.analysis.itensEdital) ? data.analysis.itensEdital : [],
+          camposNaoIdentificados: Array.isArray(data.analysis.camposNaoIdentificados) ? data.analysis.camposNaoIdentificados : [],
           rawText: textInput || fileNamesSummary
         };
         
@@ -1089,16 +1090,37 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           const fin: any = analysisResult.viabilidadeFinanceira || {};
           const rawValStr = String(fin.valorEstimado || fin.valorEstimadoTotal || "");
           
-          // Extract the GLOBAL/TOTAL value (prefer the largest R$ value found)
-          const allPrices = rawValStr.match(/([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/g) || [];
-          const parsedPrices = allPrices.map(p =>
-            parseFloat(p.replace(/\./g, "").replace(",", "."))
-          ).filter(v => !isNaN(v) && v > 0);
-          
-          // Use the largest found value as the global estimated value
-          const numVal = parsedPrices.length > 0
-            ? Math.max(...parsedPrices)
-            : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
+          /**
+           * Valor global estimado do certame.
+           *
+           * Antes o código pegava o MAIOR número monetário que aparecesse no
+           * texto. Isso acerta por sorte quando só há unitário e total, e erra
+           * feio quando o texto menciona multa, garantia contratual ou
+           * faturamento mínimo — a planilha de disputa era salva com o valor da
+           * multa. Agora a busca é ancorada na expressão que qualifica o número
+           * como total/global, e só cai para o maior valor se nada estiver
+           * qualificado.
+           */
+          const dinheiroRegex = /([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/;
+          const paraNumero = (t: string) => parseFloat(t.replace(/\./g, "").replace(",", "."));
+
+          // Números precedidos por termos que NÃO são o valor estimado.
+          const ruido = /(multa|penalidade|san[çc][ãa]o|garantia|cau[çc][ãa]o|faturamento|patrim[ôo]nio|capital social)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/gi;
+          const valoresRuido = new Set<number>();
+          for (const m of rawValStr.matchAll(ruido)) valoresRuido.add(paraNumero(m[2]));
+
+          const qualificadoRegex = /(valor\s+(?:total|global|estimado\s+total)|total\s+estimado|valor\s+estimado\s+da\s+contrata[çc][ãa]o)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/i;
+          const qualificado = rawValStr.match(qualificadoRegex);
+
+          const todosValores = (rawValStr.match(new RegExp(dinheiroRegex, "g")) || [])
+            .map(paraNumero)
+            .filter(v => !isNaN(v) && v > 0 && !valoresRuido.has(v));
+
+          const numVal = qualificado
+            ? paraNumero(qualificado[2])
+            : todosValores.length > 0
+              ? Math.max(...todosValores)
+              : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
 
           const disputaRow = {
             id: generateUUID(),
@@ -2079,6 +2101,20 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
                     )}
+                  </div>
+                )}
+
+                {/* A análise deixou de preencher campos ausentes com conteúdo
+                    plausível. Quando algo não é encontrado no edital, o usuário
+                    precisa saber — silêncio aqui seria só outra forma de engano. */}
+                {Array.isArray((activeEdital as any).camposNaoIdentificados) && (activeEdital as any).camposNaoIdentificados.length > 0 && (
+                  <div className="mb-4 p-3 rounded-xl border border-warning/40 bg-warning/10 text-foreground text-[11px] leading-relaxed flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                    <span>
+                      <strong>A IA não localizou no documento:</strong>{" "}
+                      {(activeEdital as any).camposNaoIdentificados.join(", ")}. Esses campos ficaram em branco
+                      de propósito, em vez de preenchidos por suposição — confira direto no edital antes de decidir.
+                    </span>
                   </div>
                 )}
 

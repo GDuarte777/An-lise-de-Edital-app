@@ -25,6 +25,8 @@ export interface Certificate {
 }
 
 export interface EditalAnalysis {
+  /** Campos que a IA não localizou no edital. Ficam em branco em vez de preenchidos por suposição. */
+  camposNaoIdentificados?: string[];
   pontosPositivos: string[];
   pontosAlerta: string[];
   prazoEntrega: string;
