@@ -6,6 +6,11 @@
  * fala no chat. Configura e liga. Não há login do gov.br a fazer aqui, nem sessão a
  * verificar: a sessão é a do próprio navegador dele, na página de verdade.
  *
+ * O login da plataforma HORASIS está DESLIGADO por ora, a pedido do operador, para que o
+ * robô possa ser testado em disputa de verdade sem a porta no caminho. `horasis.js` e
+ * `fundo.js` seguem inteiros no pacote: quando a porta voltar, volta aqui — uma trava
+ * antes de `desenharMoldura()`, e o cabeçalho com a conta e o botão de sair.
+ *
  * Decisões que valem explicação:
  *
  *  1. Shadow DOM. Os `input` e `button` do painel NÃO podem ser confundidos com o campo e
@@ -23,7 +28,6 @@
 
   const CHAVE = "lancebot.config";
   const bot = () => window.__lancebot || null;
-  const auth = () => window.__horasisAuth || null;
 
   /* ------------------------------------------------------ leitura da entrada */
 
@@ -102,7 +106,6 @@
            line-height: 1; padding: 2px 4px; border-radius: 5px; }
   .icone:hover { color: #eef2f9; background: rgba(255,255,255,.07); }
 
-  .conta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #7c8699; }
 
   .disputa { padding: 0 14px 12px; flex: none; }
   .disputa .nome { font-weight: 600; font-size: 13px; letter-spacing: -.1px; }
@@ -210,15 +213,6 @@
   .linkzinho { background: none; border: none; color: #6ea8ff; cursor: pointer; font: inherit;
                text-decoration: underline; padding: 0; }
   .linkzinho:hover { color: #93c5fd; }
-
-  .porta { padding: 22px 18px; display: grid; gap: 12px; }
-  .porta h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.2px; }
-  .porta p { margin: 0; font-size: 12px; color: #7c8699; }
-  .porta .erro { font-size: 11.5px; color: #fca5a5; min-height: 1em; }
-  .porta button { font: 650 13px ui-sans-serif, sans-serif; border: none; border-radius: 9px;
-                  padding: 11px; cursor: pointer; background: #2563eb; color: #fff; }
-  .porta button:hover { background: #3b82f6; }
-  .porta button:disabled { background: rgba(255,255,255,.06); color: #4b5563; }
   `;
 
   /* ---------------------------------------------------------- estrutura */
@@ -244,9 +238,6 @@
   const rankDe = {};
   let abaAtiva = "aberto";
   let chatAberto = false;
-  let sessao = null;
-  let entrando = false;
-  let erroLogin = "";
 
   const entradaDoItem = (n) => {
     const r = rascunho[n] || {};
@@ -257,40 +248,6 @@
   };
   const guardar = () => { try { chrome.storage.local.set({ [CHAVE]: rascunho }); } catch (e) { /* fora da extensão */ } };
 
-  /* --------------------------------------------------------- a porta */
-
-  function desenharPorta() {
-    caixa.innerHTML = `
-      <div class="topo" id="topo">
-        <i class="pino"></i><span class="marca">HORASIS <i>LanceBot</i></span>
-        <span class="cresce"></span>
-      </div>
-      <div class="porta">
-        <h2>Entre com sua conta HORASIS</h2>
-        <p>O robô é exclusivo para assinantes da plataforma. Use o mesmo e-mail e senha do site.</p>
-        <label>E-mail<input id="email" type="email" autocomplete="username" placeholder="voce@empresa.com.br"></label>
-        <label>Senha<input id="senha" type="password" autocomplete="current-password"></label>
-        <div class="erro" id="erroLogin"></div>
-        <button id="entrar">${entrando ? "Entrando…" : "Entrar"}</button>
-      </div>`;
-    $("erroLogin").textContent = erroLogin;
-    $("entrar").disabled = entrando;
-
-    const tentar = () => {
-      const a = auth();
-      if (!a || entrando) return;
-      entrando = true; erroLogin = ""; desenharPorta();
-      a.entrar($("email").value, $("senha").value).then((r) => {
-        entrando = false;
-        if (r.ok) { sessao = r.sessao; erroLogin = ""; pintar(); }
-        else { erroLogin = r.erro; desenharPorta(); }
-      });
-    };
-    $("entrar").addEventListener("click", tentar);
-    $("senha").addEventListener("keydown", (e) => { if (e.key === "Enter") tentar(); });
-    ligarArraste();
-  }
-
   /* ------------------------------------------------------- o painel */
 
   function desenharMoldura() {
@@ -299,8 +256,6 @@
         <i class="pino" id="pino"></i>
         <span class="marca">HORASIS <i>LanceBot</i></span>
         <span class="cresce"></span>
-        <span class="conta" id="conta"></span>
-        <button class="icone" id="sair" title="Sair da conta">⏻</button>
         <button class="icone" id="encolher" title="Encolher">–</button>
       </div>
       <div class="disputa" id="disputa"></div>
@@ -313,12 +268,6 @@
     $("encolher").addEventListener("click", () => {
       const min = caixa.classList.toggle("min");
       $("encolher").textContent = min ? "+" : "–";
-    });
-    $("sair").addEventListener("click", () => {
-      const a = auth();
-      if (a) a.sair();
-      sessao = null;
-      desenharPorta();
     });
     ligarArraste();
   }
@@ -527,12 +476,10 @@
   /* ------------------------------------------------------------ pintar */
 
   function pintar() {
-    if (!sessao) { if (!raiz.getElementById("entrar")) desenharPorta(); return; }
     if (!raiz.getElementById("corpo")) desenharMoldura();
 
     const b = bot();
     const d = b ? b.identificarDisputa() : { titulo: "Disputa", fases: {}, tempoRestante: "" };
-    $("conta").textContent = sessao.email || "";
     desenharDisputa(d);
     desenharAbas(d.fases || {});
 
@@ -617,19 +564,16 @@
     });
   } catch (e) { /* fora da extensão (teste) */ }
 
-  const a0 = auth();
-  if (a0) a0.sessaoAtual().then((s) => { sessao = s; pintar(); });
-
   const b0 = bot();
   if (b0) {
     b0.estado.aoLog = anotar;
     (b0.estado.log || []).slice(-20).forEach((l) => anotar(l.nivel, l.msg));
   }
-  desenharPorta();
+  pintar();
 
   window.__lancebotPainel = {
     lerMoeda, validar, pintar, anotar, raiz, hosp, rascunho, entradaDoItem,
-    abrir: (s) => { sessao = s || { email: "teste" }; pintar(); },
+    abrir: () => pintar(),
     get aba() { return abaAtiva; },
     set aba(v) { abaAtiva = v; pintar(); }
   };

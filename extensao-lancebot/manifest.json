@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HORASIS LanceBot",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Robô de lances para o Compras.gov.br. Reconhece a disputa, você configura piso e decremento por item e liga.",
   "permissions": [
     "storage",

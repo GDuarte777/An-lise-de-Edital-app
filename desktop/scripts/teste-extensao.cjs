@@ -270,15 +270,11 @@ app.whenReady().then(async () => {
     await rodar(ler("aprendizado.js"));
     await rodar(ler("painel.js"));
 
-    // A extensao e so para quem tem conta HORASIS: sem sessao, o painel e uma porta.
-    ok("sem login, o painel mostra a porta de entrada",
-       (await rodar('Boolean(__lancebotPainel.raiz.getElementById("entrar"))')) === true);
-    ok("sem login, nao ha item nenhum na tela",
-       (await rodar('__lancebotPainel.raiz.querySelectorAll(".item").length')) === 0);
-    await rodar('__lancebotPainel.abrir({ email: "operador@horasis.com.br" })');
-    ok("com login, o painel abre", (await rodar('Boolean(__lancebotPainel.raiz.getElementById("corpo"))')) === true);
-    ok("mostra a conta logada",
-       (await rodar('__lancebotPainel.raiz.getElementById("conta").textContent')) === "operador@horasis.com.br");
+    // O login da plataforma esta desligado por ora: o painel abre direto na disputa.
+    ok("o painel abre sem pedir login",
+       (await rodar('Boolean(__lancebotPainel.raiz.getElementById("corpo"))')) === true);
+    ok("nao ha mais porta de entrada",
+       (await rodar('__lancebotPainel.raiz.getElementById("entrar") === null')) === true);
 
     ok("painel montou", (await rodar("Boolean(window.__lancebotPainel)")) === true);
     ok("painel vive em shadow DOM (nao vaza para a pagina)",
@@ -356,7 +352,6 @@ app.whenReady().then(async () => {
     await rodar(ler("margem.js"));
     await rodar(ler("conteudo.js"));
     await rodar(ler("painel.js"));
-    await rodar('__lancebotPainel.abrir({ email: "operador@horasis.com.br" })');
 
     // Sem app-card-item na tela: o robô tinha que enxergar os itens assim mesmo.
     ok("nao existe app-card-item nesta tela",

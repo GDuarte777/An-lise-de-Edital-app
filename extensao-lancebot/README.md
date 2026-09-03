@@ -18,9 +18,9 @@ mesmo motor de leitura (`scripts/gerar-motor.cjs`, com teste que falha se diverg
 
 ## O que o painel mostra
 
-- **Acesso só para assinantes HORASIS.** Sem login da plataforma o painel é uma porta —
-  não há item, nem configuração, nem botão de ligar. A senha não é guardada; o que fica é
-  o token, e ele some quando você sai.
+- **Sem login da plataforma, por ora.** A porta de entrada HORASIS foi desligada para
+  que o robô possa ser testado em disputa de verdade — o painel abre direto. O código do
+  login (`horasis.js` e `fundo.js`) continua no pacote, inteiro, para voltar depois.
 - **Qual disputa é** — modalidade, número, UASG e órgão, lidos do cabeçalho do portal.
 - **Cronômetro em tempo real** do fim dos lances, ficando vermelho no último minuto.
 - **Três abas**: Aguardando · Em disputa · Encerrados, com a contagem em cada uma.

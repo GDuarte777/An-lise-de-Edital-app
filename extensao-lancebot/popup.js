@@ -36,7 +36,7 @@ chrome.tabs.query({ active: true, currentWindow: true }, (abas) => {
           disputa: b.identificarDisputa(),
           mensagens: b.chat().length,
           gravados: window.__lancebotAprendizado ? window.__lancebotAprendizado.quantos() : 0,
-          logado: Boolean(window.__lancebotPainel && window.__lancebotPainel.raiz.getElementById("corpo"))
+          pronto: Boolean(window.__lancebotPainel && window.__lancebotPainel.raiz.getElementById("corpo"))
         };
       }
     },
@@ -46,8 +46,8 @@ chrome.tabs.query({ active: true, currentWindow: true }, (abas) => {
       if (!info.itens) {
         return mostrar("", "Nenhum item nesta tela", "Abra a sala da disputa (a tela com o campo de lance).");
       }
-      if (!info.logado) {
-        return mostrar("alerta", "Entre com sua conta HORASIS", "O painel na página está pedindo login.");
+      if (!info.pronto) {
+        return mostrar("alerta", "Painel ainda desenhando", "Aguarde um instante nesta aba do portal.");
       }
       const d = info.disputa || {};
       const onde = [d.titulo, d.uasg ? "UASG " + d.uasg : "", d.tempoRestante ? "faltam " + d.tempoRestante : ""]
