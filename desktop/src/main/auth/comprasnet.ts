@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, session, type Session, type WebContents } f
 import { join } from "node:path";
 
 import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, URL_LOGIN_SSO } from "./endereco.js";
-import { autenticadoPor, type Sondagem } from "./reconhecimento.js";
+import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
 
 /**
  * Login no Compras.gov.br.
@@ -247,15 +247,56 @@ const VALIDADE_CACHE_MS = 15000;
  * Deliberadamente não inspeciona o conteúdo dos cookies: só conta presença, como
  * diagnóstico.
  */
-export async function verificarSessao(forcar = false): Promise<StatusSessao> {
-  if (!forcar && cache && Date.now() - cache.em < VALIDADE_CACHE_MS) return cache.status;
+export interface TentativaSessao {
+  url: string;
+  urlFinal: string;
+  autenticado: boolean;
+  motivo: string | null;
+  sondagem: Sondagem | null;
+}
 
+/** Diagnóstico completo — é o que a interface mostra quando o operador pede. */
+export interface DiagnosticoSessao {
+  status: StatusSessao;
+  tentativas: TentativaSessao[];
+  enderecosAprendidos: Record<string, string | undefined>;
+  dominiosDeCookie: string[];
+}
+
+async function sondarAte(janela: BrowserWindow, url: string): Promise<TentativaSessao> {
+  await janela.loadURL(url);
+
+  // O portal é uma SPA: sondar antes de desenhar daria "não logado" por engano.
+  let ultima: Sondagem | null = null;
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    ultima = await sondar(janela.webContents);
+    if (autenticadoPor(ultima)) break;
+    if (ultima?.noSso || ultima?.temSenha) break;   // redirecionou para o login: conclusivo
+  }
+
+  return {
+    url,
+    urlFinal: ultima?.url ?? url,
+    autenticado: autenticadoPor(ultima),
+    motivo: porQueNao(ultima),
+    sondagem: ultima
+  };
+}
+
+/**
+ * Verifica se existe sessão ativa abrindo o portal numa janela oculta e olhando o que
+ * ele renderiza. Deliberadamente não inspeciona o conteúdo dos cookies.
+ *
+ * Tenta MAIS DE UM endereço. Uma página só pode falhar por motivo que nada tem a ver com
+ * sessão — rota mudou, exige parâmetro, aquele caminho está fora do ar — e concluir "sem
+ * sessão" a partir de uma única tentativa foi exatamente o que aconteceu com o operador
+ * logado na frente da tela.
+ */
+export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
   const cookies = await contarCookiesDeSessao();
-
-  // Nada de atalho por contagem de cookie. A versão anterior devolvia "ninguém entrou
-  // nesta máquina" sem nem abrir a página quando a contagem dava zero — e ela dava zero
-  // por um domínio que faltava na lista, com o operador logado na tela ao lado. Quem
-  // responde se há sessão é a página renderizada; cookie aqui é só diagnóstico.
+  const registro = registroEnderecos();
+  await registro.carregar();
 
   const janela = new BrowserWindow({
     show: false,
@@ -270,44 +311,51 @@ export async function verificarSessao(forcar = false): Promise<StatusSessao> {
     }
   });
 
+  const tentativas: TentativaSessao[] = [];
   try {
-    await janela.loadURL(enderecoPortal());
-    // A sala é uma SPA: sondar antes de desenhar daria "não logado" por engano.
-    let ultima: Sondagem | null = null;
-    for (let i = 0; i < 12; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      ultima = await sondar(janela.webContents);
-      if (autenticadoPor(ultima)) break;
-      if (ultima?.noSso || ultima?.temSenha) break; // redirecionou para o login: conclusivo
+    for (const url of registro.paraVerificar()) {
+      try {
+        const t = await sondarAte(janela, url);
+        tentativas.push(t);
+        if (t.autenticado) break;
+      } catch (erro) {
+        tentativas.push({
+          url,
+          urlFinal: url,
+          autenticado: false,
+          motivo: `Não abriu: ${erro instanceof Error ? erro.message : String(erro)}`,
+          sondagem: null
+        });
+      }
     }
-
-    const autenticado = autenticadoPor(ultima);
-    const status: StatusSessao = {
-      autenticado,
-      verificadoEm: new Date(),
-      cookiesEncontrados: cookies,
-      evidencia: !ultima
-        ? "O portal não respondeu à verificação."
-        : autenticado
-          ? `Sessão ativa em ${new URL(ultima.url).host}.`
-          : ultima.noSso || ultima.temSenha
-            ? "O portal redirecionou para a tela de login: a sessão expirou ou nunca existiu."
-            : "O portal abriu, mas sem sinal de usuário autenticado."
-    };
-    cache = { status, em: Date.now() };
-    return status;
-  } catch (erro) {
-    const status: StatusSessao = {
-      autenticado: false,
-      verificadoEm: new Date(),
-      cookiesEncontrados: cookies,
-      evidencia: `Falha ao verificar: ${erro instanceof Error ? erro.message : String(erro)}`
-    };
-    cache = { status, em: Date.now() };
-    return status;
   } finally {
     if (!janela.isDestroyed()) janela.destroy();
   }
+
+  const boa = tentativas.find((t) => t.autenticado);
+  const status: StatusSessao = {
+    autenticado: Boolean(boa),
+    verificadoEm: new Date(),
+    cookiesEncontrados: cookies,
+    evidencia: boa
+      ? `Sessão ativa em ${new URL(boa.urlFinal).host}.`
+      : tentativas.length === 0
+        ? "Nenhum endereço do portal para verificar."
+        : (tentativas[0].motivo ?? "O portal abriu, mas sem sinal de usuário autenticado.")
+  };
+
+  cache = { status, em: Date.now() };
+  return {
+    status,
+    tentativas,
+    enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
+    dominiosDeCookie: DOMINIOS_SESSAO
+  };
+}
+
+export async function verificarSessao(forcar = false): Promise<StatusSessao> {
+  if (!forcar && cache && Date.now() - cache.em < VALIDADE_CACHE_MS) return cache.status;
+  return (await diagnosticarSessao()).status;
 }
 
 /* ------------------------------------------------------------------ login */

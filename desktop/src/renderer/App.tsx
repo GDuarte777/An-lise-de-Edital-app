@@ -152,6 +152,16 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [intervalo, setIntervalo] = useState("1000");
   const [modo, setModo] = useState<"simulacao" | "real">("simulacao");
 
+  const [diag, setDiag] = useState<{
+    status: { autenticado: boolean; cookiesEncontrados: number; evidencia: string };
+    tentativas: Array<{ url: string; urlFinal: string; autenticado: boolean; motivo: string | null;
+      sondagem: null | { noSso: boolean; noPortal: boolean; temSenha: boolean; temSair: boolean;
+        temIdentidade: boolean; escolhendoPerfil: boolean; tamanho: number } }>;
+    enderecosAprendidos: Record<string, string | undefined>;
+    dominiosDeCookie: string[];
+  } | null>(null);
+  const [diagnosticando, setDiagnosticando] = useState(false);
+
   const [guardiao, setGuardiao] = useState<{
     ativo: boolean; autenticado: boolean; renovacoes: number; retokensObservados: number;
     ultimaRenovacaoEm: string | null; proximaRenovacaoEm: string | null; motivo: string;
@@ -309,6 +319,43 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                 </button>
               )}
             </div>
+
+            {!conectado && (
+              <div className="row tight" style={{ marginTop: 10 }}>
+                <button
+                  className="btn"
+                  disabled={diagnosticando}
+                  onClick={() => {
+                    setDiagnosticando(true);
+                    void api().comprasnet.diagnostico()
+                      .then((d) => { setDiag(d); setConectado(d.status.autenticado); setEvidencia(d.status.evidencia); })
+                      .finally(() => setDiagnosticando(false));
+                  }}
+                >
+                  {diagnosticando ? "Verificando…" : "Por que não reconheceu?"}
+                </button>
+              </div>
+            )}
+
+            {diag && (
+              <div className="faint" style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
+                <div>Cookies do portal encontrados: <b>{diag.status.cookiesEncontrados}</b></div>
+                <div>Endereço aprendido: <b>{diag.enderecosAprendidos.portal ?? "nenhum ainda"}</b></div>
+                {diag.tentativas.map((t, i) => (
+                  <div key={i} style={{ marginTop: 8, paddingLeft: 8, borderLeft: "2px solid #2b3444" }}>
+                    <div style={{ wordBreak: "break-all" }}>{t.urlFinal || t.url}</div>
+                    <div>{t.autenticado ? "✅ sessão reconhecida aqui" : `❌ ${t.motivo ?? "não reconhecida"}`}</div>
+                    {t.sondagem && (
+                      <div style={{ opacity: 0.75 }}>
+                        no portal: {String(t.sondagem.noPortal)} · tem “Sair”: {String(t.sondagem.temSair)} ·
+                        {" "}tem CPF/CNPJ: {String(t.sondagem.temIdentidade)} · campo de senha: {String(t.sondagem.temSenha)} ·
+                        {" "}escolhendo perfil: {String(t.sondagem.escolhendoPerfil)} · texto: {t.sondagem.tamanho} car.
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="card-head" style={{ marginTop: 18 }}>
               <h3 className="card-title" style={{ fontSize: 15 }}>Sessão mantida viva</h3>

@@ -7,6 +7,7 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.js";
 import {
   abrirLogin,
   abrirPainelDisputas,
+  diagnosticarSessao,
   enderecoPortal,
   habilitarCertificadoDigital,
   partitionComprasnet,
@@ -145,6 +146,11 @@ ipcMain.handle("comprasnet:entrar", async () => {
   return status;
 });
 ipcMain.handle("comprasnet:status", async (_e, forcar?: boolean) => verificarSessao(Boolean(forcar)));
+
+// Diagnóstico da sessão: mostra ao operador EXATAMENTE o que o aplicativo enxergou em
+// cada endereço tentado. "Sem sessão" sozinho é uma parede — ele vê o próprio nome e
+// CNPJ no portal e o programa discorda, sem dizer em quê.
+ipcMain.handle("comprasnet:diagnostico", async () => diagnosticarSessao());
 
 /**
  * Guardião de sessão — a razão de o robô ser aplicativo instalado e não extensão.

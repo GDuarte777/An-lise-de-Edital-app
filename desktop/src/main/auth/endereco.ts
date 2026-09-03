@@ -43,10 +43,23 @@ const REGEX_HOST = new RegExp(FONTE_REGEX_HOST.replace(/\\\\/g, "\\"), "i");
  * leva para `/acompanhamento-compra?compra=<n>`.
  */
 export const SEMENTES_PORTAL = [
-  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa",
-  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/landing",
-  "https://www.gov.br/compras/pt-br/"
+  // Área logada do fornecedor: abre para quem tem sessão e não exige parâmetro nenhum.
+  // É a melhor página para PERGUNTAR se há sessão.
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras-eletronicas",
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor",
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/landing"
 ];
+
+/**
+ * A sala de disputa exige `?compra=<n>`; sem isso ela não renderiza nada de útil.
+ *
+ * Por um tempo ela foi a PRIMEIRA semente, e como é dela que saía o endereço de
+ * verificação, o aplicativo perguntava "tem sessão?" para uma tela que nunca responde —
+ * e concluía "o portal abriu, mas sem sinal de usuário autenticado" com o operador
+ * logado. Ela agora vive à parte, e só o `paraSala()` a usa.
+ */
+export const SEMENTE_SALA =
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa";
 
 /** Sala de uma compra específica, no formato que a coleta mostrou. */
 export function urlDaSala(pregaoId: string): string {
@@ -166,8 +179,20 @@ export class RegistroEnderecos {
     return this.dados.portal || SEMENTES_PORTAL[0];
   }
 
+  /**
+   * Endereços a tentar ao perguntar "existe sessão?", em ordem.
+   *
+   * Mais de um de propósito: uma única página pode não abrir por motivo que nada tem a
+   * ver com sessão (rota mudou, exige parâmetro, portal fora do ar naquele caminho), e
+   * concluir "sem sessão" a partir disso é o erro que o operador viu na tela.
+   */
+  paraVerificar(): string[] {
+    const lista = this.dados.portal ? [this.dados.portal, ...SEMENTES_PORTAL] : [...SEMENTES_PORTAL];
+    return [...new Set(lista)];
+  }
+
   /** Melhor endereço para reabrir uma sala de disputa. */
   paraSala(): string {
-    return this.dados.sala || this.dados.portal || SEMENTES_PORTAL[0];
+    return this.dados.sala || SEMENTE_SALA;
   }
 }

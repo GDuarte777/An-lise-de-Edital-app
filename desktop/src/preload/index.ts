@@ -82,6 +82,31 @@ export interface EstadoGuardiao {
   motivo: string;
 }
 
+/** O que o aplicativo enxergou em cada endereço do portal que tentou. */
+export interface TentativaSessao {
+  url: string;
+  urlFinal: string;
+  autenticado: boolean;
+  motivo: string | null;
+  sondagem: {
+    url: string;
+    noSso: boolean;
+    noPortal: boolean;
+    temSenha: boolean;
+    temSair: boolean;
+    temIdentidade: boolean;
+    escolhendoPerfil: boolean;
+    tamanho: number;
+  } | null;
+}
+
+export interface DiagnosticoSessao {
+  status: StatusSessao;
+  tentativas: TentativaSessao[];
+  enderecosAprendidos: Record<string, string | undefined>;
+  dominiosDeCookie: string[];
+}
+
 export interface ApiLanceBot {
   plataforma: {
     entrar(email: string, senha: string): Promise<Usuario>;
@@ -91,6 +116,7 @@ export interface ApiLanceBot {
   comprasnet: {
     entrar(): Promise<StatusSessao>;
     status(forcar?: boolean): Promise<StatusSessao>;
+    diagnostico(): Promise<DiagnosticoSessao>;
     sair(): Promise<void>;
     abrirSala(pregaoId?: string): Promise<number>;
     abrirPainel(): Promise<number>;
@@ -140,6 +166,7 @@ const api: ApiLanceBot = {
   comprasnet: {
     entrar: () => ipcRenderer.invoke("comprasnet:entrar"),
     status: (forcar) => ipcRenderer.invoke("comprasnet:status", forcar),
+    diagnostico: () => ipcRenderer.invoke("comprasnet:diagnostico"),
     sair: () => ipcRenderer.invoke("comprasnet:sair"),
     abrirSala: (pregaoId) => ipcRenderer.invoke("comprasnet:abrirSala", pregaoId),
     abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel")

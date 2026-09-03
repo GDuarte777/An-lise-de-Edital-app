@@ -43,5 +43,26 @@ ok("tem opcao de sair", autenticadoPor(tela({ temSair: true })));
 ok("mostra CNPJ do fornecedor", autenticadoPor(tela({ temIdentidade: true })));
 ok("tem os dois sinais", autenticadoPor(tela({ temSair: true, temIdentidade: true })));
 
+console.log("\n[4] Diz POR QUE nao reconheceu — sem isso o operador so ve uma parede");
+{
+  const { porQueNao } = await import("./reconhecimento.js");
+  const base = {
+    url: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras-eletronicas",
+    noSso: false, noPortal: true, temSenha: false, temSair: true, temIdentidade: true,
+    escolhendoPerfil: false, tamanho: 900, manterAberta: false
+  };
+  ok("logado nao tem motivo", porQueNao(base) === null, porQueNao(base));
+  ok("explica campo de senha", /senha/i.test(porQueNao({ ...base, temSenha: true }) ?? ""));
+  ok("explica pagina vazia", /vazia/i.test(porQueNao({ ...base, tamanho: 10 }) ?? ""));
+  ok("explica host de fora", /n[aã]o [eé] do portal/i.test(porQueNao({ ...base, noPortal: false }) ?? ""));
+  ok("explica falta de identidade",
+     /sair|identifica/i.test(porQueNao({ ...base, temSair: false, temIdentidade: false }) ?? ""));
+
+  // Continua barrando, e o diagnóstico mostra o campo ao operador — é assim que se
+  // descobre se é ISSO que está barrando, em vez de afrouxar a trava no escuro.
+  ok("escolha de perfil barra e explica",
+     /perfil/i.test(porQueNao({ ...base, escolhendoPerfil: true }) ?? ""));
+}
+
 console.log(f === 0 ? "\n🎉 TODOS OS TESTES PASSARAM\n" : `\n💥 ${f} FALHA(S)\n`);
 process.exit(f === 0 ? 0 : 1);

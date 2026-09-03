@@ -70,5 +70,23 @@ await outro.carregar();
 ok("sobrevive ao reinicio do aplicativo", outro.paraSala().includes("/disputa/900"), outro.aprendidos);
 assert.ok(JSON.parse(await readFile(caminho, "utf-8")).portal);
 
+console.log("\n[endereços de verificação]");
+{
+  const { SEMENTE_SALA } = await import("./endereco.js");
+  const r = new RegistroEnderecos(join(dir, "verif.json"));
+  await r.carregar();
+  const lista = r.paraVerificar();
+  // A sala exige ?compra=<n>: perguntar "tem sessao?" para ela nao responde nada, e foi
+  // isso que fez o app dizer "sem sinal de usuario autenticado" com o operador logado.
+  ok("a sala NAO entra na verificacao", !lista.some((u) => u === SEMENTE_SALA), lista);
+  ok("verifica em mais de um endereco", lista.length >= 2, lista);
+  ok("comeca pela area logada do fornecedor", /seguro\/fornecedor/.test(lista[0]), lista[0]);
+
+  await r.aprender("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras");
+  ok("o aprendido vem primeiro", r.paraVerificar()[0].endsWith("/compras"), r.paraVerificar());
+  ok("mas as sementes continuam de reserva", r.paraVerificar().length >= 3, r.paraVerificar());
+  ok("a sala segue sendo o endereco de sala", r.paraSala() === SEMENTE_SALA, r.paraSala());
+}
+
 console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);
 process.exit(falhas === 0 ? 0 : 1);
