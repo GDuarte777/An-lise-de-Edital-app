@@ -12,13 +12,17 @@
 (() => {
   const VALIDADE_LEITURA_MS = 8000;
 
+  /** O passo da briga de centavos. */
+  const PASSO_CENTAVO = 0.01;
+
   /**
-   * O menor passo de desempate: um centésimo de centavo.
+   * O mínimo que vale quando "permitir lances em casas decimais" está ligado.
    *
-   * O portal trabalha com quatro casas decimais (a coleta mostrou "R$ #.###,####"), e
-   * este é o menor valor que ainda é um lance válido lá.
+   * O operador configura, por exemplo, R$ 550,99. Se um concorrente cobre esse valor nos
+   * centavos, o robô passa a disputar centavo a centavo — até R$ 550,00, o valor cheio
+   * abaixo do configurado. Os centavos do mínimo viram margem de briga; os reais, não.
    */
-  const PASSO_DECIMAL = 0.0001;
+  const pisoEfetivo = (cfg) => (cfg.decimais ? Math.floor(cfg.piso) : cfg.piso);
 
   const ehNumero = (n) => typeof n === "number" && Number.isFinite(n);
 
@@ -83,13 +87,13 @@
       return { acao: "aguardar", motivo: `Já lideramos com R$ ${estado.meuValor.toFixed(2)}.` };
     }
 
-    // EMPATE — um concorrente digitou exatamente o mesmo valor que o seu. Sem a opção de
-    // casas decimais não há o que fazer: qualquer lance menor fura o seu mínimo.
+    // EMPATE — um concorrente digitou exatamente o mesmo valor que o seu.
     const empatado = ehNumero(estado.meuValor) && estado.melhorValor === estado.meuValor;
     if (empatado && !cfg.decimais) {
       return {
         acao: "aguardar",
-        motivo: `Empate em R$ ${estado.melhorValor.toFixed(4)}. Ligue "lances em casas decimais" para desempatar.`
+        motivo: `Empate em R$ ${estado.melhorValor.toFixed(2)}. Ligue "lances em casas decimais" ` +
+                `para disputar os centavos até R$ ${Math.floor(cfg.piso).toFixed(2)}.`
       };
     }
 
@@ -103,33 +107,30 @@
       return { acao: "parar", motivo: `O decremento levaria o lance a R$ ${proximo.toFixed(2)}, que não é válido.` };
     }
 
-    if (proximo < cfg.piso) {
-      // "Permitir lances em casas decimais": em vez de parar no seu mínimo, desce UM
-      // passo de R$ 0,0001 abaixo dele — um centésimo de centavo — só para passar à
-      // frente de quem ofertou o mesmo valor.
-      //
-      // Isso é, deliberadamente, ofertar abaixo do mínimo configurado. É o que a opção
-      // significa, e é a única forma de ganhar de um empate. O limite é rígido: NUNCA
-      // mais que um passo abaixo, e nunca mais de uma vez — o próximo ciclo já não
-      // encontra espaço e para.
+    const limite = pisoEfetivo(cfg);
+
+    if (proximo < limite) {
+      // "Permitir lances em casas decimais": os CENTAVOS do mínimo viram margem de
+      // briga. Configurado R$ 550,99, o robô disputa centavo a centavo até R$ 550,00 —
+      // e para ali. Os reais do mínimo continuam intocáveis.
       if (cfg.decimais) {
-        const limite = arredondar4(cfg.piso - PASSO_DECIMAL);
-        const alvo = arredondar4(estado.melhorValor - PASSO_DECIMAL);
+        const alvo = arredondarCentavos(estado.melhorValor - PASSO_CENTAVO);
         if (alvo > 0 && alvo < estado.melhorValor && alvo >= limite) {
-          return { acao: "enviar", valor: alvo, desempate: true };
+          return { acao: "enviar", valor: alvo, centavos: true };
         }
       }
       return {
         acao: "parar",
         motivo: `Margem estourada: o próximo lance seria R$ ${proximo.toFixed(2)}, ` +
-                `abaixo do seu mínimo de R$ ${cfg.piso.toFixed(2)}.`
+                `abaixo do seu mínimo de R$ ${limite.toFixed(2)}` +
+                (cfg.decimais ? " (com a briga de centavos já contada)." : ".")
       };
     }
 
     return { acao: "enviar", valor: proximo };
   }
 
-  const api = { decidir, arredondarCentavos, arredondar4, PASSO_DECIMAL, VALIDADE_LEITURA_MS };
+  const api = { decidir, arredondarCentavos, arredondar4, pisoEfetivo, PASSO_CENTAVO, VALIDADE_LEITURA_MS };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else (typeof window !== "undefined" ? window : globalThis).__lancebotMargem = api;
 })();

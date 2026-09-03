@@ -678,9 +678,9 @@
 
         registrar("concorrente",
           `Item ${numero}: melhor R$ ${item.melhorValor.toFixed(2)} (via ${origem}). ` +
-          `Ofertando R$ ${d.valor.toFixed(d.desempate ? 4 : 2)}${d.desempate ? " — desempate por casas decimais." : "."}`);
+          `Ofertando R$ ${d.valor.toFixed(2)}${d.centavos ? " — disputando os centavos." : "."}`);
         const r = await enviarLance(item, d.valor);
-        gravar("envio", { item: numero, valor: d.valor, desempate: Boolean(d.desempate), resultado: r });
+        gravar("envio", { item: numero, valor: d.valor, centavos: Boolean(d.centavos), resultado: r });
 
         if (!r.ok || !r.confirmado) { desarmar(numero, r.motivo); continue; }
         registrar(r.aceito ? "sucesso" : "alerta",

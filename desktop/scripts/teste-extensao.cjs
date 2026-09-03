@@ -344,8 +344,8 @@ app.whenReady().then(async () => {
     const opcoes = await rodar(`Array.from(__lancebotPainel.raiz.querySelectorAll(".op")).map((o) => o.textContent)`);
     ok("tem a opcao de casas decimais", /casas decimais/i.test(opcoes.join(" ")), opcoes);
     ok("tem a opcao de segundos finais", /segundos finais/i.test(opcoes.join(" ")), opcoes);
-    ok("a opcao de decimais avisa que vai abaixo do minimo",
-       /abaixo do seu m[ií]nimo/i.test(opcoes.join(" ")), opcoes);
+    ok("a opcao de decimais diz ate onde a briga vai",
+       /centavo a centavo|valor cheio abaixo/i.test(opcoes.join(" ")), opcoes);
 
     console.log("\n[10] A TELA REAL da disputa (coleta em fase de lances)");
     await janela.loadURL(`http://127.0.0.1:${s.address().port}/real`);

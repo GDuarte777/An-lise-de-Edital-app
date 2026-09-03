@@ -21,36 +21,53 @@ const agora = Date.now();
 const tela = (p) => ({ melhorValor: 1000, aberto: true, lidoEm: agora, ...p });
 const cfg = (p) => ({ piso: 1000, decremento: 1, tipo: "fixo", ...p });
 
-console.log("\n[1] Empate: o caso que a opcao existe para resolver");
+console.log("\n[1] A briga de centavos, no exemplo do operador");
 {
-  // Concorrente digitou exatamente o mesmo valor do operador.
-  const empate = tela({ melhorValor: 1000, meuValor: 1000 });
+  // Minimo configurado: R$ 550,99. Com a opcao ligada, o robo disputa os CENTAVOS ate
+  // R$ 550,00 — o valor cheio abaixo do configurado. Os reais nao sao negociaveis.
+  const c = (p) => cfg({ piso: 550.99, decremento: 1, decimais: true, ...p });
 
-  const sem = margem.decidir(cfg({ decimais: false }), empate, agora);
-  ok("sem a opcao, apenas aguarda", sem.acao === "aguardar", sem);
-  ok("e ensina como desempatar", /casas decimais/i.test(sem.motivo), sem);
+  ok("o minimo efetivo vira 550,00", margem.pisoEfetivo(c()) === 550, margem.pisoEfetivo(c()));
 
-  const com = margem.decidir(cfg({ decimais: true }), empate, agora);
-  ok("com a opcao, desempata", com.acao === "enviar", com);
-  ok("por exatamente um centesimo de centavo", com.valor === 999.9999, com);
-  ok("marcado como desempate", com.desempate === true, com);
+  // Concorrente cobre o minimo nos centavos.
+  const cobriu = tela({ melhorValor: 550.98, meuValor: 550.99 });
+  const r = margem.decidir(c(), cobriu, agora);
+  ok("desce um centavo abaixo do concorrente", r.acao === "enviar" && r.valor === 550.97, r);
+  ok("marcado como briga de centavos", r.centavos === true, r);
+
+  // A briga continua descendo.
+  ok("segue centavo a centavo",
+     margem.decidir(c(), tela({ melhorValor: 550.5, meuValor: 550.97 }), agora).valor === 550.49);
+  ok("um centavo acima do fundo ainda oferta",
+     margem.decidir(c(), tela({ melhorValor: 550.01, meuValor: 550.02 }), agora).valor === 550);
+
+  // E para no valor cheio.
+  const fundo = margem.decidir(c(), tela({ melhorValor: 550, meuValor: 550.01 }), agora);
+  ok("NAO desce abaixo de 550,00", fundo.acao === "parar", fundo);
+  ok("e diz que a margem estourou", /margem estourada/i.test(fundo.motivo), fundo);
+
+  // Empate exato tambem e disputado.
+  const empate = margem.decidir(c(), tela({ melhorValor: 550.99, meuValor: 550.99 }), agora);
+  ok("desempata quem digitou o mesmo valor", empate.acao === "enviar" && empate.valor === 550.98, empate);
 }
 
-console.log("\n[2] O passo decimal NAO vira porta dos fundos");
+console.log("\n[2] Sem a opcao, o minimo e intocavel");
 {
-  // Já ofertamos o desempate; o concorrente cobriu. Não há mais espaço abaixo do mínimo.
-  const depois = tela({ melhorValor: 999.9999, meuValor: 999.9999 });
-  const r = margem.decidir(cfg({ piso: 1000, decimais: true }), depois, agora);
-  ok("nao desce um segundo passo", r.acao !== "enviar", r);
+  const c = cfg({ piso: 550.99, decremento: 1, decimais: false });
+  const r = margem.decidir(c, tela({ melhorValor: 550.98, meuValor: 550.99 }), agora);
+  ok("nao desce nos centavos", r.acao === "parar", r);
 
-  // Concorrente MUITO abaixo do mínimo: a opção não autoriza persegui-lo.
-  const fundo = tela({ melhorValor: 500, meuValor: 1000 });
-  const r2 = margem.decidir(cfg({ piso: 1000, decimais: true }), fundo, agora);
-  ok("nao persegue lance muito abaixo do minimo", r2.acao === "parar", r2);
-  ok("e diz que a margem estourou", /margem estourada/i.test(r2.motivo), r2);
+  const emp = margem.decidir(c, tela({ melhorValor: 550.99, meuValor: 550.99 }), agora);
+  ok("empate apenas aguarda", emp.acao === "aguardar", emp);
+  ok("e ensina ate onde a opcao iria", /550,00|550\.00/.test(emp.motivo), emp);
+
+  // Minimo redondo: nao ha centavo nenhum para brigar.
+  const redondo = cfg({ piso: 550, decremento: 1, decimais: true });
+  ok("minimo redondo nao abre espaco",
+     margem.decidir(redondo, tela({ melhorValor: 550, meuValor: 550 }), agora).acao === "parar");
 }
 
-console.log("\n[3] Sem empate, a opcao nao muda nada");
+console.log("\n[3] Longe do minimo, a opcao nao muda nada");
 {
   const normal = tela({ melhorValor: 1200, meuValor: 1300 });
   const a = margem.decidir(cfg({ piso: 1000, decremento: 1, decimais: false }), normal, agora);

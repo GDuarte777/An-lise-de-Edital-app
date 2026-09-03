@@ -378,7 +378,7 @@
       </div>
       <div class="opcoes">
         <label class="op"><input data-c="decimais" type="checkbox"><span>Permitir lances em casas decimais
-          <em>Desempata quem ofertou o mesmo valor, indo R$ 0,0001 abaixo do seu mínimo.</em></span></label>
+          <em class="ateOnde"></em></span></label>
         <label class="op"><input data-c="soNoFinal" type="checkbox"><span>Disputar apenas nos segundos finais
           <em>Só oferta quando faltar <input data-c="segundos" type="number" min="1" max="600"> s ou menos.</em></span></label>
       </div>
@@ -390,8 +390,14 @@
         <button class="secundario">Classificação</button>
       </div>`;
 
-    el.querySelector(".mel").textContent = real(item.melhorValor, ent.decimais ? 4 : 2);
-    el.querySelector(".meu").textContent = real(item.meuValor, ent.decimais ? 4 : 2);
+    el.querySelector(".mel").textContent = real(item.melhorValor);
+    el.querySelector(".meu").textContent = real(item.meuValor);
+
+    // Diz até onde a briga de centavos vai, com o número que o operador digitou.
+    const piso = lerMoeda(ent.piso);
+    el.querySelector(".ateOnde").textContent = piso === null
+      ? "Disputa os centavos do seu mínimo, até o valor cheio abaixo dele."
+      : `Disputa centavo a centavo até ${real(Math.floor(piso))} — o valor cheio abaixo do seu mínimo.`;
 
     el.querySelectorAll("[data-c]").forEach((c) => {
       const k = c.dataset.c;
@@ -414,8 +420,8 @@
       try {
         const d = window.__lancebotMargem.decidir(v.cfg, item, Date.now());
         if (d.acao === "enviar") {
-          prev.innerHTML = `Próximo lance <b>${real(d.valor, d.desempate ? 4 : 2)}</b>` +
-            (d.desempate ? ` <span class="desempate">· desempate</span>` : "");
+          prev.innerHTML = `Próximo lance <b>${real(d.valor)}</b>` +
+            (d.centavos ? ` <span class="desempate">· briga de centavos</span>` : "");
         } else {
           prev.textContent = d.motivo || "sem lance a dar agora";
         }

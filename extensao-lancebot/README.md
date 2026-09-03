@@ -27,10 +27,10 @@ mesmo motor de leitura (`scripts/gerar-motor.cjs`, com teste que falha se diverg
 - **Melhor lance e Meu lance** por item, com destaque quando você lidera.
 - **Lance mínimo (R$)** — o limite que o robô respeita.
 - **Intervalo mínimo** — quanto ele desce por lance, em R$ ou %.
-- **Permitir lances em casas decimais** — desempata quem ofertou exatamente o mesmo
-  valor que você, indo **R$ 0,0001 abaixo do seu mínimo**. Isso é, deliberadamente,
-  ofertar abaixo do limite configurado: é a única forma de ganhar de um empate, o passo é
-  de um centésimo de centavo, e ele **nunca desce mais que um passo**.
+- **Permitir lances em casas decimais** — os **centavos** do seu mínimo viram margem de
+  briga. Configurado R$ 550,99, se um concorrente cobrir o valor nos centavos o robô
+  disputa centavo a centavo **até R$ 550,00** e para ali. Os reais do seu mínimo continuam
+  intocáveis. Com a opção desligada, o robô avisa o empate em vez de ficar parado calado.
 - **Disputar apenas nos segundos finais** — só oferta no fim. Falha fechada: se não
   conseguir ler o tempo restante, não oferta, porque ofertar cedo quando você pediu para
   esperar é pior do que não ofertar.
