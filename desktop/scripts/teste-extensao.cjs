@@ -122,6 +122,7 @@ const TELA_REAL = `<!doctype html>
 <app-root><main><div><div>
  <app-cabecalho-disputa-fornecedor><app-cabecalho-compra>
    <app-situacao-conexao-sistema><span id="conexao"></span></app-situacao-conexao-sistema>
+   <div>Dispensa Eletrônica N° 70/2026 (Lei 14.133/2021) UASG 30001 - TCU-TRIBUNAL DE CONTAS DA UNIAO</div>
    <app-tempo-restante><div><label>Tempo restante para envio de lances:</label><span>00:02:41</span></div></app-tempo-restante>
  </app-cabecalho-compra></app-cabecalho-disputa-fornecedor>
 
@@ -284,81 +285,29 @@ app.whenReady().then(async () => {
     ok("recusa texto invalido", moeda.lixo === null && moeda.vazio === null, moeda);
 
     const val = await rodar(`(() => { const V = __lancebotPainel.validar; return {
-      semItem:   V({item:"",  piso:"100", decremento:"1",  tipo:"fixo"}),
-      pisoRuim:  V({item:"1", piso:"abc", decremento:"1",  tipo:"fixo"}),
-      decZero:   V({item:"1", piso:"100", decremento:"0",  tipo:"fixo"}),
-      pctCheio:  V({item:"1", piso:"100", decremento:"100",tipo:"percentual"}),
-      bom:       V({item:"1", piso:"1.200,00", decremento:"0,50", tipo:"fixo"})
+      pisoRuim:  V({piso:"abc", decremento:"1",  tipo:"fixo"}),
+      decZero:   V({piso:"100", decremento:"0",  tipo:"fixo"}),
+      pctCheio:  V({piso:"100", decremento:"100",tipo:"percentual"}),
+      bom:       V({piso:"1.200,00", decremento:"0,50", tipo:"fixo"})
     }; })()`);
-    ok("recusa sem item", val.semItem.ok === false, val.semItem);
     ok("recusa piso invalido", val.pisoRuim.ok === false, val.pisoRuim);
     ok("recusa decremento zero", val.decZero.ok === false, val.decZero);
     ok("recusa percentual de 100%", val.pctCheio.ok === false, val.pctCheio);
     ok("aceita config valida", val.bom.ok === true && val.bom.cfg.piso === 1200 && val.bom.cfg.decremento === 0.5, val.bom);
 
-    ok("lista os itens da tela no seletor",
-       (await rodar('Array.from(__lancebotPainel.raiz.getElementById("item").options).map(o => o.value).join(",")')) === "1,2,3");
-
-    const entregue = await rodar(`(async () => {
-      const P = __lancebotPainel, r = P.raiz, original = __lancebot.ligar;
-      let recebido = null;
-      __lancebot.ligar = (item, cfg) => { recebido = { item, cfg }; };
-      r.getElementById("item").value = "1";
-      r.getElementById("piso").value = "1.200,00";
-      r.getElementById("decremento").value = "0,50";
-      r.getElementById("tipo").value = "fixo";
-      r.getElementById("acao").click();
-      __lancebot.ligar = original;
-      return { recebido, erro: r.getElementById("erro").textContent };
-    })()`);
-    ok("Ligar entrega item e config ao robo",
-       entregue.recebido && entregue.recebido.item === "1" &&
-       entregue.recebido.cfg.piso === 1200 && entregue.recebido.cfg.decremento === 0.5, entregue);
-
-    const recusa = await rodar(`(() => {
-      const r = __lancebotPainel.raiz, original = __lancebot.ligar;
-      let chamou = false;
-      __lancebot.ligar = () => { chamou = true; };
-      r.getElementById("piso").value = "";
-      r.getElementById("acao").click();
-      __lancebot.ligar = original;
-      r.getElementById("piso").value = "1.200,00";
-      return { chamou, erro: r.getElementById("erro").textContent };
-    })()`);
-    ok("piso vazio NAO liga o robo", recusa.chamou === false && /Piso/.test(recusa.erro), recusa);
-
-    const parada = await rodar(`(() => {
+    // Um cartao por item na tela, com o botao de ligar em cada um.
+    const cartoesPainel = await rodar(`(() => {
       const r = __lancebotPainel.raiz;
-      __lancebot.estado.ligado = true;
-      __lancebotPainel.pintar();
-      const rotulo = r.getElementById("acao").textContent;
-      r.getElementById("acao").click();
-      return { rotulo, ligado: __lancebot.estado.ligado };
+      return {
+        itens: r.querySelectorAll(".item").length,
+        rotulos: Array.from(r.querySelectorAll(".acaoItem")).map((b) => b.textContent),
+        travados: Array.from(r.querySelectorAll(".acaoItem")).map((b) => b.disabled)
+      };
     })()`);
-    ok("botao vira 'Parar robo' com o robo ligado", /Parar/.test(parada.rotulo), parada);
-    ok("Parar desliga o robo", parada.ligado === false, parada);
-
-    const prev = await rodar(`(() => {
-      const r = __lancebotPainel.raiz;
-      r.getElementById("item").value = "1";
-      r.getElementById("piso").value = "1.000,00";
-      r.getElementById("decremento").value = "0,50";
-      __lancebotPainel.pintar();
-      return { previsto: r.getElementById("ePrevisto").textContent,
-               melhor: r.getElementById("eMelhor").textContent };
-    })()`);
-    ok("mostra o melhor lance do item", prev.melhor === "R$ 1.250,50", prev);
-    ok("mostra o proximo lance previsto", prev.previsto === "R$ 1.250,00", prev);
-
-    const trava = await rodar(`(() => {
-      const r = __lancebotPainel.raiz;
-      r.getElementById("piso").value = "1.251,00";   // piso acima do proximo lance
-      __lancebotPainel.pintar();
-      return { previsto: r.getElementById("ePrevisto").textContent,
-               erro: r.getElementById("erro").textContent };
-    })()`);
-    ok("piso alto some com a previsao e explica o motivo",
-       trava.previsto === "\u2014" && /[Mm]argem/.test(trava.erro), trava);
+    ok("um cartao por item da tela", cartoesPainel.itens === 3, cartoesPainel);
+    ok("item fechado nao pode ser ligado", cartoesPainel.travados[1] === true, cartoesPainel);
+    ok("itens abertos podem ser ligados",
+       cartoesPainel.travados[0] === false && cartoesPainel.travados[2] === false, cartoesPainel);
 
     console.log("\n[10] A TELA REAL da disputa (coleta em fase de lances)");
     await janela.loadURL(`http://127.0.0.1:${s.address().port}/real`);
@@ -405,6 +354,39 @@ app.whenReady().then(async () => {
        (await rodar('document.getElementById("fim").style.display')) === "block");
     ok("o robo NAO trata o 'Ok' dele como confirmacao de lance",
        (await rodar("__lancebot.botaoConfirmacao() === null")) === true);
+
+    console.log("\n[13] O robo reconhece QUAL disputa e esta");
+    const d = await rodar("__lancebot.identificarDisputa()");
+    ok("le a modalidade e o numero", /Dispensa Eletr[oô]nica/i.test(d.titulo) && d.titulo.indexOf("70/2026") !== -1, d);
+    ok("le a UASG", d.uasg === "30001", d);
+    ok("le o orgao", /TRIBUNAL DE CONTAS/i.test(d.orgao), d);
+    ok("le o tempo restante", d.tempoRestante === "00:02:41", d);
+    ok("sabe que esta na sala de disputa", d.naSalaDeDisputa === true, d);
+
+    console.log("\n[14] Cada item liga e para sozinho");
+    await rodar('__lancebot.parar("limpando para o teste")');
+    await rodar('__lancebot.armar("2", { piso: 1000, decremento: 1, tipo: "fixo" })');
+    await rodar('__lancebot.armar("3", { piso: 1000, decremento: 1, tipo: "fixo" })');
+    ok("dois itens armados",
+       (await rodar("__lancebot.itensArmados().join(',')")) === "2,3");
+
+    await rodar('__lancebot.desarmar("2", "parado no teste")');
+    const sobrou = await rodar("__lancebot.itensArmados()");
+    ok("parar um item NAO derruba o outro", sobrou.length === 1 && sobrou[0] === "3", sobrou);
+    ok("o robo segue ligado", (await rodar("__lancebot.estado.ligado")) === true);
+
+    await rodar('__lancebot.desarmar("3", "parado no teste")');
+    ok("sem item armado, o robo fica parado", (await rodar("__lancebot.estado.ligado")) === false);
+
+    // Piso acima do proximo lance: o item para sozinho, e so ele.
+    await rodar('__lancebot.armar("2", { piso: 99999, decremento: 1, tipo: "fixo" })');
+    await rodar('__lancebot.armar("3", { piso: 1, decremento: 1, tipo: "fixo" })');
+    // `armar` dispara um ciclo, e um ciclo em andamento barra o proximo. Espera o
+    // trabalho drenar em vez de forcar outro ciclo por cima.
+    await new Promise((r) => setTimeout(r, 2500));
+    await rodar("__lancebot.ciclo('teste')");
+    const apos = await rodar("__lancebot.itensArmados()");
+    ok("item com piso alto se desarma sozinho", apos.indexOf("2") === -1, apos);
 
   } catch (e) {
     console.log("  ❌ excecao:", e && e.message); falhas++;

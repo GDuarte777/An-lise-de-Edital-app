@@ -454,17 +454,61 @@ export const FONTE_MOTOR_EXTENSAO = `/* ===== extensao-lancebot/margem.js ===== 
     return el && visivel(el) ? texto(el) : "";
   }
 
+  /* --------------------------------------------- identidade da disputa */
+
+  /**
+   * Quem é esta disputa, lido do cabeçalho que o portal desenha.
+   *
+   * A coleta em disputa ao vivo mostrou o cabeçalho assim:
+   *   "Dispensa Eletrônica N° ##/#### (Lei ##.###/####) UASG ##### - TCU-TRIBUNAL ..."
+   * e o tempo em \`app-tempo-restante\`, ao lado do rótulo
+   * "Tempo restante para envio de lances:".
+   */
+  function identificarDisputa() {
+    const cab = document.querySelector("app-cabecalho-disputa-fornecedor") ||
+                document.querySelector("app-cabecalho-compra");
+    const t = texto(cab) || texto(document.body).slice(0, 400);
+
+    const m = t.match(/((?:preg[ãa]o|dispensa|concorr[êe]ncia|cota[çc][ãa]o|leil[ãa]o)[^,;|]{0,60}?n[°ºo.]?\\s*[\\d./-]+)/i);
+    const uasg = (t.match(/UASG\\s*([\\d]{3,8})/i) || [])[1] || "";
+    const orgao = (t.match(/UASG\\s*[\\d]{3,8}\\s*[-–]\\s*([^|]{3,70})/i) || [])[1] || "";
+
+    let compra = "";
+    try { compra = new URL(location.href).searchParams.get("compra") || ""; } catch (e) { /* url estranha */ }
+
+    const rel = document.querySelector("app-tempo-restante");
+    const tempo = (texto(rel).match(/\\d{1,3}:\\d{2}:\\d{2}|\\d{1,3}:\\d{2}/) || [])[0] || "";
+
+    return {
+      titulo: (m && m[1] ? m[1].trim() : "") || (compra ? \`Compra \${compra}\` : "Disputa"),
+      uasg,
+      orgao: orgao.trim(),
+      compra,
+      tempoRestante: tempo,
+      conexaoCaiu: conexaoCaiu(),
+      naSalaDeDisputa: cartoes().length > 0
+    };
+  }
+
   /* ------------------------------------------------------------ estado */
 
+  /**
+   * Uma disputa tem vários itens abertos ao mesmo tempo — a coleta do operador mostrou
+   * dois. Por isso o robô arma POR ITEM: cada um com seu piso e seu decremento, ligado e
+   * desligado à parte. Um item que para (piso atingido, portal recusou, leitura velha)
+   * não derruba os outros.
+   */
   const estado = {
-    ligado: false,
-    item: "",
-    cfg: { piso: 0, decremento: 1, tipo: "fixo" },
+    armados: {},                 // { "<item>": { piso, decremento, tipo } }
+    ligado: false,               // derivado: existe algum item armado
     canal: "desconhecido",
     ultimaResposta: null,
     aprendido: null,
     log: []
   };
+
+  const itensArmados = () => Object.keys(estado.armados);
+  const sincronizarLigado = () => { estado.ligado = itensArmados().length > 0; };
 
   const registrar = (nivel, msg) => {
     estado.log.push({ em: new Date().toISOString(), nivel, msg });
@@ -571,28 +615,38 @@ export const FONTE_MOTOR_EXTENSAO = `/* ===== extensao-lancebot/margem.js ===== 
 
   let ciclando = false;
 
+  /** Desarma UM item, sem tocar nos outros. */
+  function desarmar(numero, motivo) {
+    if (!estado.armados[numero]) return;
+    delete estado.armados[numero];
+    sincronizarLigado();
+    if (motivo) registrar("alerta", \`Item \${numero}: \${motivo}\`);
+  }
+
   async function ciclo(origem) {
     if (!estado.ligado || ciclando) return;
     ciclando = true;
     try {
-      const item = acharItem(estado.item);
-      if (!item) return registrar("alerta", \`Item \${estado.item} não está na tela.\`);
+      for (const numero of itensArmados()) {
+        const cfg = estado.armados[numero];
+        if (!cfg) continue;
 
-      const d = M.decidir(estado.cfg, item, Date.now());
+        const item = acharItem(numero);
+        if (!item) { registrar("alerta", \`Item \${numero} não está na tela.\`); continue; }
 
-      if (d.acao === "aguardar") return;
-      if (d.acao === "parar") {
-        registrar("alerta", d.motivo);
-        estado.ligado = false;
-        return;
+        const d = M.decidir(cfg, item, Date.now());
+        if (d.acao === "aguardar") continue;
+        if (d.acao === "parar") { desarmar(numero, d.motivo); continue; }
+
+        registrar("concorrente",
+          \`Item \${numero}: melhor valor R$ \${item.melhorValor.toFixed(2)} (via \${origem}). Ofertando R$ \${d.valor.toFixed(2)}.\`);
+        const r = await enviarLance(item, d.valor);
+
+        if (!r.ok || !r.confirmado) { desarmar(numero, r.motivo); continue; }
+        registrar(r.aceito ? "sucesso" : "alerta",
+          \`Item \${numero}: \` + (r.aceito ? "lance aceito. " : "portal recusou. ") + r.motivo);
+        if (!r.aceito) desarmar(numero, "o portal recusou o lance — confira antes de ligar de novo.");
       }
-
-      registrar("concorrente", \`Melhor valor R$ \${item.melhorValor.toFixed(2)} (via \${origem}). Ofertando R$ \${d.valor.toFixed(2)}.\`);
-      const r = await enviarLance(item, d.valor);
-
-      if (!r.ok) { registrar("alerta", r.motivo); estado.ligado = false; return; }
-      if (!r.confirmado) { registrar("alerta", r.motivo); estado.ligado = false; return; }
-      registrar(r.aceito ? "sucesso" : "alerta", (r.aceito ? "Lance aceito. " : "Portal recusou. ") + r.motivo);
     } finally {
       ciclando = false;
     }
@@ -644,8 +698,22 @@ export const FONTE_MOTOR_EXTENSAO = `/* ===== extensao-lancebot/margem.js ===== 
   window.__lancebot = {
     estado, ciclo, acharItem, cartoes, lerCartao, controles, enviarLance, melhorDoHistorico,
     conexaoCaiu, registrar, botaoConfirmacao, avisoDoPortal, camposDeLance, botaoDeLance,
-    ligar: (item, cfg) => { estado.item = String(item); estado.cfg = cfg; estado.ligado = true; registrar("sistema", \`Robô ligado no item \${item}.\`); void ciclo("inicio"); },
-    parar: (motivo) => { estado.ligado = false; registrar("sistema", motivo || "Parado pelo operador."); }
+    identificarDisputa, itensArmados, desarmar, ciclo,
+
+    armar: (item, cfg) => {
+      estado.armados[String(item)] = cfg;
+      sincronizarLigado();
+      registrar("sistema", \`Item \${item} armado: piso R$ \${Number(cfg.piso).toFixed(2)}, decremento \${cfg.tipo === "percentual" ? cfg.decremento + "%" : "R$ " + Number(cfg.decremento).toFixed(2)}.\`);
+      void ciclo("inicio");
+    },
+
+    // Mantidos: \`ligar\` arma um item, \`parar\` desarma todos.
+    ligar: (item, cfg) => { window.__lancebot.armar(item, cfg); },
+    parar: (motivo) => {
+      estado.armados = {};
+      sincronizarLigado();
+      registrar("sistema", motivo || "Parado pelo operador.");
+    }
   };
 })();
 `;

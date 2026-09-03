@@ -2,30 +2,19 @@
 
 Motor de lances rodando **dentro do seu navegador, na sua sessão** do Compras.gov.br.
 
-## O que isto é, e o que não é
+## O que isto é
 
-**O robô é o aplicativo instalado, em `desktop/`.** Esta extensão é o mesmo motor de
-leitura rodando no Chrome, para quem preferir operar direto no navegador.
+**O robô.** Você entra no Compras.gov.br como sempre entra, abre a disputa, e o painel
+aparece no canto da tela já sabendo qual disputa é e quais itens estão abertos. Configura
+piso e decremento por item, liga.
 
-Vale registrar o raciocínio errado que quase fez esta extensão virar o produto: a coleta
-mostrou que quase toda chamada de dados do portal exige um token de hCaptcha
-(`?captcha=P1_...`), gerado pelo widget que roda **dentro da página** — logo, o robô tem
-que viver numa página. Isso está certo. O que não segue é "logo, tem que ser extensão":
-um aplicativo Electron **também tem uma página**, e ela é dele.
+Não há login a fazer aqui, nem sessão a verificar: a sessão é a do seu próprio navegador,
+na página de verdade. Essa é a razão de ser desta versão — a tentativa de fazer isso por
+aplicativo instalado gastou quatro correções tentando responder "existe sessão?", e errou
+todas pelo mesmo motivo: a URL que ele abria para decidir. Aqui a pergunta não existe.
 
-E essa diferença decide o caso. A sessão do gov.br cai em poucos minutos sem interação;
-numa aba do navegador a aba vai para segundo plano, o SPA para de renovar o token e a
-sessão morre — por isso se atualiza a página o tempo todo. No aplicativo a janela é dele,
-então ele mantém a sessão viva sozinho (ver `desktop/src/main/auth/sessao-viva.ts`).
-É por isso que os robôs de mercado são aplicativos instalados.
-
-**Limitação desta extensão, e ela é séria:** aqui a sessão NÃO é mantida viva, porque não
-há como. Se a sessão cair, o robô para. Para deixar ligado sem acompanhar, use o
-aplicativo.
-
-O motor de leitura é literalmente o mesmo arquivo nos dois — `desktop` embute
-`margem.js` e `conteudo.js` via `scripts/gerar-motor.cjs`, com teste que falha se
-divergirem.
+O aplicativo em `desktop/` continua servindo para análise de edital, e compartilha este
+mesmo motor de leitura (`scripts/gerar-motor.cjs`, com teste que falha se divergirem).
 
 ## O que já está pronto e testado
 
