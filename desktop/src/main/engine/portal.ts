@@ -38,6 +38,13 @@ export interface ResultadoEnvio {
   aceito: boolean;
   /** Mensagem do portal, repassada crua para o log de auditoria. */
   mensagem: string;
+  /**
+   * Se o portal deu algum sinal de desfecho — resposta HTTP do envio ou aviso na tela.
+   * `false` significa "cliquei e não sei o que aconteceu": o motor precisa parar, porque
+   * repetir o ciclo poderia mandar um segundo lance por cima de um que talvez tenha
+   * entrado. Ausente = o adapter não distingue os dois casos (simulação).
+   */
+  confirmado?: boolean;
 }
 
 export interface PortalAdapter {
@@ -62,9 +69,9 @@ export interface PortalAdapter {
 export class PortalNaoCalibradoError extends Error {
   constructor(operacao: string) {
     super(
-      `O adapter do Compras.gov.br ainda não foi calibrado para "${operacao}". ` +
-        `Rode o Modo Captura durante um pregão real, exporte o tráfego e preencha ` +
-        `src/main/engine/comprasnet.ts antes de operar em produção.`
+      `O adapter de API do Compras.gov.br não foi calibrado para "${operacao}". ` +
+        `Este caminho é opcional: a operação normal do robô acontece pela sala de disputa ` +
+        `(SalaDisputaAdapter), que não depende de calibração.`
     );
     this.name = "PortalNaoCalibradoError";
   }
