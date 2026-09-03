@@ -72,6 +72,11 @@ jobs:
       - name: Verificar que a sessão do gov.br não expira
         run: npm run test:sessao
 
+      # "Lances em casas decimais" faz o robô ofertar ABAIXO do mínimo configurado, e
+      # "segundos finais" segura o lance. As duas mexem em dinheiro: teste próprio.
+      - name: Verificar as regras de desempate e de segundos finais
+        run: npm run test:margem
+
       # A extensão é o que de fato dá lance no portal (o token de hCaptcha só existe
       # dentro da página). O painel do operador e a guarda de margem são checados aqui
       # contra uma réplica da tela real antes de qualquer publicação.

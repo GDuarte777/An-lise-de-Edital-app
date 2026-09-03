@@ -20,7 +20,8 @@
     "test:sessao": "electron scripts/teste-sessao-viva.cjs --no-sandbox",
     "motor": "node scripts/gerar-motor.cjs",
     "test:login": "electron scripts/teste-login-janelas.cjs --no-sandbox",
-    "test:portal": "electron scripts/teste-pergunta-portal.cjs --no-sandbox"
+    "test:portal": "electron scripts/teste-pergunta-portal.cjs --no-sandbox",
+    "test:margem": "node scripts/teste-margem-decimais.cjs"
   },
   "dependencies": {
     "@supabase/auth-js": "^2.112.3"

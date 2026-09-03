@@ -200,8 +200,10 @@
       melhorValor: melhor,
       meuValor: valorRotulado(cartao, RE_MEU),
       aberto,
+      situacao: situacaoDoItem(fase, operavel),
       fase,
       lidoEm: Date.now(),
+      segundosRestantes: segundosRestantes(),
       cartao
     };
   }
@@ -357,6 +359,122 @@
     return el && visivel(el) ? texto(el) : "";
   }
 
+  const APREND = () => window.__lancebotAprendizado || null;
+  const gravar = (tipo, dados) => { const a = APREND(); if (a) a.anotar(tipo, dados); };
+
+  /* ------------------------------------------------------- tempo e fases */
+
+  /** Segundos até o fim do envio de lances, lidos do relógio do próprio portal. */
+  function segundosRestantes() {
+    const el = document.querySelector("app-tempo-restante");
+    if (!el || !visivel(el)) return null;
+    const m = texto(el).match(/(\d{1,3}):(\d{2})(?::(\d{2}))?/);
+    if (!m) return null;
+    return m[3] !== undefined
+      ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
+      : Number(m[1]) * 60 + Number(m[2]);
+  }
+
+  const RE_ENCERRADO_DE_VEZ = /encerrad|finalizad|cancelad|homologad|adjudicad|desert|fracassad|julgad/i;
+
+  /**
+   * As três fases que o portal mostra em abas: aguardando, em disputa, encerrados.
+   * Item operável é "em disputa" por evidência — tem campo e botão habilitados.
+   */
+  function situacaoDoItem(fase, operavel) {
+    if (operavel) return "aberto";
+    return RE_ENCERRADO_DE_VEZ.test(fase) ? "encerrado" : "aguardando";
+  }
+
+  /* --------------------------------------------------------------- chat */
+
+  const mensagens = [];
+  const vistas = new Set();
+
+  function guardarMensagem(m) {
+    const chave = (m.em || "") + "|" + (m.texto || "").slice(0, 80);
+    if (!m.texto || vistas.has(chave)) return;
+    vistas.add(chave);
+    mensagens.push(m);
+    if (mensagens.length > 200) mensagens.shift();
+  }
+
+  /**
+   * Mensagens do chat da disputa.
+   *
+   * Vêm da resposta que o próprio portal busca (`/comprasnet-mensagem/v2/chat/...`),
+   * espelhada por `pagina.js`. Ler dali é mais confiável do que depender de a gaveta de
+   * mensagens estar aberta na tela — e ela quase nunca está.
+   *
+   * O formato do JSON nunca foi observado por este projeto, então a leitura é
+   * deliberadamente genérica: procura, em qualquer lugar da resposta, objetos que tenham
+   * um texto e (de preferência) uma data. Se o portal mudar o nome dos campos, isso
+   * continua funcionando; se não achar nada, o painel diz que não achou em vez de
+   * inventar.
+   */
+  const CAMPOS_TEXTO = ["mensagem", "texto", "conteudo", "descricao", "corpo", "message", "text"];
+  const CAMPOS_DATA = ["dataHora", "data", "dataEnvio", "criadoEm", "horario", "dataCadastro", "createdAt"];
+  const CAMPOS_AUTOR = ["autor", "remetente", "usuario", "nome", "origem", "perfil", "papel"];
+
+  function colher(v, saida, prof) {
+    const p = prof || 0;
+    if (!v || p > 6 || saida.length > 200) return;
+    if (Array.isArray(v)) { v.forEach((x) => colher(x, saida, p + 1)); return; }
+    if (typeof v !== "object") return;
+
+    const achar = (nomes) => {
+      for (const k of Object.keys(v)) {
+        if (nomes.indexOf(k) !== -1 && typeof v[k] === "string" && v[k].trim()) return v[k].trim();
+      }
+      return "";
+    };
+    const txt = achar(CAMPOS_TEXTO);
+    if (txt) saida.push({ texto: txt.slice(0, 600), em: achar(CAMPOS_DATA), autor: achar(CAMPOS_AUTOR) });
+
+    for (const k of Object.keys(v)) colher(v[k], saida, p + 1);
+  }
+
+  function absorverChat(corpo) {
+    let dados;
+    try { dados = JSON.parse(corpo); } catch (e) { return 0; }
+    const achadas = [];
+    colher(dados, achadas, 0);
+    achadas.forEach(guardarMensagem);
+    return achadas.length;
+  }
+
+  const chat = () => mensagens.slice(-60);
+
+  /* ------------------------------------------------------ classificação */
+
+  /**
+   * Onde o operador está na fila de valores do item.
+   *
+   * Montada com o que o portal mostra na tela — o histórico de lances e o painel de
+   * melhores valores. É classificação POR VALOR: quantos valores distintos estão abaixo
+   * do dele. O painel diz isso com todas as letras, porque não é a classificação oficial
+   * do pregoeiro, é o que dá para afirmar a partir da tela.
+   */
+  function classificacao(numero) {
+    const item = acharItem(numero);
+    const fontes = ["app-todos-lances", "app-melhores-valores", "app-propostas-iniciais"];
+    const valores = [];
+    fontes.forEach((sel) => {
+      document.querySelectorAll(sel).forEach((el) => {
+        if (visivel(el)) valoresEm(texto(el)).forEach((v) => valores.push(v));
+      });
+    });
+    if (item && typeof item.melhorValor === "number") valores.push(item.melhorValor);
+
+    const distintos = Array.from(new Set(valores.map((v) => Math.round(v * 10000)))).map((v) => v / 10000);
+    distintos.sort((a, b) => a - b);
+
+    const meu = item && typeof item.meuValor === "number" ? item.meuValor : null;
+    const posicao = meu === null ? null : distintos.filter((v) => v < meu).length + 1;
+
+    return { item: String(numero), meuValor: meu, posicao, total: distintos.length, valores: distintos.slice(0, 30) };
+  }
+
   /* --------------------------------------------- identidade da disputa */
 
   /**
@@ -367,6 +485,13 @@
    * e o tempo em `app-tempo-restante`, ao lado do rótulo
    * "Tempo restante para envio de lances:".
    */
+  /** Quantos itens em cada fase — é o que alimenta as três abas do painel. */
+  function contarFases() {
+    const contas = { aguardando: 0, aberto: 0, encerrado: 0 };
+    cartoes().map(lerCartao).forEach((i) => { contas[i.situacao] = (contas[i.situacao] || 0) + 1; });
+    return contas;
+  }
+
   function identificarDisputa() {
     const cab = document.querySelector("app-cabecalho-disputa-fornecedor") ||
                 document.querySelector("app-cabecalho-compra");
@@ -388,8 +513,10 @@
       orgao: orgao.trim(),
       compra,
       tempoRestante: tempo,
+      segundosRestantes: segundosRestantes(),
       conexaoCaiu: conexaoCaiu(),
-      naSalaDeDisputa: cartoes().length > 0
+      naSalaDeDisputa: cartoes().length > 0,
+      fases: contarFases()
     };
   }
 
@@ -538,12 +665,22 @@
         if (!item) { registrar("alerta", `Item ${numero} não está na tela.`); continue; }
 
         const d = M.decidir(cfg, item, Date.now());
+        // Cada decisão fica gravada com a tela que a produziu: é isso que permite
+        // reconstruir depois por que o robô fez o que fez.
+        gravar("decisao", {
+          item: numero, origem, cfg,
+          leitura: { melhor: item.melhorValor, meu: item.meuValor, situacao: item.situacao,
+                     segundos: item.segundosRestantes },
+          decisao: d
+        });
         if (d.acao === "aguardar") continue;
         if (d.acao === "parar") { desarmar(numero, d.motivo); continue; }
 
         registrar("concorrente",
-          `Item ${numero}: melhor valor R$ ${item.melhorValor.toFixed(2)} (via ${origem}). Ofertando R$ ${d.valor.toFixed(2)}.`);
+          `Item ${numero}: melhor R$ ${item.melhorValor.toFixed(2)} (via ${origem}). ` +
+          `Ofertando R$ ${d.valor.toFixed(d.desempate ? 4 : 2)}${d.desempate ? " — desempate por casas decimais." : "."}`);
         const r = await enviarLance(item, d.valor);
+        gravar("envio", { item: numero, valor: d.valor, desempate: Boolean(d.desempate), resultado: r });
 
         if (!r.ok || !r.confirmado) { desarmar(numero, r.motivo); continue; }
         registrar(r.aceito ? "sucesso" : "alerta",
@@ -568,8 +705,19 @@
     const d = ev.data;
     if (!d || d.__lancebot !== true) return;
 
-    if (d.tipo === "mudou") void ciclo("websocket");
-    else if (d.tipo === "resposta-lance") estado.ultimaResposta = d;
+    if (d.tipo === "mudou") { gravar("tempo-real", { origem: d.origem }); void ciclo("websocket"); }
+    else if (d.tipo === "dados") {
+      // Chat e dados de disputa que o próprio portal buscou.
+      if (/\/chat\b/i.test(d.url)) {
+        const n = absorverChat(d.corpo);
+        if (n) gravar("chat", { url: d.url, mensagens: n });
+      }
+      gravar("resposta-portal", { url: d.url, status: d.status, corpo: String(d.corpo || "").slice(0, 4000) });
+    }
+    else if (d.tipo === "resposta-lance") {
+      estado.ultimaResposta = d;
+      gravar("resposta-lance", { url: d.url, status: d.status, corpo: d.corpo });
+    }
     else if (d.tipo === "retoken") {
       // A coleta flagrou a sequência: GET → 401, PUT .../sessao/fornecedor/retoken → 200,
       // GET → 200. A própria SPA renova o token. Recarregar a página aqui seria destruir
@@ -601,7 +749,8 @@
   window.__lancebot = {
     estado, ciclo, acharItem, cartoes, lerCartao, controles, enviarLance, melhorDoHistorico,
     conexaoCaiu, registrar, botaoConfirmacao, avisoDoPortal, camposDeLance, botaoDeLance,
-    identificarDisputa, itensArmados, desarmar, ciclo,
+    identificarDisputa, itensArmados, desarmar, ciclo, contarFases,
+    segundosRestantes, situacaoDoItem, chat, absorverChat, classificacao,
 
     armar: (item, cfg) => {
       estado.armados[String(item)] = cfg;

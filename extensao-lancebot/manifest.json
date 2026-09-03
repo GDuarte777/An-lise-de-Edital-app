@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HORASIS LanceBot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Robô de lances para o Compras.gov.br. Reconhece a disputa, você configura piso e decremento por item e liga.",
   "permissions": [
     "storage",
@@ -9,7 +9,8 @@
     "activeTab"
   ],
   "host_permissions": [
-    "https://cnetmobile.estaleiro.serpro.gov.br/*"
+    "https://cnetmobile.estaleiro.serpro.gov.br/*",
+    "https://cghlfhndoqohmrrvppjj.supabase.co/*"
   ],
   "content_scripts": [
     {
@@ -28,6 +29,8 @@
         "https://cnetmobile.estaleiro.serpro.gov.br/*"
       ],
       "js": [
+        "horasis.js",
+        "aprendizado.js",
         "margem.js",
         "conteudo.js",
         "painel.js"

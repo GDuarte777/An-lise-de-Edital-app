@@ -54,6 +54,19 @@
 
   const RE_RETOKEN = /sessao\/fornecedor\/retoken/i;
 
+  /**
+   * Respostas de GET que valem espelhar inteiras.
+   *
+   * O chat é a razão principal: ele já vem por aqui quando o portal o carrega, e ler a
+   * resposta é muito mais confiável do que depender de a gaveta de mensagens estar
+   * aberta na tela. As demais alimentam o gravador de aprendizado — o material do robô
+   * executável de amanhã.
+   *
+   * A lista é curta de propósito: espelhar o corpo de TODA requisição pesaria justamente
+   * na hora do lance.
+   */
+  const RE_DADOS = /\/(chat|lances|itens\/(em-disputa|aguardando-disputa|disputa-encerrada)|propostas-iniciais|participacao)\b/i;
+
   const anotar = (metodo, url, status, corpo) => {
     // A renovação de token é sinal de saúde, não de queda: avisa para o robô NÃO
     // recarregar a página achando que perdeu a sessão.
@@ -61,7 +74,15 @@
       avisar({ tipo: "retoken", em: Date.now() });
       return;
     }
-    if (metodo === "GET") return;
+    if (metodo === "GET") {
+      if (RE_DADOS.test(url)) {
+        avisar({
+          tipo: "dados", metodo, url: String(url).slice(0, 400),
+          status, corpo: String(corpo || "").slice(0, 60000), em: Date.now()
+        });
+      }
+      return;
+    }
     if (!RE_LANCE.test(url)) return;
     avisar({
       tipo: "resposta-lance", metodo, url: String(url),
@@ -75,7 +96,8 @@
       const url = typeof entrada === "string" ? entrada : (entrada && entrada.url) || "";
       const metodo = String((cfg && cfg.method) || (entrada && entrada.method) || "GET").toUpperCase();
       const p = fetchOriginal.apply(this, arguments);
-      if (metodo !== "GET" && (RE_LANCE.test(url) || RE_RETOKEN.test(url))) {
+      if ((metodo !== "GET" && (RE_LANCE.test(url) || RE_RETOKEN.test(url))) ||
+          (metodo === "GET" && RE_DADOS.test(url))) {
         p.then((r) => {
           const s = r.status;
           r.clone().text().then((t) => anotar(metodo, url, s, t)).catch(() => anotar(metodo, url, s, ""));
@@ -95,7 +117,9 @@
     const enviar = XHR.prototype.send;
     XHR.prototype.send = function () {
       const i = this.__lb, x = this;
-      if (i && i.metodo !== "GET" && (RE_LANCE.test(i.url) || RE_RETOKEN.test(i.url))) {
+      const interessa = i && ((i.metodo !== "GET" && (RE_LANCE.test(i.url) || RE_RETOKEN.test(i.url))) ||
+                              (i.metodo === "GET" && RE_DADOS.test(i.url)));
+      if (interessa) {
         x.addEventListener("loadend", () => {
           let c = "";
           try { c = String(x.responseText || ""); } catch (e) { /* binário */ }

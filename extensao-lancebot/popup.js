@@ -30,8 +30,14 @@ chrome.tabs.query({ active: true, currentWindow: true }, (abas) => {
       func: () => {
         const b = window.__lancebot;
         if (!b) return null;
-        const d = b.identificarDisputa();
-        return { armados: b.itensArmados(), itens: b.cartoes().length, disputa: d };
+        return {
+          armados: b.itensArmados(),
+          itens: b.cartoes().length,
+          disputa: b.identificarDisputa(),
+          mensagens: b.chat().length,
+          gravados: window.__lancebotAprendizado ? window.__lancebotAprendizado.quantos() : 0,
+          logado: Boolean(window.__lancebotPainel && window.__lancebotPainel.raiz.getElementById("corpo"))
+        };
       }
     },
     (r) => {
@@ -40,8 +46,12 @@ chrome.tabs.query({ active: true, currentWindow: true }, (abas) => {
       if (!info.itens) {
         return mostrar("", "Nenhum item nesta tela", "Abra a sala da disputa (a tela com o campo de lance).");
       }
+      if (!info.logado) {
+        return mostrar("alerta", "Entre com sua conta HORASIS", "O painel na página está pedindo login.");
+      }
       const d = info.disputa || {};
-      const onde = [d.titulo, d.uasg ? "UASG " + d.uasg : ""].filter(Boolean).join(" · ");
+      const onde = [d.titulo, d.uasg ? "UASG " + d.uasg : "", d.tempoRestante ? "faltam " + d.tempoRestante : ""]
+        .filter(Boolean).join(" · ");
       if (info.armados.length) {
         return mostrar("on", `Operando ${info.armados.length} item(ns): ${info.armados.join(", ")}`, onde);
       }

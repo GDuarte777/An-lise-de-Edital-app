@@ -266,7 +266,20 @@ app.whenReady().then(async () => {
     ok("detecta 'Recarregar pagina'", (await rodar("__lancebot.conexaoCaiu()")) === true);
 
     console.log("\n[9] Painel do operador");
+    await rodar(ler("horasis.js"));
+    await rodar(ler("aprendizado.js"));
     await rodar(ler("painel.js"));
+
+    // A extensao e so para quem tem conta HORASIS: sem sessao, o painel e uma porta.
+    ok("sem login, o painel mostra a porta de entrada",
+       (await rodar('Boolean(__lancebotPainel.raiz.getElementById("entrar"))')) === true);
+    ok("sem login, nao ha item nenhum na tela",
+       (await rodar('__lancebotPainel.raiz.querySelectorAll(".item").length')) === 0);
+    await rodar('__lancebotPainel.abrir({ email: "operador@horasis.com.br" })');
+    ok("com login, o painel abre", (await rodar('Boolean(__lancebotPainel.raiz.getElementById("corpo"))')) === true);
+    ok("mostra a conta logada",
+       (await rodar('__lancebotPainel.raiz.getElementById("conta").textContent')) === "operador@horasis.com.br");
+
     ok("painel montou", (await rodar("Boolean(window.__lancebotPainel)")) === true);
     ok("painel vive em shadow DOM (nao vaza para a pagina)",
        (await rodar('document.querySelector("#piso") === null && Boolean(document.getElementById("horasis-lancebot-painel"))')) === true);
@@ -295,25 +308,55 @@ app.whenReady().then(async () => {
     ok("recusa percentual de 100%", val.pctCheio.ok === false, val.pctCheio);
     ok("aceita config valida", val.bom.ok === true && val.bom.cfg.piso === 1200 && val.bom.cfg.decremento === 0.5, val.bom);
 
-    // Um cartao por item na tela, com o botao de ligar em cada um.
-    const cartoesPainel = await rodar(`(() => {
+    // Tres abas, como o portal mostra: aguardando / em disputa / encerrados.
+    const abas = await rodar(`(() => {
+      const r = __lancebotPainel.raiz;
+      return Array.from(r.querySelectorAll(".aba")).map((b) => b.textContent);
+    })()`);
+    ok("tem as tres abas da disputa", abas.length === 3, abas);
+    ok("a aba do meio e 'Em disputa'", /Em disputa/.test(abas[1]), abas);
+    ok("conta 2 itens em disputa", /2$/.test(abas[1]), abas);
+    ok("conta 1 encerrado", /1$/.test(abas[2]), abas);
+
+    const naAba = await rodar(`(() => {
       const r = __lancebotPainel.raiz;
       return {
         itens: r.querySelectorAll(".item").length,
-        rotulos: Array.from(r.querySelectorAll(".acaoItem")).map((b) => b.textContent),
         travados: Array.from(r.querySelectorAll(".acaoItem")).map((b) => b.disabled)
       };
     })()`);
-    ok("um cartao por item da tela", cartoesPainel.itens === 3, cartoesPainel);
-    ok("item fechado nao pode ser ligado", cartoesPainel.travados[1] === true, cartoesPainel);
-    ok("itens abertos podem ser ligados",
-       cartoesPainel.travados[0] === false && cartoesPainel.travados[2] === false, cartoesPainel);
+    ok("a aba mostra so os itens em disputa", naAba.itens === 2, naAba);
+    ok("e os dois podem ser ligados", naAba.travados.every((t) => t === false), naAba);
+
+    await rodar('__lancebotPainel.aba = "encerrado"');
+    ok("a aba de encerrados mostra o item fechado",
+       (await rodar('__lancebotPainel.raiz.querySelectorAll(".item").length')) === 1);
+    ok("e ele NAO pode ser ligado",
+       (await rodar('__lancebotPainel.raiz.querySelector(".acaoItem").disabled')) === true);
+    await rodar('__lancebotPainel.aba = "aberto"');
+
+    // Os campos com o nome que o operador usa.
+    const rotulos = await rodar(`Array.from(__lancebotPainel.raiz.querySelectorAll(".conf label"))
+      .map((l) => l.textContent.split("R$")[0].trim()).slice(0, 3)`);
+    ok("o campo do limite chama 'Lance mínimo'", /Lance m[ií]nimo/.test(rotulos.join(" ")), rotulos);
+    ok("o campo do passo chama 'Intervalo mínimo'", /Intervalo m[ií]nimo/.test(rotulos.join(" ")), rotulos);
+
+    const opcoes = await rodar(`Array.from(__lancebotPainel.raiz.querySelectorAll(".op")).map((o) => o.textContent)`);
+    ok("tem a opcao de casas decimais", /casas decimais/i.test(opcoes.join(" ")), opcoes);
+    ok("tem a opcao de segundos finais", /segundos finais/i.test(opcoes.join(" ")), opcoes);
+    ok("a opcao de decimais avisa que vai abaixo do minimo",
+       /abaixo do seu m[ií]nimo/i.test(opcoes.join(" ")), opcoes);
 
     console.log("\n[10] A TELA REAL da disputa (coleta em fase de lances)");
     await janela.loadURL(`http://127.0.0.1:${s.address().port}/real`);
+    // A recarga zera a pagina: tudo entra de novo, na mesma ordem do manifest.
     await rodar(ler("pagina.js"));
+    await rodar(ler("horasis.js"));
+    await rodar(ler("aprendizado.js"));
     await rodar(ler("margem.js"));
     await rodar(ler("conteudo.js"));
+    await rodar(ler("painel.js"));
+    await rodar('__lancebotPainel.abrir({ email: "operador@horasis.com.br" })');
 
     // Sem app-card-item na tela: o robô tinha que enxergar os itens assim mesmo.
     ok("nao existe app-card-item nesta tela",
@@ -387,6 +430,52 @@ app.whenReady().then(async () => {
     await rodar("__lancebot.ciclo('teste')");
     const apos = await rodar("__lancebot.itensArmados()");
     ok("item com piso alto se desarma sozinho", apos.indexOf("2") === -1, apos);
+
+    console.log("\n[15] Chat da disputa, lido da resposta que o portal busca");
+    // O formato do JSON nunca foi observado, entao a leitura e generica de proposito.
+    const chatFalso = JSON.stringify({ content: [
+      { dataHora: "03/09/2026 10:15:02", autor: "Pregoeiro", mensagem: "Bom dia, senhores fornecedores." },
+      { dataHora: "03/09/2026 10:16:40", autor: "Sistema", mensagem: "Item 2 aberto para lances." }
+    ]});
+    await rodar(`window.postMessage({ __lancebot: true, tipo: "dados", url: "/comprasnet-mensagem/v2/chat/900", status: 200, corpo: ${JSON.stringify(chatFalso)}, em: Date.now() }, "*")`);
+    await new Promise((r) => setTimeout(r, 300));
+    const msgs = await rodar("__lancebot.chat()");
+    ok("capturou as mensagens", msgs.length === 2, msgs);
+    ok("com autor e horario", msgs[0].autor === "Pregoeiro" && /10:15/.test(msgs[0].em), msgs[0]);
+    ok("com o texto", /Bom dia/.test(msgs[0].texto), msgs[0]);
+    await rodar(`window.postMessage({ __lancebot: true, tipo: "dados", url: "/comprasnet-mensagem/v2/chat/900", status: 200, corpo: ${JSON.stringify(chatFalso)}, em: Date.now() }, "*")`);
+    await new Promise((r) => setTimeout(r, 300));
+    ok("nao duplica ao recarregar o chat", (await rodar("__lancebot.chat().length")) === 2);
+
+    // Formato diferente: o portal pode renomear os campos e isto tem que sobreviver.
+    await rodar(`window.postMessage({ __lancebot: true, tipo: "dados", url: "/chat/1", status: 200, corpo: ${JSON.stringify(JSON.stringify([{ createdAt: "10:20", nome: "Fornecedor", texto: "Recurso." }]))}, em: Date.now() }, "*")`);
+    await new Promise((r) => setTimeout(r, 300));
+    ok("le tambem com outros nomes de campo",
+       (await rodar("__lancebot.chat().some(m => /Recurso/.test(m.texto))")) === true);
+
+    console.log("\n[16] Tempo restante e classificacao");
+    ok("le os segundos restantes do relogio do portal",
+       (await rodar("__lancebot.segundosRestantes()")) === 161);   // 00:02:41
+
+    const cls = await rodar('__lancebot.classificacao("2")');
+    ok("monta a classificacao do item", cls.item === "2" && cls.total > 0, cls);
+    ok("acha a posicao pelo valor", typeof cls.posicao === "number" && cls.posicao >= 1, cls);
+    ok("os valores vem em ordem crescente",
+       cls.valores.every((v, i, a) => i === 0 || a[i - 1] <= v), cls.valores);
+
+    console.log("\n[17] O gravador de aprendizado");
+    ok("gravou eventos da disputa", (await rodar("__lancebotAprendizado.quantos()")) > 0);
+    const mascarado = await rodar(`JSON.stringify(__lancebotAprendizado.limpar({
+      texto: "CPF 063.976.775-32 e CNPJ 45.153.397/0001-90 com lance R$ 1.250,5000"
+    }))`);
+    ok("mascara CPF", mascarado.indexOf("063.976.775-32") === -1 && mascarado.indexOf("[CPF]") !== -1, mascarado);
+    ok("mascara CNPJ", mascarado.indexOf("45.153.397/0001-90") === -1 && mascarado.indexOf("[CNPJ]") !== -1, mascarado);
+    ok("mas preserva o valor, que e o que o robo futuro precisa aprender",
+       mascarado.indexOf("1.250,5000") !== -1, mascarado);
+    ok("guardou as decisoes do robo",
+       (await rodar("__lancebotAprendizado.tudo().some(e => e.tipo === 'decisao')")) === true);
+    ok("guardou os envios",
+       (await rodar("__lancebotAprendizado.tudo().some(e => e.tipo === 'envio')")) === true);
 
   } catch (e) {
     console.log("  ❌ excecao:", e && e.message); falhas++;

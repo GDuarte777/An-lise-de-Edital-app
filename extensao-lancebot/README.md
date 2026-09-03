@@ -16,27 +16,43 @@ todas pelo mesmo motivo: a URL que ele abria para decidir. Aqui a pergunta não 
 O aplicativo em `desktop/` continua servindo para análise de edital, e compartilha este
 mesmo motor de leitura (`scripts/gerar-motor.cjs`, com teste que falha se divergirem).
 
-## O que já está pronto e testado
+## O que o painel mostra
 
-- **Guarda de margem** — nunca desce abaixo do seu piso.
-- **Trava de validade** — leitura com mais de 8s não vira lance. A tela do portal congela
-  quando a conexão cai; sem isso o robô ofertaria contra preço que não existe mais.
-- **Leitura do item** — pelos componentes reais (`app-card-item`,
-  `app-identificacao-e-fase-item`), não por ids `pn_id_###`, que mudam a cada carga.
-- **Digitação vencendo a máscara de moeda**, conferindo o valor **antes** de clicar.
-  Se o campo não ficar exato, ele limpa e recusa.
-- **Modal de confirmação** e leitura do desfecho pelo POST do portal.
-- **Sem confirmação em 6s, o robô para** — para não repetir um lance que pode ter entrado.
-- **Queda de conexão**: detecta pelo WebSocket fechando e pelo "Recarregar página" que o
-  portal mostra em `app-situacao-conexao-sistema`, e recarrega sozinho. É exatamente o
-  que você faz na mão hoje.
-- **Sem polling**: o portal empurra por WebSocket; a mensagem é o gatilho para reler.
+- **Acesso só para assinantes HORASIS.** Sem login da plataforma o painel é uma porta —
+  não há item, nem configuração, nem botão de ligar. A senha não é guardada; o que fica é
+  o token, e ele some quando você sai.
+- **Qual disputa é** — modalidade, número, UASG e órgão, lidos do cabeçalho do portal.
+- **Cronômetro em tempo real** do fim dos lances, ficando vermelho no último minuto.
+- **Três abas**: Aguardando · Em disputa · Encerrados, com a contagem em cada uma.
+- **Melhor lance e Meu lance** por item, com destaque quando você lidera.
+- **Lance mínimo (R$)** — o limite que o robô respeita.
+- **Intervalo mínimo** — quanto ele desce por lance, em R$ ou %.
+- **Permitir lances em casas decimais** — desempata quem ofertou exatamente o mesmo
+  valor que você, indo **R$ 0,0001 abaixo do seu mínimo**. Isso é, deliberadamente,
+  ofertar abaixo do limite configurado: é a única forma de ganhar de um empate, o passo é
+  de um centésimo de centavo, e ele **nunca desce mais que um passo**.
+- **Disputar apenas nos segundos finais** — só oferta no fim. Falha fechada: se não
+  conseguir ler o tempo restante, não oferta, porque ofertar cedo quando você pediu para
+  esperar é pior do que não ofertar.
+- **Classificação** — sua posição pelos lances e propostas que o portal mostra na tela.
+  Não é a classificação oficial do pregoeiro; o painel diz isso.
+- **Chat da disputa**, lido da resposta que o próprio portal busca — mais confiável do
+  que depender de a gaveta de mensagens estar aberta.
+- **Próximo lance** aparece antes de você ligar, calculado pela mesma guarda que decide
+  de verdade.
 
-- **Painel do operador** — no canto inferior direito da sala. Escolhe o item, o piso e o
-  decremento, liga e para. Mostra o melhor lance, o seu lance e **qual seria o próximo**,
-  antes de você ligar. Fica em Shadow DOM: o CSS do portal não o afeta, e — o que
-  importa mais — os campos dele não podem ser confundidos com o campo de lance do item,
-  porque `querySelector` não atravessa shadow root.
+Cada item liga e para sozinho. Um item que atinge o mínimo não derruba os outros.
+
+## O gravador de aprendizado
+
+Tudo o que acontece na disputa fica anotado: como a tela estava, o que o portal
+respondeu, o que o robô decidiu e o que aconteceu depois. É esse material que vai
+permitir escrever um robô executável fora do navegador sem descobrir o portal de novo.
+
+Fica em `chrome.storage.local`, na sua máquina. **Nada sai daí sozinho** — só quando você
+clica em "Exportar aprendizado". CPF e CNPJ são mascarados mesmo sendo seus: identificam
+pessoas e não fazem falta para entender a mecânica. Valor, horário e estrutura ficam
+inteiros, porque são exatamente o que o robô futuro precisa.
 
 ## A tela real (coleta em disputa ao vivo)
 
