@@ -986,7 +986,7 @@ function buildProviderMessages(contents: any[], provider: string): any[] {
  * do provedor. O orçamento fica abaixo do timeout do cliente de propósito: assim quem
  * responde é o servidor, com o motivo verdadeiro.
  */
-const AI_REQUEST_BUDGET_MS = Number(process.env.AI_REQUEST_BUDGET_MS || 100_000);
+const AI_REQUEST_BUDGET_MS = Number(process.env.AI_REQUEST_BUDGET_MS || 60_000);
 
 async function generateAiResponse(params: {
   contents: any[];
@@ -1001,8 +1001,18 @@ async function generateAiResponse(params: {
   responseSchema?: any;
   tools?: any;
   budgetMs?: number;
+  /**
+   * Profundidade de raciocínio do Gemini 3.x ("thinking").
+   *
+   * O modelo gasta tokens de pensamento ANTES de começar a responder, e esse
+   * tempo entra inteiro na espera do usuário. Para extração estruturada — ler
+   * uma planilha e devolver JSON conforme um schema — o raciocínio profundo
+   * quase não muda o resultado e domina a latência. Tarefas de julgamento
+   * podem pedir mais.
+   */
+  thinkingLevel?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 }): Promise<any> {
-  const { contents, systemInstruction, aiConfig, jsonMode, model, responseSchema, tools } = params;
+  const { contents, systemInstruction, aiConfig, jsonMode, model, responseSchema, tools, thinkingLevel } = params;
   const startedAt = Date.now();
   const budgetMs = params.budgetMs ?? AI_REQUEST_BUDGET_MS;
   const elapsedMs = () => Date.now() - startedAt;
@@ -1212,6 +1222,12 @@ async function generateAiResponse(params: {
             if (jsonMode) reqConfig.responseMimeType = "application/json";
             if (responseSchema) reqConfig.responseSchema = responseSchema;
             if (useTools && tools) reqConfig.tools = tools;
+            if (thinkingLevel) reqConfig.thinkingConfig = { thinkingLevel };
+            // Teto por requisição, amarrado ao tempo que ainda resta do orçamento.
+            // Sem isso, o orçamento só era conferido ENTRE tentativas: uma única
+            // chamada lenta seguia até o fim, e uma execução chegou a 269s mesmo
+            // com orçamento de 100s configurado.
+            reqConfig.httpOptions = { timeout: Math.max(5_000, remainingMs()) };
 
             const response = await customClient.models.generateContent({
               model: geminiModelName,
@@ -1322,6 +1338,8 @@ async function generateAiResponse(params: {
                   const reqConfigNoSchema: any = {};
                   if (systemInstruction) reqConfigNoSchema.systemInstruction = systemInstruction;
                   if (jsonMode) reqConfigNoSchema.responseMimeType = "application/json";
+                  if (thinkingLevel) reqConfigNoSchema.thinkingConfig = { thinkingLevel };
+                  reqConfigNoSchema.httpOptions = { timeout: Math.max(5_000, remainingMs()) };
 
                   const responseNoSchema = await customClient.models.generateContent({
                     model: geminiModelName,
@@ -2631,6 +2649,9 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
     const tempFilesToDelete: string[] = [];
     const geminiFilesToDelete: string[] = [];
     let aiClientForCleanup: GoogleGenAI | undefined = undefined;
+    // Fora do try: se o parecer falhar, o fallback ainda aproveita os itens que
+    // a extração dedicada tiver conseguido ler.
+    let itensPromise: Promise<any> | null = null;
 
     try {
       const { textInput, fileBase64, fileName, fileType, attachments, attachedFiles, files, aiConfig: clientAiConfig, selectedItems } = req.body;
@@ -2821,12 +2842,85 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
           : `${basePrompt}\n${itemFocusInstructions}`
       });
 
+      /**
+       * A análise é feita em DUAS chamadas paralelas, não em uma só.
+       *
+       * Numa chamada única o modelo precisava gerar, em sequência, a planilha
+       * inteira de itens E o relatório executivo — e é a geração da resposta,
+       * não a leitura do documento, que domina o tempo de espera (reduzir o
+       * texto enviado de 400k para 120k caracteres mudou de 18,9s para 17,2s,
+       * quase nada). Pior: para caber no tempo o raciocínio ficou em MINIMAL, e
+       * aí a leitura da tabela passou a falhar de forma intermitente — numa
+       * medição de três execuções, uma devolveu 1 item em vez de 12.
+       *
+       * Separando, cada chamada gera metade da saída e as duas correm ao mesmo
+       * tempo. A extração de itens fica com uma tarefa estreita, schema pequeno
+       * e raciocínio LOW (confiável na leitura de tabela); o parecer fica com
+       * MINIMAL, que já se mostrou equivalente no julgamento.
+       */
+      const promptItens = `Você é um extrator de dados. Sua ÚNICA tarefa é listar os itens/lotes do edital anexado.
+
+REGRAS:
+- Percorra o documento inteiro, incluindo ANEXOS, TERMO DE REFERÊNCIA e PLANILHAS.
+- Liste TODOS os itens/lotes, um por um, na ordem do edital. Se há 47 itens, retorne 47.
+- Cada item tem a SUA descrição, a SUA quantidade e a SUA unidade. NUNCA repita a mesma descrição em itens diferentes e NUNCA agrupe itens distintos.
+- Copie quantidade e unidade exatamente como estão na planilha. Quantidade ilegível: use 0, não chute 1.
+- "valorEstimado" do item é o valor UNITÁRIO dele.
+- Só retorne 1 item se o objeto for realmente único e indivisível.
+- Não invente itens que não estejam no documento.`;
+
+      const itensSchema = {
+        type: Type.OBJECT,
+        properties: {
+          itensEdital: {
+            type: Type.ARRAY,
+            description: "Lista de TODOS os itens, lotes ou produtos individuais do edital.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                numero: { type: Type.INTEGER, description: "Número do item ou lote conforme a planilha" },
+                descricao: { type: Type.STRING, description: "Descrição do produto ou serviço deste item específico" },
+                quantidade: { type: Type.INTEGER, description: "Quantidade solicitada deste item" },
+                unidade: { type: Type.STRING, description: "Unidade de medida deste item" },
+                valorEstimado: { type: Type.STRING, description: "Valor UNITÁRIO estimado deste item" }
+              },
+              required: ["numero", "descricao", "quantidade"]
+            }
+          }
+        },
+        required: ["itensEdital"]
+      };
+
+      itensPromise = generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: [{ text: promptItens }, ...contentParts],
+        aiConfig,
+        jsonMode: true,
+        responseSchema: itensSchema,
+        // LOW: a saída é pequena, então o custo em tempo é baixo, e a leitura
+        // de tabela fica estável — em MINIMAL ela falhava de forma intermitente.
+        thinkingLevel: (process.env.AI_THINKING_LEVEL_ITENS as any) || "LOW"
+      }).catch((err: any) => {
+        console.warn("[analyze-edital] Extração dedicada de itens falhou:", err?.message || err);
+        return null;
+      });
+
       console.log("Chamando AI Router para análise de edital...");
       const response = await generateAiResponse({
         model: "gemini-3.7-flash",
         contents: contentParts,
         aiConfig,
         jsonMode: true,
+        // Extração estruturada guiada por schema: o raciocínio profundo custa
+        // muitos segundos de espera e quase não muda o resultado.
+        //
+        // Medido com um edital de 244 páginas e 12 itens, mesma chave e mesmo
+        // modelo: HIGH 56s, LOW 30s, MINIMAL 19s — os três com os 12 itens
+        // corretos, descrições distintas e o valor total certo. No julgamento,
+        // MINIMAL manteve o mesmo veredito, o mesmo grau de risco e apontou a
+        // mesma cláusula de multa abusiva; HIGH só acrescentou um ou dois
+        // alertas secundários. Não compensa triplicar a espera do usuário.
+        thinkingLevel: (process.env.AI_THINKING_LEVEL as any) || "MINIMAL",
         responseSchema: {
             type: Type.OBJECT,
             properties: {
@@ -2919,32 +3013,31 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
                 type: Type.STRING,
                 description: "Relatório executivo completo em markdown super scannable utilizando tabelas bem feitas, tópicos fortes e dividindo rigorosamente as seções de 1 a 6."
               },
-              itensEdital: {
-                type: Type.ARRAY,
-                description: "Lista de TODOS os itens, lotes ou produtos individuais identificados/mencionados no edital.",
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    numero: { type: Type.INTEGER, description: "Número sequencial do item ou lote (ex: 1, 2)" },
-                    descricao: { type: Type.STRING, description: "Descrição detalhada do produto ou serviço" },
-                    quantidade: { type: Type.INTEGER, description: "Quantidade total solicitada" },
-                    unidade: { type: Type.STRING, description: "Unidade de medida (ex: Unidades, Metros, Resmas, etc)" },
-                    valorEstimado: { type: Type.STRING, description: "Valor unitário estimado se mencionado no edital (ex: R$ 120,00)" }
-                  },
-                  required: ["numero", "descricao", "quantidade"]
-                }
-              }
             },
             required: [
               "pontosPositivos", "pontosAlerta", "prazoEntrega", "prazoPagamento", "descricaoProduto", "documentosExigidos",
               "identificacaoCertame", "especificacoesTecnicas", "burocraciaBarreiras", "logisticaCronograma", "viabilidadeFinanceira", "parecerFinal",
-              "reportMarkdown", "itensEdital"
+              "reportMarkdown"
             ]
           }
       });
 
       const rawJson = response.text || "{}";
       let parsedData = cleanAndParseJson(rawJson);
+
+      // Junta a extração dedicada de itens, que correu em paralelo.
+      const itensResposta = await itensPromise;
+      if (itensResposta?.text) {
+        try {
+          const extraidos = cleanAndParseJson(itensResposta.text);
+          if (Array.isArray(extraidos?.itensEdital) && extraidos.itensEdital.length > 0) {
+            parsedData.itensEdital = extraidos.itensEdital;
+            console.log(`[analyze-edital] Extração dedicada devolveu ${extraidos.itensEdital.length} itens.`);
+          }
+        } catch (err: any) {
+          console.warn("[analyze-edital] Não foi possível ler os itens extraídos:", err?.message || err);
+        }
+      }
 
       if (!parsedData || Object.keys(parsedData).length === 0) {
         console.warn("[analyze-edital] JSON estruturado vazio ou inválido da IA, tentando recuperação...");
@@ -3259,6 +3352,25 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
         const combinedText = ((textInput || "") + "\n" + extractedTextFromFiles).trim();
         console.log("[analyze-edital] Aplicando fallback local estruturado para garantir resposta contínua ao usuário...");
         const fallbackData = parseEditalLocally(combinedText.length > 5 ? combinedText : "Edital de Licitação Pública");
+
+        // As duas chamadas correm em paralelo, então o parecer pode falhar com a
+        // extração de itens já concluída. O parser local por expressão regular
+        // devolve linhas cruas de tabela, quantidade 1 inventada e o valor total
+        // no lugar do unitário — quando os itens de verdade existem, eles valem
+        // mais do que isso.
+        if (itensPromise) {
+          try {
+            const itensResposta = await itensPromise;
+            const extraidos = itensResposta?.text ? cleanAndParseJson(itensResposta.text) : null;
+            if (Array.isArray(extraidos?.itensEdital) && extraidos.itensEdital.length > 0) {
+              fallbackData.itensEdital = extraidos.itensEdital;
+              console.log(`[analyze-edital] Fallback aproveitou ${extraidos.itensEdital.length} itens da extração dedicada.`);
+            }
+          } catch {
+            // sem itens, o fallback segue com o que o parser local conseguiu
+          }
+        }
+
         return res.json({
           analysis: fallbackData,
           degraded: true,
