@@ -43,21 +43,29 @@ const REGEX_HOST = new RegExp(FONTE_REGEX_HOST.replace(/\\\\/g, "\\"), "i");
  * leva para `/acompanhamento-compra?compra=<n>`.
  */
 export const SEMENTES_PORTAL = [
-  // Área logada do fornecedor: abre para quem tem sessão e não exige parâmetro nenhum.
-  // É a melhor página para PERGUNTAR se há sessão.
-  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras-eletronicas",
-  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor",
-  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/landing"
+  // A base do SPA. É o ÚNICO endereço sem parâmetro que se pode afirmar que existe: o
+  // diagnóstico do operador mostrou o próprio SPA respondendo "página não encontrada"
+  // sob /comprasnet-web/, o que prova que a aplicação é servida a partir daí.
+  //
+  // As sementes anteriores (/public/landing, /seguro/fornecedor,
+  // /seguro/fornecedor/compras-eletronicas) eram INVENTADAS — deduzi nomes de rota a
+  // partir do título "Compras eletrônicas" que aparecia numa captura de tela. Nenhuma
+  // existe: no aplicativo do operador as três caíram em "acesso não autorizado" ou
+  // "página não encontrada", e foi por isso que ele viu "sem sessão" estando logado.
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/"
 ];
 
 /**
- * A sala de disputa exige `?compra=<n>`; sem isso ela não renderiza nada de útil.
+ * Endpoint que o PRÓPRIO portal usa para saber quem está logado.
  *
- * Por um tempo ela foi a PRIMEIRA semente, e como é dela que saía o endereço de
- * verificação, o aplicativo perguntava "tem sessão?" para uma tela que nunca responde —
- * e concluía "o portal abriu, mas sem sinal de usuário autenticado" com o operador
- * logado. Ela agora vive à parte, e só o `paraSala()` a usa.
+ * Observado na coleta do operador: `GET /comprasnet-usuario/v1/usuario` → 200 com
+ * sessão, e sem exigir token de captcha. Perguntar isto é infinitamente mais confiável
+ * do que abrir uma página e tentar interpretar o HTML — que é onde este projeto errou
+ * três vezes seguidas, sempre por causa da URL escolhida.
  */
+export const URL_API_USUARIO =
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-usuario/v1/usuario";
+
 export const SEMENTE_SALA =
   "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa";
 
@@ -133,8 +141,20 @@ export interface EnderecosAprendidos {
 export function aprenderCom(atual: EnderecosAprendidos, url: string): EnderecosAprendidos {
   if (!ehEnderecoDoPortal(url)) return atual;
 
-  // Páginas de erro e de logout não são endereço para onde voltar.
+  // Páginas de erro e de logout não são endereço para onde voltar. As duas primeiras
+  // vieram do diagnóstico do operador: o portal manda para elas quando a rota não existe
+  // ou a sessão não vale ali, e guardá-las fazia o aplicativo tentar de novo o endereço
+  // que já tinha falhado.
+  if (/acesso-nao-autorizado|pagina-nao-encontrada/i.test(url)) return atual;
   if (/\/(logout|sair|erro|error|404)\b/i.test(url)) return atual;
+
+  // `?compra=` sem valor não abre nada — foi exatamente o endereço aprendido que o
+  // diagnóstico mostrou, e ele caía em "acesso não autorizado".
+  try {
+    for (const [, v] of new URL(url).searchParams) if (v === "") return atual;
+  } catch {
+    return atual;
+  }
 
   const novo: EnderecosAprendidos = { ...atual, portal: url, aprendidoEm: new Date().toISOString() };
   if (ehSalaDeDisputa(url)) novo.sala = url;
@@ -155,6 +175,16 @@ export class RegistroEnderecos {
     } catch {
       this.dados = {};
     }
+
+    // O que já está no disco também passa pela regra. A máquina do operador tinha
+    // `/seguro/fornecedor/compras?compra=` guardado — endereço que só levava a "acesso
+    // não autorizado" — e sem esta limpeza a correção do aprendizado não o alcançaria:
+    // ele seguiria sendo tentado a cada verificação, para sempre.
+    this.dados = {
+      ...this.dados,
+      portal: this.dados.portal && aprenderCom({}, this.dados.portal).portal ? this.dados.portal : undefined,
+      sala: this.dados.sala && aprenderCom({}, this.dados.sala).portal ? this.dados.sala : undefined
+    };
   }
 
   /** Chamado a cada navegação de qualquer janela do portal. Barato e silencioso. */

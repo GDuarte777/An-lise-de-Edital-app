@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, session, type Session, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, net, session, type Session, type WebContents } from "electron";
 import { join } from "node:path";
 
-import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, URL_LOGIN_SSO } from "./endereco.js";
+import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, URL_API_USUARIO, URL_LOGIN_SSO } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
 
 /**
@@ -247,6 +247,45 @@ const VALIDADE_CACHE_MS = 15000;
  * Deliberadamente não inspeciona o conteúdo dos cookies: só conta presença, como
  * diagnóstico.
  */
+export interface RespostaDoPortal {
+  status: number;
+  ok: boolean;
+  erro?: string;
+}
+
+/**
+ * Pergunta ao portal quem está logado, usando os cookies da partition.
+ *
+ * É a resposta do próprio Compras.gov.br, não uma leitura de HTML: `GET
+ * /comprasnet-usuario/v1/usuario` devolve 200 com sessão e 401/403 sem ela — observado
+ * na coleta feita pelo operador, e sem exigir token de captcha.
+ *
+ * Isto existe porque as três tentativas anteriores de responder "há sessão?" erraram
+ * sempre pelo mesmo motivo: a URL da página que eu escolhia para abrir. Aqui não há
+ * página nem rota a adivinhar.
+ */
+export function perguntarAoPortal(url = URL_API_USUARIO): Promise<RespostaDoPortal> {
+  return new Promise((resolve) => {
+    let respondido = false;
+    const responder = (r: RespostaDoPortal) => { if (!respondido) { respondido = true; resolve(r); } };
+
+    try {
+      const req = net.request({ method: "GET", url, session: sessaoComprasnet(), useSessionCookies: true });
+      req.setHeader("Accept", "application/json");
+      req.on("response", (res) => {
+        const status = res.statusCode;
+        res.on("data", () => { /* o corpo não interessa: nada dele é lido nem guardado */ });
+        res.on("end", () => responder({ status, ok: status >= 200 && status < 300 }));
+        res.on("error", () => responder({ status, ok: status >= 200 && status < 300 }));
+      });
+      req.on("error", (e) => responder({ status: 0, ok: false, erro: e.message }));
+      req.end();
+    } catch (e) {
+      responder({ status: 0, ok: false, erro: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
 export interface TentativaSessao {
   url: string;
   urlFinal: string;
@@ -258,6 +297,8 @@ export interface TentativaSessao {
 /** Diagnóstico completo — é o que a interface mostra quando o operador pede. */
 export interface DiagnosticoSessao {
   status: StatusSessao;
+  /** A resposta do portal à pergunta "quem está logado?" — a evidência principal. */
+  api: RespostaDoPortal;
   tentativas: TentativaSessao[];
   enderecosAprendidos: Record<string, string | undefined>;
   dominiosDeCookie: string[];
@@ -311,6 +352,27 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
     }
   });
 
+  // Primeiro a pergunta direta. Se o portal disser que há usuário, acabou: não há HTML
+  // para interpretar nem rota para acertar.
+  const api = await perguntarAoPortal();
+  if (api.ok) {
+    const status: StatusSessao = {
+      autenticado: true,
+      verificadoEm: new Date(),
+      cookiesEncontrados: cookies,
+      evidencia: "O portal confirmou a sessão (respondeu quem está logado)."
+    };
+    cache = { status, em: Date.now() };
+    if (!janela.isDestroyed()) janela.destroy();
+    return {
+      status,
+      api,
+      tentativas: [],
+      enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
+      dominiosDeCookie: DOMINIOS_SESSAO
+    };
+  }
+
   const tentativas: TentativaSessao[] = [];
   try {
     for (const url of registro.paraVerificar()) {
@@ -339,14 +401,19 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
     cookiesEncontrados: cookies,
     evidencia: boa
       ? `Sessão ativa em ${new URL(boa.urlFinal).host}.`
-      : tentativas.length === 0
-        ? "Nenhum endereço do portal para verificar."
-        : (tentativas[0].motivo ?? "O portal abriu, mas sem sinal de usuário autenticado.")
+      : api.status === 401 || api.status === 403
+        ? "O portal respondeu que não há usuário logado (HTTP " + api.status + ")."
+        : api.status === 0
+          ? `Não consegui falar com o portal: ${api.erro ?? "sem resposta"}.`
+          : tentativas.length === 0
+            ? "Nenhum endereço do portal para verificar."
+            : (tentativas[0].motivo ?? "O portal abriu, mas sem sinal de usuário autenticado.")
   };
 
   cache = { status, em: Date.now() };
   return {
     status,
+    api,
     tentativas,
     enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
     dominiosDeCookie: DOMINIOS_SESSAO

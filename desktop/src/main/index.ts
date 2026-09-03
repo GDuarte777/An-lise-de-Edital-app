@@ -9,6 +9,7 @@ import {
   abrirPainelDisputas,
   diagnosticarSessao,
   enderecoPortal,
+  perguntarAoPortal,
   habilitarCertificadoDigital,
   partitionComprasnet,
   sair as sairComprasnet,
@@ -165,6 +166,8 @@ function obterGuardiao(): GuardiaoSessao {
     guardiao = new GuardiaoSessao({
       partition: partitionComprasnet(),
       endereco: enderecoPortal,
+      // Quem responde se a sessão vale é o portal, não o HTML que ele desenha.
+      confirmar: async () => (await perguntarAoPortal()).ok,
       // Nunca rotacionar a sessão no meio de um envio de lance.
       podeRenovar: () => !motor?.ocupado,
       aoMudar: (estado) => emitir("sessao:guardiao", estado),

@@ -69,6 +69,11 @@ export interface OpcoesGuardiao {
   aoRegistrar?: (nivel: "sistema" | "alerta", msg: string) => void;
   /** Seam de teste: como decidir, a partir da sondagem, se ainda estamos logados. */
   reconhecer?: (s: Sondagem | null) => boolean;
+  /**
+   * Pergunta ao portal se a sessão vale, sem depender de interpretar a página.
+   * Quando presente e afirmativa, encerra a renovação — é a resposta mais confiável.
+   */
+  confirmar?: () => Promise<boolean>;
 }
 
 const SCRIPT_SONDA_VIVA = `
@@ -204,6 +209,21 @@ export class GuardiaoSessao {
       // volta o tempo todo, e desistir na primeira tentativa faria o guardião declarar
       // a sessão morta por causa de um blip — justamente o que ele existe para evitar.
       await this.carregarComRetentativa();
+
+      // A pergunta direta ao portal vale mais que qualquer leitura de tela: ela não
+      // depende de a rota existir nem de o HTML ter os sinais que esperamos.
+      if (this.opcoes.confirmar && (await this.opcoes.confirmar())) {
+        const agora = new Date();
+        this.publicar({
+          autenticado: true,
+          renovacoes: this.estado.renovacoes + 1,
+          falhasSeguidas: 0,
+          ultimaRenovacaoEm: agora.toISOString(),
+          proximaRenovacaoEm: new Date(agora.getTime() + this.intervaloMs).toISOString(),
+          motivo: `Sessão renovada às ${agora.toLocaleTimeString("pt-BR")}.`
+        });
+        return true;
+      }
 
       // SPA: sondar antes de desenhar daria "caiu" por engano.
       let s: Sondagem | null = null;

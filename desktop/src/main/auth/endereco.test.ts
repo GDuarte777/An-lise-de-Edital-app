@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -76,16 +76,35 @@ console.log("\n[endereços de verificação]");
   const r = new RegistroEnderecos(join(dir, "verif.json"));
   await r.carregar();
   const lista = r.paraVerificar();
-  // A sala exige ?compra=<n>: perguntar "tem sessao?" para ela nao responde nada, e foi
-  // isso que fez o app dizer "sem sinal de usuario autenticado" com o operador logado.
-  ok("a sala NAO entra na verificacao", !lista.some((u) => u === SEMENTE_SALA), lista);
-  ok("verifica em mais de um endereco", lista.length >= 2, lista);
-  ok("comeca pela area logada do fornecedor", /seguro\/fornecedor/.test(lista[0]), lista[0]);
 
-  await r.aprender("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras");
-  ok("o aprendido vem primeiro", r.paraVerificar()[0].endsWith("/compras"), r.paraVerificar());
-  ok("mas as sementes continuam de reserva", r.paraVerificar().length >= 3, r.paraVerificar());
-  ok("a sala segue sendo o endereco de sala", r.paraSala() === SEMENTE_SALA, r.paraSala());
+  // A sala exige ?compra=<n>: perguntar "tem sessao?" para ela nao responde nada.
+  ok("a sala NAO entra na verificacao", !lista.some((u) => u === SEMENTE_SALA), lista);
+
+  // A lista encolheu de proposito. As sementes antigas eram rotas INVENTADAS, e o
+  // diagnostico na maquina do operador mostrou as tres caindo em "acesso nao
+  // autorizado" ou "pagina nao encontrada". Sobrou a base do SPA, que e a unica que se
+  // pode afirmar que existe — e a pergunta ao portal virou a checagem principal.
+  ok("so sobra endereco que se pode afirmar que existe",
+     lista.every((u) => u.endsWith("/comprasnet-web/")), lista);
+
+  await r.aprender("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=90013");
+  ok("o aprendido vem primeiro", r.paraVerificar()[0].includes("compra=90013"), r.paraVerificar());
+  ok("a base do SPA continua de reserva", r.paraVerificar().length === 2, r.paraVerificar());
+  ok("a sala aprendida vira o endereco de sala", r.paraSala().includes("compra=90013"), r.paraSala());
+}
+
+console.log("\n[limpeza do que ja estava no disco]");
+{
+  const caminhoRuim = join(dir, "ruim.json");
+  // Exatamente o que estava guardado na maquina do operador.
+  await writeFile(caminhoRuim, JSON.stringify({
+    portal: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras?compra="
+  }), "utf-8");
+  const r = new RegistroEnderecos(caminhoRuim);
+  await r.carregar();
+  ok("descarta endereco ruim que ja estava salvo",
+     !r.paraAbrir().includes("compra="), r.paraAbrir());
+  ok("e cai na semente boa", r.paraAbrir().endsWith("/comprasnet-web/"), r.paraAbrir());
 }
 
 console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);

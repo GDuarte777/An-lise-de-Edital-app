@@ -154,6 +154,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
   const [diag, setDiag] = useState<{
     status: { autenticado: boolean; cookiesEncontrados: number; evidencia: string };
+    api: { status: number; ok: boolean; erro?: string };
     tentativas: Array<{ url: string; urlFinal: string; autenticado: boolean; motivo: string | null;
       sondagem: null | { noSso: boolean; noPortal: boolean; temSenha: boolean; temSair: boolean;
         temIdentidade: boolean; escolhendoPerfil: boolean; tamanho: number } }>;
@@ -339,6 +340,10 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
             {diag && (
               <div className="faint" style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
+                <div>
+                  Pergunta ao portal (“quem está logado?”):{" "}
+                  <b>{diag.api.ok ? "respondeu OK" : diag.api.status ? `HTTP ${diag.api.status}` : (diag.api.erro ?? "sem resposta")}</b>
+                </div>
                 <div>Cookies do portal encontrados: <b>{diag.status.cookiesEncontrados}</b></div>
                 <div>Endereço aprendido: <b>{diag.enderecosAprendidos.portal ?? "nenhum ainda"}</b></div>
                 {diag.tentativas.map((t, i) => (

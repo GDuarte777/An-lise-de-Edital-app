@@ -102,6 +102,8 @@ export interface TentativaSessao {
 
 export interface DiagnosticoSessao {
   status: StatusSessao;
+  /** Resposta do portal a "quem está logado?" — a evidência principal. */
+  api: { status: number; ok: boolean; erro?: string };
   tentativas: TentativaSessao[];
   enderecosAprendidos: Record<string, string | undefined>;
   dominiosDeCookie: string[];
