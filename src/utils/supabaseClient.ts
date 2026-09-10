@@ -348,9 +348,15 @@ export function subscribeToSupabaseTable(
 }
 
 // 1. Editais Analisados (editais_analisados)
-export async function fetchEditaisFromSupabase(): Promise<any[]> {
+//
+// Retorna { ok } separado das linhas porque "o banco respondeu e está vazio" e
+// "não deu para falar com o banco" exigem reações opostas: no primeiro caso o
+// histórico local deve ser esvaziado, no segundo ele precisa ser preservado.
+// Enquanto os dois casos eram o mesmo `[]`, um erro de rede fazia o app tratar
+// o histórico como vazio — ou manter para sempre itens já apagados.
+export async function fetchEditaisFromSupabase(): Promise<{ ok: boolean; rows: any[] }> {
   const client = getSupabaseClient();
-  if (!client) return [];
+  if (!client) return { ok: false, rows: [] };
   try {
     const { data, error } = await client
       .from("editais_analisados")
@@ -358,16 +364,16 @@ export async function fetchEditaisFromSupabase(): Promise<any[]> {
       .order("updated_at", { ascending: false });
     if (error) {
       console.warn("fetchEditaisFromSupabase error:", error.message);
-      return [];
+      return { ok: false, rows: [] };
     }
-    return data || [];
+    return { ok: true, rows: data || [] };
   } catch (err: any) {
     if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
       console.warn("fetchEditaisFromSupabase network warning:", err?.message || err);
     } else {
       console.warn("fetchEditaisFromSupabase error:", err?.message || err);
     }
-    return [];
+    return { ok: false, rows: [] };
   }
 }
 
@@ -403,30 +409,26 @@ export async function saveEditalToSupabase(item: { id: string; title: string; da
   }
 }
 
+// Só devolve true quando o banco confirma que a linha saiu de lá. Um DELETE que
+// não casa com nenhuma linha (RLS barrou, user_id de outro usuário, id que não
+// existe) NÃO é erro no PostgREST — antes isso passava por sucesso e o edital
+// "apagado" voltava na próxima sincronização. O `.select()` devolve as linhas
+// efetivamente removidas, que é a única confirmação confiável.
 export async function deleteEditalFromSupabase(id: string): Promise<boolean> {
   const client = getSupabaseClient();
   if (!client) return false;
   try {
-    const user = await getActiveUser();
-    const guestId = getGuestUserId();
-    const userId = user?.id || guestId;
-
-    await client
+    const { data, error } = await client
       .from("editais_analisados")
       .delete()
       .eq("id", id)
-      .or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
-
-    const { error } = await client
-      .from("editais_analisados")
-      .delete()
-      .eq("id", id);
+      .select("id");
 
     if (error) {
-      await client.from("analises_editais").delete().eq("id", id);
-      await client.from("editais").delete().eq("id", id);
+      console.warn("deleteEditalFromSupabase error:", error.message);
+      return false;
     }
-    return true;
+    return Array.isArray(data) && data.length > 0;
   } catch (err: any) {
     console.warn("deleteEditalFromSupabase exception:", err?.message || err);
     return false;

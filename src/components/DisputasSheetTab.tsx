@@ -8,6 +8,7 @@ import {
 import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { getContrastTextColor } from "../utils/disputaDates";
+import { useEditalHistory } from "../utils/editalHistory";
 import DisputaDateTag from "./DisputaDateTag";
 import {
   fetchDisputasFromSupabase,
@@ -261,6 +262,8 @@ function StatusColorEditor({
 }
 
 export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps) {
+  const editalHistory = useEditalHistory();
+
   // Mode Switcher: "spreadsheet" (Painel — cartões somente leitura, edição via ícone lápis) ou "kanban" (Quadro Kanban)
   const [viewMode, setViewMode] = useState<"spreadsheet" | "kanban">(() => {
     const stored = localStorage.getItem("aip_disputas_view_mode");
@@ -781,32 +784,22 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       });
     }
 
-    const savedHistory = localStorage.getItem("aip_edital_history");
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((item: any, idx: number) => {
-            const editalObj: EditalAnalysis = item.analysis_data || item.analysis || item;
-            if (editalObj && (editalObj.identificacaoCertame || editalObj.descricaoProduto)) {
-              const iden = editalObj.identificacaoCertame;
-              const orgao = iden?.orgaoComprador || editalObj.descricaoProduto || `Edital #${idx + 1}`;
-              const num = iden?.identificacaoNumerica || iden?.modalidade || "Nº N/I";
-              list.push({
-                id: item.id || `hist-${idx}-${Date.now()}`,
-                title: `${orgao} (${num})`,
-                edital: editalObj,
-                dateStr: item.createdAt ? new Date(item.createdAt).toLocaleDateString("pt-BR") : "Análise Salva"
-              });
-            }
-          });
-        }
-      } catch (err) {
-        console.error("Erro ao carregar histórico:", err);
+    editalHistory.forEach((item, idx) => {
+      const editalObj = item.analysis;
+      if (editalObj && (editalObj.identificacaoCertame || editalObj.descricaoProduto)) {
+        const iden = editalObj.identificacaoCertame;
+        const orgao = iden?.orgaoComprador || editalObj.descricaoProduto || `Edital #${idx + 1}`;
+        const num = iden?.identificacaoNumerica || iden?.modalidade || "Nº N/I";
+        list.push({
+          id: item.id,
+          title: `${orgao} (${num})`,
+          edital: editalObj,
+          dateStr: item.date || "Análise Salva"
+        });
       }
-    }
+    });
     setHistoryOptions(list);
-  }, [activeEdital]);
+  }, [activeEdital, editalHistory]);
 
   const showToast = (text: string, type: "success" | "info" = "success") => {
     setNotification({ text, type });
@@ -1037,25 +1030,12 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
   // Import all analyzed edital items directly into the spreadsheet and sync with Supabase
   const handleImportFromAnalyzedEditais = async () => {
-    const savedHistory = localStorage.getItem("aip_edital_history");
-    let itemsToImport: any[] = [];
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory);
-        if (Array.isArray(parsed)) {
-          itemsToImport = parsed;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    if (itemsToImport.length === 0 && historyOptions.length === 0) {
+    if (historyOptions.length === 0) {
       showToast("Nenhum edital analisado encontrado para importar.", "info");
       return;
     }
 
-    const sourceList = historyOptions.length > 0 ? historyOptions.map(h => h.edital) : itemsToImport.map(i => i.analysis_data || i.analysis || i);
+    const sourceList = historyOptions.map(h => h.edital);
     const newRows: DisputaRow[] = [];
 
     sourceList.forEach((editalObj) => {

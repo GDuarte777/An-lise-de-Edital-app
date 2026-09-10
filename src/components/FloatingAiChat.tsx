@@ -19,9 +19,9 @@ import {
   saveChatSessionToSupabase,
   deleteChatSessionFromSupabase,
   clearAllChatSessionsInSupabase,
-  fetchEditaisFromSupabase,
   subscribeToSupabaseTable
 } from "../utils/supabaseClient";
+import { useEditalHistory, refreshEditalHistory } from "../utils/editalHistory";
 
 interface FloatingAiChatProps {
   companyData: CompanyData;
@@ -173,7 +173,7 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   });
 
   // Loaded edital history
-  const [editalHistory, setEditalHistory] = useState<any[]>([]);
+  const editalHistory = useEditalHistory();
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
   // States for the modernized custom selector
@@ -181,81 +181,16 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   const [dropdownSearch, setDropdownSearch] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Load edital history from localStorage or Supabase dynamically
-  const reloadEditalHistory = async () => {
-    let list: any[] = [];
-    const saved = localStorage.getItem("aip_edital_history");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          list = parsed;
-        }
-      } catch (e) {
-        console.error("Erro ao carregar histórico de editais:", e);
-      }
-    }
-
-    if (list.length === 0) {
-      try {
-        const dbEditais = await fetchEditaisFromSupabase();
-        if (dbEditais && dbEditais.length > 0) {
-          list = dbEditais;
-          localStorage.setItem("aip_edital_history", JSON.stringify(dbEditais));
-        }
-      } catch (e) {
-        // silent fallback
-      }
-    }
-
-    setEditalHistory(prev => {
-      if (JSON.stringify(prev) === JSON.stringify(list)) {
-        return prev;
-      }
-      return list;
-    });
-  };
-
-  // Keep editalHistory always in sync via event listeners
+  // Ao analisar um edital novo, o chat já passa a apontar para ele.
   useEffect(() => {
-    reloadEditalHistory(); // Sync on mount
-
-    const handleStorageChange = (e: StorageEvent) => {
-      if (!e.key || e.key === "aip_edital_history") {
-        reloadEditalHistory();
-      }
-    };
-
-    const handleCustomUpdate = () => {
-      reloadEditalHistory();
-    };
-
     const handleEditalAnalyzed = (e: any) => {
-      reloadEditalHistory();
       if (e?.detail?.id) {
         setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, selectedEditalId: e.detail.id } : s));
       }
     };
-
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("aip_edital_history_updated", handleCustomUpdate);
     window.addEventListener("aip_edital_analyzed", handleEditalAnalyzed);
-    window.addEventListener("focus", handleCustomUpdate);
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("aip_edital_history_updated", handleCustomUpdate);
-      window.removeEventListener("aip_edital_analyzed", handleEditalAnalyzed);
-      window.removeEventListener("focus", handleCustomUpdate);
-    };
+    return () => window.removeEventListener("aip_edital_analyzed", handleEditalAnalyzed);
   }, [activeSessionId]);
-
-  // Sync again when chat is opened
-  useEffect(() => {
-    if (isOpen) {
-      reloadEditalHistory();
-    }
-  }, [isOpen]);
 
   // Click outside to close the custom selector dropdown
   useEffect(() => {
@@ -430,7 +365,7 @@ PARECER E ESTRATÉGIA:
   };
 
   const handleOpenSystemDocSelector = () => {
-    reloadEditalHistory();
+    refreshEditalHistory();
     const saved = localStorage.getItem("aip_certificates");
     if (saved) {
       try {
@@ -456,7 +391,7 @@ PARECER E ESTRATÉGIA:
   };
 
   const handleSelectSystemEdital = (editalItem: any) => {
-    const edital = editalItem.analysis || editalItem;
+    const edital = editalItem.analysis;
     const organName = edital.identificacaoCertame?.orgaoComprador || "OrgaoLicitante";
     const cleanOrganName = organName.replace(/[^a-zA-Z0-0]/g, "_").substring(0, 15);
     const title = editalItem.title || `Edital_${cleanOrganName}.txt`;
@@ -665,7 +600,7 @@ PARECER E ESTRATÉGIA:
     }
     const item = editalHistory.find(h => h.id === selectedId);
     if (item) {
-      return item.analysis || item;
+      return item.analysis;
     }
     return null;
   };
@@ -1392,7 +1327,7 @@ PARECER E ESTRATÉGIA:
                     {activeSession.selectedEditalId !== "" && activeSession.selectedEditalId !== "active" && (
                       (() => {
                         const found = editalHistory.find(h => h.id === activeSession.selectedEditalId);
-                        const ed = found?.analysis || found;
+                        const ed = found?.analysis;
                         return `📄 ${found?.title || ed?.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Edital Histórico"}`;
                       })()
                     )}
@@ -1473,12 +1408,12 @@ PARECER E ESTRATÉGIA:
                       {/* Group: History */}
                       {(() => {
                         const filteredHistory = editalHistory.filter(item => {
-                          const ed = item.analysis || item;
+                          const ed = item.analysis;
                           const term = dropdownSearch.toLowerCase();
                           return (
                             (item.title || "").toLowerCase().includes(term) ||
                             (ed.identificacaoCertame?.orgaoComprador || "").toLowerCase().includes(term) ||
-                            (ed.identificacaoCertame?.modalidadeLicitacao || "").toLowerCase().includes(term)
+                            (ed.identificacaoCertame?.modalidade || "").toLowerCase().includes(term)
                           );
                         });
 
@@ -1489,10 +1424,10 @@ PARECER E ESTRATÉGIA:
                                 <span>📂 Editais Analisados ({filteredHistory.length})</span>
                               </div>
                               {filteredHistory.map((item, idx) => {
-                                const ed = item.analysis || item;
+                                const ed = item.analysis;
                                 const isSelected = activeSession.selectedEditalId === item.id;
                                 const title = item.title || ed.identificacaoCertame?.orgaoComprador || "Edital Histórico";
-                                const desc = ed.identificacaoCertame?.modalidadeLicitacao || "Pregão Eletrônico";
+                                const desc = ed.identificacaoCertame?.modalidade || "Pregão Eletrônico";
 
                                 return (
                                   <button
@@ -1964,7 +1899,7 @@ PARECER E ESTRATÉGIA:
                   {editalHistory.length > 0 ? (
                     <div className="space-y-1">
                       {editalHistory.map((item, idx) => {
-                        const ed = item.analysis || item;
+                        const ed = item.analysis;
                         const organ = ed.identificacaoCertame?.orgaoComprador || "Histórico";
                         const title = item.title || `Pregão de ${organ.substring(0, 15)}`;
                         return (
