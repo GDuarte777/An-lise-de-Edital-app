@@ -2,12 +2,13 @@ import { useState, useEffect, useRef } from "react";
 import {
   FileText, ShieldCheck, FolderGit, FileSpreadsheet, CloudLightning,
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser
+  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser, CalendarDays
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
 import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
 import DisputasSheetTab from "./components/DisputasSheetTab";
+import CalendarTab from "./components/CalendarTab";
 import CompanyDocsTab from "./components/CompanyDocsTab";
 import CreateDocTab from "./components/CreateDocTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
@@ -82,12 +83,13 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
   bankDetails: ""
 };
 
-type TabId = "analyzer" | "radar" | "disputasSheet" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
+type TabId = "analyzer" | "radar" | "disputasSheet" | "calendar" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
 
 const CORE_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
   { id: "analyzer", label: "Análise de Edital", icon: FileText },
   { id: "radar", label: "Radar de Oportunidades", icon: Search },
   { id: "disputasSheet", label: "Planilha de Disputas", icon: FileSpreadsheet },
+  { id: "calendar", label: "Calendário", icon: CalendarDays },
 ];
 
 const OPERATIONS_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
@@ -103,6 +105,7 @@ const TAB_LABELS: Record<TabId, string> = {
   analyzer: "Análise de Edital",
   radar: "Radar de Oportunidades",
   disputasSheet: "Planilha de Disputas",
+  calendar: "Calendário",
   createDoc: "Criar Documentos",
   documents: "Gestão de Certidões",
   calculator: "Calculadora de Preços",
@@ -809,6 +812,8 @@ export default function App() {
                   activeEdital={activeEdital}
                   onNavigateToAnalyzer={() => setActiveTab("analyzer")}
                 />
+              ) : activeTab === "calendar" ? (
+                <CalendarTab onNavigateToDisputas={() => setActiveTab("disputasSheet")} />
               ) : activeTab === "createDoc" ? (
                 <CreateDocTab
                   companyData={companyData}
