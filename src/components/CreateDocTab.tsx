@@ -85,6 +85,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "./ui/dropdown-menu";
+import { useEditalHistory } from "../utils/editalHistory";
 
 interface CreateDocTabProps {
   companyData: CompanyData;
@@ -323,6 +324,8 @@ export default function CreateDocTab({
   onOpenDocPreview,
   initialTemplateId
 }: CreateDocTabProps) {
+  const editalHistory = useEditalHistory();
+
   // Category filter
   const [activeCategory, setActiveCategory] = useState<string>("todos");
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -585,23 +588,20 @@ export default function CreateDocTab({
       if (activeEdital) {
         list.push(activeEdital);
       }
-      const savedHistory = localStorage.getItem("aip_edital_history");
-      if (savedHistory) {
-        const parsed = JSON.parse(savedHistory);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((item: any) => {
-            const editalObj = item.analysis_data || item;
-            if (editalObj && (editalObj.identificacaoCertame || editalObj.descricaoProduto)) {
-              const exists = list.some(
-                e => (e.identificacaoCertame?.identificacaoNumerica &&
-                     e.identificacaoCertame?.identificacaoNumerica === editalObj.identificacaoCertame?.identificacaoNumerica) ||
-                     (e.descricaoProduto && e.descricaoProduto === editalObj.descricaoProduto)
-              );
-              if (!exists) list.push(editalObj);
-            }
-          });
+      // Antes isto lia `item.analysis_data`, campo que nenhum item tem — o
+      // histórico inteiro caía fora em silêncio e esta aba só enxergava o
+      // edital ativo. Agora vem do store compartilhado, já normalizado.
+      editalHistory.forEach(item => {
+        const editalObj = item.analysis;
+        if (editalObj && (editalObj.identificacaoCertame || editalObj.descricaoProduto)) {
+          const exists = list.some(
+            e => (e.identificacaoCertame?.identificacaoNumerica &&
+                 e.identificacaoCertame?.identificacaoNumerica === editalObj.identificacaoCertame?.identificacaoNumerica) ||
+                 (e.descricaoProduto && e.descricaoProduto === editalObj.descricaoProduto)
+          );
+          if (!exists) list.push(editalObj);
         }
-      }
+      });
       setAnalyzedEditais(list);
       if (list.length > 0) {
         setSelectedEditalIndex(0);
@@ -621,7 +621,7 @@ export default function CreateDocTab({
     return () => {
       unsubscribe();
     };
-  }, [activeEdital]);
+  }, [activeEdital, editalHistory]);
 
   // Handle uploading file for a new edital
   const handleNewEditalFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

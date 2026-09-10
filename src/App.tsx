@@ -9,6 +9,7 @@ import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
 import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
 import DisputasSheetTab from "./components/DisputasSheetTab";
 import CalendarTab from "./components/CalendarTab";
+import { resetEditalHistory } from "./utils/editalHistory";
 import CompanyDocsTab from "./components/CompanyDocsTab";
 import CreateDocTab from "./components/CreateDocTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
@@ -507,7 +508,7 @@ export default function App() {
       localStorage.removeItem("aip_company_data");
       localStorage.removeItem("aip_active_edital");
       localStorage.removeItem("aip_certificates");
-      localStorage.removeItem("aip_edital_history");
+      resetEditalHistory();
       localStorage.removeItem("aip_competitors_history");
       localStorage.removeItem("aip_chat_sessions");
       localStorage.removeItem("ai_active_provider");

@@ -24,17 +24,16 @@ import {
   TableCell,
 } from "./ui/table";
 import { addSyncedItem, syncAnalysisToGoogleSheets } from "../utils/googleSync";
-import { 
-  syncEditalToSupabase, 
-  syncDocumentToSupabase, 
-  callSupabaseGeminiEdgeFunction,
-  fetchEditaisFromSupabase,
-  saveEditalToSupabase,
-  deleteEditalFromSupabase,
-  subscribeToSupabaseTable,
+import {
   saveDisputaToSupabase,
   generateUUID
 } from "../utils/supabaseClient";
+import {
+  useEditalHistory,
+  addEditalToHistory,
+  removeEditalFromHistory,
+  clearEditalHistory
+} from "../utils/editalHistory";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError, readJsonResponse, readJsonResponseSafe } from "../utils/aiClientHelper";
 
@@ -823,40 +822,12 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   // Sub-tabs for edital analysis view
   const [analysisActiveTab, setAnalysisActiveTab] = useState<"report" | "struc" | "checklist">("report");
 
-  // Histórico de Editais (Supabase com fallback Local e Realtime)
-  const [history, setHistory] = useState<any[]>([]);
+  // Histórico de Editais — vem do store compartilhado, a mesma lista que todas
+  // as outras ferramentas enxergam.
+  const history = useEditalHistory();
   const [showConfirmClearHistory, setShowConfirmClearHistory] = useState(false);
 
   useEffect(() => {
-    async function loadHistory() {
-      try {
-        const dbEditais = await fetchEditaisFromSupabase();
-        if (dbEditais && dbEditais.length > 0) {
-          setHistory(dbEditais);
-          localStorage.setItem("aip_edital_history", JSON.stringify(dbEditais));
-          window.dispatchEvent(new Event("aip_edital_history_updated"));
-          return;
-        }
-      } catch (e) {
-        console.warn("Falha ao buscar editais do Supabase, tentando local:", e);
-      }
-
-      try {
-        const saved = localStorage.getItem("aip_edital_history");
-        if (saved) {
-          setHistory(JSON.parse(saved));
-        }
-      } catch (e) {
-        setHistory([]);
-      }
-    }
-    loadHistory();
-
-    // Subscribe to real-time events on editais_analisados
-    const unsubscribe = subscribeToSupabaseTable("editais_analisados", () => {
-      loadHistory();
-    });
-
     const handleExternalText = () => {
       const extText = localStorage.getItem("aip_auto_analyze_text");
       // O Radar pode repassar o PDF oficial do edital e o número de controle
@@ -880,16 +851,12 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     };
 
-    const handleWindowFocus = () => loadHistory();
-    window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("aip_trigger_external_text", handleExternalText);
-    
+
     // Check on mount as well
     handleExternalText();
 
     return () => {
-      unsubscribe();
-      window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("aip_trigger_external_text", handleExternalText);
     };
   }, []);
@@ -1071,18 +1038,14 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
         confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
 
-        // Salvar no Histórico Local e no Supabase Privado
+        // Salvar no histórico compartilhado (grava local + Supabase e avisa
+        // todas as outras ferramentas na mesma hora)
         const firstFileName = attachedFiles.length > 0 ? attachedFiles[0].name : null;
-        const newHistoryItem = {
-          id: Date.now().toString(),
-          title: analysisResult.descricaoProduto 
-            ? `Análise - ${analysisResult.descricaoProduto.slice(0, 45)}${analysisResult.descricaoProduto.length > 45 ? "..." : ""}` 
-            : (firstFileName ? `Anexo: ${firstFileName}` : `Análise S/N`),
-          date: new Date().toLocaleString("pt-BR"),
-          analysis: analysisResult
-        };
+        const historyTitle = analysisResult.descricaoProduto
+          ? `Análise - ${analysisResult.descricaoProduto.slice(0, 45)}${analysisResult.descricaoProduto.length > 45 ? "..." : ""}`
+          : (firstFileName ? `Anexo: ${firstFileName}` : `Análise S/N`);
 
-        saveEditalToSupabase(newHistoryItem).catch((e) => console.warn("Erro ao salvar edital no Supabase:", e));
+        addEditalToHistory(analysisResult, historyTitle).catch((e) => console.warn("Erro ao salvar edital no histórico:", e));
 
         // Auto-save to planilhas_disputas in Supabase in real-time
         try {
@@ -1145,15 +1108,6 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         } catch (e) {
           console.warn("Could not auto-add disputa row:", e);
         }
-
-        setHistory(prev => {
-          const updated = [newHistoryItem, ...prev];
-          localStorage.setItem("aip_edital_history", JSON.stringify(updated));
-          return updated;
-        });
-
-        window.dispatchEvent(new Event("aip_edital_history_updated"));
-        window.dispatchEvent(new CustomEvent("aip_edital_analyzed", { detail: newHistoryItem }));
 
         // Auto-sync log results dynamically to Google Sheets/Drive simulation!
         syncAnalysisToGoogleSheets(`Análise Edital - ${(analysisResult.descricaoProduto || "").slice(0, 30)}`, analysisResult);
@@ -1545,12 +1499,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <button
                           onClick={() => {
                             // Delete all from Supabase
-                            history.forEach(item => {
-                              deleteEditalFromSupabase(item.id).catch(() => {});
-                            });
-                            setHistory([]);
-                            localStorage.removeItem("aip_edital_history");
-                            window.dispatchEvent(new Event("aip_edital_history_updated"));
+                            clearEditalHistory().catch(() => {});
                             setActiveEdital(null);
                             setShowConfirmClearHistory(false);
                           }}
@@ -1620,12 +1569,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            // Delete from Supabase
-                            deleteEditalFromSupabase(item.id).catch(() => {});
-                            const updated = history.filter((h: any) => h.id !== item.id);
-                            setHistory(updated);
-                            localStorage.setItem("aip_edital_history", JSON.stringify(updated));
-                            window.dispatchEvent(new Event("aip_edital_history_updated"));
+                            removeEditalFromHistory(item.id).catch(() => {});
                             if (isSelected) {
                               setActiveEdital(null);
                               setTextInput("");

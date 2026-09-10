@@ -10,6 +10,7 @@ import {
   saveComparadorProdutoToSupabase,
   subscribeToSupabaseTable
 } from "../utils/supabaseClient";
+import { useEditalHistory } from "../utils/editalHistory";
 import { Button } from "./ui/button";
 import { Card, CardHeader, CardContent } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -48,7 +49,7 @@ interface ExtendedResult {
 
 export default function ProductComparatorTab({ activeEdital }: ProductComparatorTabProps) {
   // Select which edital to pull specs from
-  const [editalHistory, setEditalHistory] = useState<any[]>([]);
+  const editalHistory = useEditalHistory();
   const [selectedEditalId, setSelectedEditalId] = useState<string>("");
   const [requiredSpecs, setRequiredSpecs] = useState<string>("");
 
@@ -94,16 +95,6 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
       loadComparisons();
     });
 
-    const saved = localStorage.getItem("aip_edital_history");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as any[];
-        setEditalHistory(parsed);
-      } catch (e) {
-        console.error("Erro ao carregar histórico de editais:", e);
-      }
-    }
-
     return () => {
       unsubscribe();
     };
@@ -127,10 +118,11 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
         setRequiredSpecs(activeEdital.descricaoProduto || "");
       }
     } else if (id) {
-      const selectedItem = editalHistory[parseInt(id)];
+      // Seleção por id, não por posição na lista: com índice, apagar ou
+      // reordenar um edital fazia a opção apontar para outro.
+      const selectedItem = editalHistory.find(h => h.id === id);
       if (selectedItem) {
-        const analysis = selectedItem.analysis || selectedItem;
-        setRequiredSpecs(analysis.descricaoProduto || "");
+        setRequiredSpecs(selectedItem.analysis.descricaoProduto || "");
       }
     } else {
       setRequiredSpecs("");
@@ -261,9 +253,9 @@ export default function ProductComparatorTab({ activeEdital }: ProductComparator
                   </option>
                 )}
                 {editalHistory.map((historyItem, index) => {
-                  const item = historyItem.analysis || historyItem;
+                  const item = historyItem.analysis;
                   return (
-                    <option key={index} value={index.toString()}>
+                    <option key={historyItem.id} value={historyItem.id}>
                       Pregão {item.identificacaoCertame?.identificacaoNumerica || index + 1} - {item.identificacaoCertame?.orgaoComprador?.substring(0, 35) || historyItem.title || "Sem órgão"}
                     </option>
                   );
