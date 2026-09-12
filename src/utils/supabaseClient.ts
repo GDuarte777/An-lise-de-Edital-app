@@ -1012,20 +1012,12 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
       error = res.error;
     }
 
-    // Attempt 3: Retry without user_id if foreign key or auth policy fails
-    if (error && (
-      error.message.includes("user_id") || 
-      error.message.includes("foreign key") || 
-      error.message.includes("fkey") || 
-      error.message.includes("violates") ||
-      error.code === "23503"
-    )) {
-      delete record.user_id;
-      const res = await client.from("planilhas_disputas").upsert([record], { onConflict: "id" });
-      error = res.error;
-    }
+    // Não existe mais uma tentativa "sem user_id": ela só funcionava enquanto a
+    // política da tabela era permissiva, e gravava linhas sem dono — que a RLS
+    // atual rejeita e que ninguém conseguiria ler depois. Um erro de permissão
+    // aqui é informação real e deve chegar ao chamador, não ser mascarado.
 
-    // Attempt 4: Insert / update fallback
+    // Attempt 3: Insert / update fallback
     if (error && (error.message.includes("onConflict") || error.code === "42703")) {
       const insertRes = await client.from("planilhas_disputas").insert([record]);
       if (insertRes.error) {
