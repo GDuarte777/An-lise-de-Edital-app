@@ -3,6 +3,17 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import {
+  PNCP_MODALIDADES,
+  PNCP_MODALIDADES_POR_RELEVANCIA,
+  montarQueryContratacoes,
+  temProximaPagina,
+  chaveContratacao,
+  parseNumeroControlePNCP,
+  escolherArquivoEdital,
+  formatarDataPncp,
+  type EndpointContratacao
+} from "./src/utils/pncpQuery";
 
 /**
  * pdf-parse é carregado sob demanda, com um `import()` de especificador literal.
@@ -2328,95 +2339,99 @@ const PNCP_CONSULTA_BASE = "https://pncp.gov.br/api/consulta";
 const PNCP_INTEGRACAO_BASE = "https://pncp.gov.br/api/pncp";
 
 // O PNCP entrega no máximo 500 registros por página.
-const PNCP_MAX_PAGE_SIZE = 500;
-
 /**
- * Tabela de domínio "Modalidade da Contratação" do PNCP.
- *
- * ⚠️ O código anterior tratava 5 como "Pregão Eletrônico". Está errado: 5 é
- * Concorrência PRESENCIAL, e Pregão Eletrônico é 6. Como o Pregão Eletrônico é
- * de longe a modalidade mais usada, a plataforma simplesmente nunca o consultava
- * — daí a impressão de que "só aparecem algumas oportunidades".
+ * Regras da API de consulta vivem em src/utils/pncpQuery.ts, com testes.
+ * Era aqui que estava o defeito que zerava o Radar, e regra que decide se o
+ * usuário vê ou não uma licitação precisa ser verificável sem subir servidor.
  */
-const PNCP_MODALIDADES: Record<string, string> = {
-  "1": "Leilão - Eletrônico",
-  "2": "Diálogo Competitivo",
-  "3": "Concurso",
-  "4": "Concorrência - Eletrônica",
-  "5": "Concorrência - Presencial",
-  "6": "Pregão - Eletrônico",
-  "7": "Pregão - Presencial",
-  "8": "Dispensa de Licitação",
-  "9": "Inexigibilidade",
-  "10": "Manifestação de Interesse",
-  "11": "Pré-qualificação",
-  "12": "Credenciamento",
-  "13": "Leilão - Presencial"
-};
-
-// Modalidades consultadas quando o usuário não escolhe nenhuma: as que
-// concentram a esmagadora maioria das oportunidades reais de disputa.
-const PNCP_MODALIDADES_PADRAO = ["6", "8", "4", "9"];
 
 const PNCP_HEADERS = {
   "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   "Accept": "application/json"
 };
 
-async function pncpFetchJson(url: string, timeoutMs = 20_000): Promise<any | null> {
+interface RespostaPncp {
+  ok: boolean;
+  status: number;
+  json: any | null;
+  /** Frase pronta para o usuário quando a consulta não deu certo. */
+  erro?: string;
+}
+
+/**
+ * Busca no PNCP devolvendo SEMPRE o que aconteceu.
+ *
+ * A versão anterior devolvia `null` tanto para "o portal está fora do ar"
+ * quanto para "o PNCP recusou os seus parâmetros". Quem chamava tratava os
+ * dois como fim de paginação, e foi assim que um erro 400 nosso — tamanho de
+ * página acima do teto — virou, na tela, "não foi possível obter as
+ * contratações do PNCP". Um defeito de parâmetro ficou dois anos parecendo
+ * instabilidade do portal. Agora o motivo sobe junto.
+ */
+async function pncpFetchRaw(url: string, timeoutMs = 20_000): Promise<RespostaPncp> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { headers: PNCP_HEADERS, signal: controller.signal });
-    if (response.status === 204) return { data: [], totalRegistros: 0, totalPaginas: 0, paginasRestantes: 0 };
-    if (!response.ok) {
-      console.warn(`[PNCP] HTTP ${response.status} em ${url}`);
-      return null;
+
+    // 204 é resposta de sucesso do PNCP para "nada encontrado no recorte".
+    if (response.status === 204) {
+      return { ok: true, status: 204, json: { data: [], totalRegistros: 0, totalPaginas: 0, paginasRestantes: 0 } };
     }
-    return await response.json();
+
+    if (!response.ok) {
+      const corpo = await response.text().catch(() => "");
+      const detalhe = corpo.slice(0, 300).replace(/\s+/g, " ").trim();
+      console.warn(`[PNCP] HTTP ${response.status} em ${url}${detalhe ? ` — ${detalhe}` : ""}`);
+      return {
+        ok: false,
+        status: response.status,
+        json: null,
+        erro: `O PNCP respondeu ${response.status}${detalhe ? `: ${detalhe}` : ""}`
+      };
+    }
+
+    return { ok: true, status: response.status, json: await response.json() };
   } catch (err: any) {
-    console.warn(`[PNCP] Falha em ${url}:`, err?.name === "AbortError" ? `timeout de ${timeoutMs}ms` : err?.message || err);
-    return null;
-  } finally {
-    clearTimeout(timer);
+    const timeout = err?.name === "AbortError";
+    console.warn(`[PNCP] Falha em ${url}:`, timeout ? `timeout de ${timeoutMs}ms` : err?.message || err);
+    return {
+      ok: false,
+      status: 0,
+      json: null,
+      erro: timeout ? `O PNCP não respondeu em ${timeoutMs / 1000}s.` : `Falha de rede ao falar com o PNCP: ${err?.message || err}`
+    };
   }
 }
 
-function pncpFormatDate(date: Date): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return `${yyyy}${mm}${dd}`;
+/** Compatibilidade com os trechos que só querem o corpo da resposta. */
+async function pncpFetchJson(url: string, timeoutMs = 20_000): Promise<any | null> {
+  const r = await pncpFetchRaw(url, timeoutMs);
+  return r.ok ? r.json : null;
 }
 
-/** Chave estável de uma contratação, para deduplicar entre modalidades e UFs. */
-function pncpKey(item: any): string {
-  return (
-    item?.numeroControlePNCP ||
-    `${item?.orgaoEntidade?.cnpj || item?.cnpjOrgao || ""}-${item?.anoCompra || ""}-${item?.sequencialCompra || ""}`
-  );
-}
+const pncpFormatDate = formatarDataPncp;
+const pncpKey = chaveContratacao;
 
-/**
- * Decompõe o número de controle PNCP (ex.: "79151312000156-1-000501/2026")
- * nas partes necessárias para as consultas de detalhe, itens e arquivos.
- */
-function parseNumeroControlePNCP(numero: string): { cnpj: string; ano: string; sequencial: string } | null {
-  const m = String(numero || "").match(/(\d{14})-\d+-(\d+)\/(\d{4})/);
-  if (!m) return null;
-  return { cnpj: m[1], sequencial: String(parseInt(m[2], 10)), ano: m[3] };
+interface ResultadoVarredura {
+  items: any[];
+  totalRegistros: number;
+  truncado: boolean;
+  /** Preenchido quando a combinação falhou por completo. */
+  erro?: string;
 }
 
 /**
- * Percorre TODAS as páginas de uma combinação (modalidade × UF).
+ * Percorre as páginas de uma combinação (modalidade × UF).
  *
- * O código anterior pedia uma única página de 20 registros por modalidade e
- * ainda parava cedo — por isso a tela nunca mostrava o conjunto real. Aqui a
- * paginação vai até `paginasRestantes` zerar, respeitando um teto de páginas e
- * um orçamento de tempo para a rota não travar.
+ * Duas mudanças em relação à versão anterior, ambas causadas pelo mesmo bug:
+ * o tamanho de página passou a respeitar o teto real da API (50), e uma
+ * rejeição da API deixou de ser confundida com fim de resultados. Se o PNCP
+ * recusar a primeira página, a combinação volta com `erro` em vez de voltar
+ * silenciosamente vazia.
  */
 async function pncpFetchAllPages(params: {
-  endpoint: "publicacao" | "proposta";
+  endpoint: EndpointContratacao;
   modalidade: string;
   uf?: string;
   municipio?: string;
@@ -2424,7 +2439,7 @@ async function pncpFetchAllPages(params: {
   dataFinal: string;
   maxPages: number;
   deadline: number;
-}): Promise<{ items: any[]; totalRegistros: number; truncado: boolean }> {
+}): Promise<ResultadoVarredura> {
   const items: any[] = [];
   let totalRegistros = 0;
   let truncado = false;
@@ -2435,34 +2450,63 @@ async function pncpFetchAllPages(params: {
       break;
     }
 
-    const query = new URLSearchParams({
+    const query = montarQueryContratacoes({
+      endpoint: params.endpoint,
+      modalidade: params.modalidade,
+      pagina,
+      dataInicial: params.dataInicial,
       dataFinal: params.dataFinal,
-      codigoModalidadeContratacao: params.modalidade,
-      pagina: String(pagina),
-      tamanhoPagina: String(PNCP_MAX_PAGE_SIZE)
+      uf: params.uf,
+      municipio: params.municipio
     });
-    // `dataInicial` só existe no endpoint de publicação; o de proposta filtra
-    // pelo prazo de recebimento ainda aberto.
-    if (params.endpoint === "publicacao" && params.dataInicial) query.set("dataInicial", params.dataInicial);
-    if (params.uf) query.set("uf", params.uf);
-    if (params.municipio) query.set("codigoMunicipioIbge", params.municipio);
 
-    const json = await pncpFetchJson(`${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query.toString()}`);
-    if (!json) break;
+    const resposta = await pncpFetchRaw(`${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query}`);
 
+    if (!resposta.ok) {
+      // Erro na primeira página é falha da combinação inteira e precisa ser
+      // relatado. Erro numa página seguinte apenas interrompe a varredura:
+      // o que já veio é dado real e vale mais que nada.
+      if (pagina === 1) return { items, totalRegistros, truncado: true, erro: resposta.erro };
+      truncado = true;
+      break;
+    }
+
+    const json = resposta.json || {};
     const pageItems = Array.isArray(json.data) ? json.data : [];
     if (pageItems.length > 0) items.push(...pageItems);
     if (pagina === 1) totalRegistros = Number(json.totalRegistros) || pageItems.length;
 
-    const restantes = Number(json.paginasRestantes);
-    const totalPaginas = Number(json.totalPaginas) || 1;
-    const acabou = Number.isFinite(restantes) ? restantes <= 0 : pagina >= totalPaginas;
-    if (acabou || pageItems.length === 0) break;
-
+    if (!temProximaPagina(json, pagina)) break;
     if (pagina === params.maxPages) truncado = true;
   }
 
   return { items, totalRegistros, truncado };
+}
+
+/**
+ * Executa as varreduras com um teto de chamadas simultâneas.
+ *
+ * Cobrir todas as modalidades multiplica as combinações, e disparar todas de
+ * uma vez com Promise.all castiga um portal público e rende 429. A fila
+ * mantém a varredura ampla sem transformar a busca em enxurrada.
+ */
+async function pncpVarrerComLimite<T>(
+  tarefas: Array<() => Promise<T>>,
+  limite: number
+): Promise<T[]> {
+  const resultados: T[] = new Array(tarefas.length);
+  let proxima = 0;
+
+  const trabalhador = async () => {
+    while (true) {
+      const indice = proxima++;
+      if (indice >= tarefas.length) return;
+      resultados[indice] = await tarefas[indice]();
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(limite, tarefas.length) }, trabalhador));
+  return resultados;
 }
 
 /** Normaliza uma contratação do PNCP para o formato consumido pela interface. */
@@ -2600,13 +2644,17 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         ? String(reqDataFinal).replace(/-/g, "")
         : pncpFormatDate(endpoint === "proposta" ? horizonte : hoje);
 
-      const targetMods = selectedModalidades.length > 0 ? selectedModalidades : PNCP_MODALIDADES_PADRAO;
+      // `codigoModalidadeContratacao` é obrigatório na API: não existe "buscar
+      // todas de uma vez". Trazer o PNCP inteiro significa varrer modalidade
+      // por modalidade — antes o padrão cobria só 4 das 13, e Credenciamento,
+      // Concurso e os Leilões simplesmente não existiam para o usuário.
+      const targetMods = selectedModalidades.length > 0 ? selectedModalidades : PNCP_MODALIDADES_POR_RELEVANCIA;
       // Sem UF escolhida, uma única consulta sem filtro cobre o Brasil inteiro.
       const targetUfs = selectedUfs.length > 0 ? selectedUfs : [""];
 
       const cacheKey = `${endpoint}|${targetUfs.join(",")}|${targetMods.join(",")}|${municipio}|${dataInicial}|${dataFinal}`;
       const cached = pncpCache.get(cacheKey);
-      let agregado: { items: any[]; totalPNCP: number; truncado: boolean };
+      let agregado: { items: any[]; totalPNCP: number; truncado: boolean; erros: string[] };
 
       if (cached && Date.now() - cached.timestamp < 180_000) {
         agregado = cached.data;
@@ -2614,13 +2662,13 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         // Orçamento de tempo: a rota agrega muitas páginas, mas não pode
         // estourar o limite da função serverless.
         const deadline = Date.now() + 25_000;
-        const maxPagesPorCombo = 10; // até 5.000 registros por combinação
+        const maxPagesPorCombo = 20; // até 1.000 registros por combinação
 
         const combos: Array<{ modalidade: string; uf: string }> = [];
         for (const m of targetMods) for (const u of targetUfs) combos.push({ modalidade: m, uf: u });
 
-        const resultados = await Promise.all(
-          combos.map(c =>
+        const resultados = await pncpVarrerComLimite(
+          combos.map(c => () =>
             pncpFetchAllPages({
               endpoint,
               modalidade: c.modalidade,
@@ -2631,17 +2679,20 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
               maxPages: maxPagesPorCombo,
               deadline
             })
-          )
+          ),
+          6
         );
 
         const vistos = new Set<string>();
         const items: any[] = [];
+        const erros: string[] = [];
         let totalPNCP = 0;
         let truncado = false;
 
         for (const r of resultados) {
           totalPNCP += r.totalRegistros;
           if (r.truncado) truncado = true;
+          if (r.erro && !erros.includes(r.erro)) erros.push(r.erro);
           for (const raw of r.items) {
             const key = pncpKey(raw);
             if (!key || vistos.has(key)) continue;
@@ -2653,18 +2704,33 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         // Mais recentes primeiro.
         items.sort((a, b) => String(b.dataPublicacaoPncp || "").localeCompare(String(a.dataPublicacaoPncp || "")));
 
-        agregado = { items, totalPNCP, truncado };
-        pncpCache.set(cacheKey, { timestamp: Date.now(), data: agregado });
+        agregado = { items, totalPNCP, truncado, erros };
+        // Resultado vazio por erro não entra no cache: senão uma instabilidade
+        // de 10 segundos apagaria o Radar pelos 3 minutos seguintes.
+        if (items.length > 0 || erros.length === 0) {
+          pncpCache.set(cacheKey, { timestamp: Date.now(), data: agregado });
+        }
       }
 
       if (agregado.items.length === 0) {
-        return res.status(502).json({
-          error: "Não foi possível obter as contratações do PNCP no momento. O portal pode estar indisponível — tente novamente em alguns minutos.",
+        // Distinguir os dois casos importa: "o recorte não tem nada" é uma
+        // resposta legítima e o usuário deve ajustar o filtro; "o PNCP recusou
+        // a consulta" é problema nosso ou do portal. Tratar tudo como portal
+        // fora do ar foi o que escondeu este defeito por tanto tempo.
+        const houveFalha = (agregado.erros || []).length > 0;
+        return res.status(houveFalha ? 502 : 200).json({
+          error: houveFalha
+            ? `Não foi possível obter as contratações do PNCP. ${agregado.erros[0]}`
+            : undefined,
+          aviso: houveFalha
+            ? undefined
+            : "Nenhuma contratação encontrada para estes filtros. Tente ampliar o período, as modalidades ou os estados.",
           data: [],
           totalRegistros: 0,
           totalPaginas: 0,
           numeroPagina: pageNum,
-          source: "pncp_indisponivel"
+          detalhesErro: houveFalha ? agregado.erros : undefined,
+          source: houveFalha ? "pncp_indisponivel" : "pncp_sem_resultados"
         });
       }
 
@@ -2700,6 +2766,11 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         // carregados — deixa explícito quando a busca foi limitada.
         totalDisponivelPNCP: agregado.totalPNCP,
         resultadoParcial: agregado.truncado,
+        // Varredura parcial não é o mesmo que varredura completa. Se alguma
+        // modalidade falhou, o usuário precisa saber que o que ele está vendo
+        // não é o PNCP inteiro — senão conclui que a licitação não existe.
+        avisosPNCP: (agregado.erros || []).length > 0 ? agregado.erros : undefined,
+        modalidadesConsultadas: targetMods.length,
         fonte: endpoint,
         source: "pncp_api_real"
       });

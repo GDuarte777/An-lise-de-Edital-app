@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { escolherArquivoEdital } from "../utils/pncpQuery";
 import { Card } from "./ui/card";
 import { Input } from "./ui/input";
 import {
@@ -115,6 +116,9 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   const [arquivosError, setArquivosError] = useState<string | null>(null);
   const [preparandoAnalise, setPreparandoAnalise] = useState<string | null>(null);
   const [resultadoParcial, setResultadoParcial] = useState(false);
+  // Modalidades que o PNCP recusou nesta busca: o usuário precisa saber que o
+  // que está vendo não é o portal inteiro, senão conclui que a licitação não existe.
+  const [avisosPNCP, setAvisosPNCP] = useState<string[]>([]);
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [dataSource, setDataSource] = useState<string>("PNCP Live");
   const [showStatePicker, setShowStatePicker] = useState<boolean>(false);
@@ -174,6 +178,8 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   const handleFetchPNCP = async (targetPage = page) => {
     setLoading(true);
     setError(null);
+
+    setAvisosPNCP([]);
 
     try {
       const queryParams = new URLSearchParams();
@@ -270,6 +276,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
         setTotalRecords(json.totalRegistros || filtered.length);
         setTotalPages(json.totalPaginas || Math.ceil((json.totalRegistros || filtered.length) / pageSize));
         setResultadoParcial(Boolean(json.resultadoParcial));
+        setAvisosPNCP(Array.isArray(json.avisosPNCP) ? json.avisosPNCP : []);
         // O rótulo só pode afirmar "oficial" quando o dado veio mesmo da API do
         // PNCP. Antes, dados gerados localmente eram exibidos como se fossem
         // sincronizados do portal.
@@ -286,9 +293,17 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
         setTotalRecords(0);
         setActiveItem(null);
       }
+
+      // "Nenhum resultado para este filtro" passou a ser uma resposta de
+      // sucesso, e não mais um 502. São situações diferentes: numa o usuário
+      // ajusta a busca, na outra o portal falhou.
+      if (json?.aviso) setError(json.aviso);
     } catch (err: any) {
       console.error("Error fetching PNCP:", err);
-      setError("Não foi possível carregar as licitações. Tente novamente.");
+      // A mensagem do servidor diz o que o PNCP respondeu. Trocá-la por um
+      // texto genérico foi o que deixou um erro 400 de parâmetro parecer
+      // instabilidade do portal durante meses.
+      setError(err?.message || "Não foi possível carregar as licitações. Tente novamente.");
       setResults([]);
       setActiveItem(null);
     } finally {
@@ -384,44 +399,91 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     }
   };
 
-  const handleTriggerAnalysis = (item: LicitacaoDetailed) => {
-    const formattedText = `EDITAL DE LICITAÇÃO PÚBLICA NACIONAL (SISTEMA PNCP)
-NÚMERO DE CONTROLE PNCP: ${item.numeroControlePNCP}
-NÚMERO DO PROCESSO / CERTAME: ${item.numero}
-MODALIDADE: ${item.modalidade}
-SITUAÇÃO DO REGISTRO: ${item.situacao}
-LOCALIZAÇÃO: ${item.municipio} - Estado de ${item.uf}
+  /**
+   * Análise apenas com a FICHA OFICIAL, quando a contratação não tem edital
+   * publicado no PNCP.
+   *
+   * O que havia aqui antes montava um texto com as seções "DAS CONDIÇÕES
+   * GERAIS E OBRIGAÇÕES DA CONTRATADA" e "DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA"
+   * — seis certidões listadas — e mandava para a IA como se fosse o conteúdo
+   * do certame. Nada disso vinha do edital: era texto fixo, igual para toda
+   * licitação do país. A IA extraía aquelas exigências como se fossem reais, e
+   * o Checklist de Habilitação passava a conferir documentos que o órgão pode
+   * nunca ter pedido — com a aparência de quem leu o edital.
+   *
+   * Agora só entra o que o órgão publicou. O que não veio na API fica de fora,
+   * e o cabeçalho avisa a IA de que este é um resumo de ficha, não o edital,
+   * para que ela marque como não identificado em vez de completar a lacuna.
+   */
+  const analisarSomenteFichaOficial = (item: LicitacaoDetailed) => {
+    const campos: string[] = [
+      "FICHA OFICIAL DE CONTRATAÇÃO — DADOS PUBLICADOS PELO ÓRGÃO NO PNCP",
+      "",
+      "ATENÇÃO: este é o registro resumido da contratação no PNCP, NÃO é o edital.",
+      "O arquivo do edital não está publicado no portal para este certame.",
+      "Não infira exigências de habilitação, prazos, obrigações ou condições que",
+      "não estejam escritas abaixo — liste-as como não identificadas.",
+      "",
+    ];
 
-ÓRGÃO PROPONENTE COMPRADOR:
-${item.orgao} ${item.cnpjOrgao ? `(CNPJ: ${item.cnpjOrgao})` : ""}
-UNIDADE ADMINISTRATIVA: ${item.unidade}
+    const adicionar = (rotulo: string, valor?: string | null) => {
+      const texto = String(valor ?? "").trim();
+      if (texto) campos.push(`${rotulo}: ${texto}`);
+    };
 
-OBJETO DO CONTRATO / TERMO DE REFERÊNCIA:
-${item.objeto}
+    adicionar("NÚMERO DE CONTROLE PNCP", item.numeroControlePNCP);
+    adicionar("NÚMERO DO PROCESSO/CERTAME", item.numero);
+    adicionar("MODALIDADE", item.modalidade);
+    adicionar("SITUAÇÃO DO REGISTRO", item.situacao);
+    adicionar("ÓRGÃO COMPRADOR", item.orgao);
+    adicionar("CNPJ DO ÓRGÃO", item.cnpjOrgao);
+    adicionar("UNIDADE ADMINISTRATIVA", item.unidade);
+    adicionar("LOCALIZAÇÃO", [item.municipio, item.uf].filter(Boolean).join(" - "));
+    adicionar("OBJETO", item.objeto);
+    adicionar("DATA DE PUBLICAÇÃO NO PNCP", item.dataPublicacao);
+    adicionar("DATA/HORA DA SESSÃO", item.dataAbertura);
+    adicionar("VALOR TOTAL ESTIMADO", item.valorEstimado);
+    adicionar("LINK OFICIAL", item.linkPNCP);
 
-DATAS E CRONOGRAMA DA LICITAÇÃO:
-- Data de Publicação Oficial no PNCP: ${item.dataPublicacao}
-- Data/Hora Abertura da Sessão Pública: ${item.dataAbertura}
+    onSelectForAnalysis(campos.join("\n"));
+  };
 
-VALOR TOTAL ESTIMADO DA CONTRATAÇÃO:
-${item.valorEstimado}
+  /**
+   * Caminho principal da busca: analisar o EDITAL de verdade sem sair da lista.
+   *
+   * Localiza o edital entre os arquivos publicados, baixa o arquivo oficial e
+   * entrega para a análise. Só cai para a ficha resumida quando o órgão não
+   * publicou documento nenhum — e, nesse caso, avisa o usuário, porque uma
+   * análise sem o edital vale bem menos e ele precisa saber disso.
+   */
+  const analisarEditalDaLista = async (item: LicitacaoDetailed) => {
+    const chave = `lista:${item.numeroControlePNCP}`;
+    setPreparandoAnalise(chave);
+    try {
+      const res = await fetch(`/api/pncp/arquivos?numeroControle=${encodeURIComponent(item.numeroControlePNCP)}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json?.error || "Não foi possível consultar os arquivos deste certame no PNCP.");
 
-LINK OFICIAL PNCP:
-${item.linkPNCP}
+      const lista = Array.isArray(json.arquivos) ? json.arquivos : [];
+      const edital = escolherArquivoEdital(lista);
 
-DAS CONDIÇÕES GERAIS E OBRIGAÇÕES DA CONTRATADA:
-A contratada deverá fornecer os bens ou serviços com estrita observância das especificações técnicas, padrões de qualidade e prazos descritos no edital e seus anexos, garantindo assistência técnica, nota fiscal atestada pelo gestor de fiscalização e regularidade fiscal/trabalhista integral durante toda a vigência contratual.
+      if (!edital?.uri) {
+        const semArquivo = lista.length === 0;
+        const confirmar = window.confirm(
+          semArquivo
+            ? "Este certame não tem arquivos publicados no PNCP. Deseja analisar apenas a ficha oficial resumida? A análise fica bem mais limitada do que com o edital."
+            : "Não foi possível identificar qual dos arquivos publicados é o edital. Deseja analisar apenas a ficha oficial resumida? Você também pode abrir o certame e escolher o arquivo manualmente.",
+        );
+        if (confirmar) analisarSomenteFichaOficial(item);
+        return;
+      }
 
-DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
-1. Comprovante de Inscrição e Situação Cadastral no CNPJ (Ativo).
-2. Certidão Negativa de Débitos Federais (RFB/PGFN).
-3. Certidão de Regularidade perante a Fazenda Estadual e Municipal da Sede.
-4. Certidão Negativa de Débitos Trabalhistas (CNDT - Justiça do Trabalho).
-5. Certificado de Regularidade do FGTS (CRF - Caixa Econômica).
-6. Balanço Patrimonial e Demonstração do Resultado do Exercício.
-`;
-
-    onSelectForAnalysis(formattedText);
+      await analisarArquivoComIA(item, edital as { uri: string; titulo: string });
+    } catch (err: any) {
+      alert(err?.message || "Não foi possível preparar a análise deste edital.");
+    } finally {
+      setPreparandoAnalise(null);
+    }
   };
 
   return (
@@ -831,6 +893,36 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                 </Select>
               </div>
 
+              {/* Motivo da falha e alcance da varredura.
+                  Antes o estado `error` era preenchido mas nunca exibido, e
+                  `resultadoParcial` nunca chegava à tela: uma consulta recusada
+                  pelo PNCP aparecia como "nenhum certame localizado com estes
+                  filtros", culpando o filtro do usuário por um erro nosso. */}
+              {!loading && error && (
+                <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 mb-3">
+                  <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                  <p className="text-[10px] leading-relaxed text-foreground">{error}</p>
+                </div>
+              )}
+
+              {!loading && !error && (resultadoParcial || avisosPNCP.length > 0) && (
+                <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 mb-3">
+                  <AlertCircle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                  <div className="text-[10px] leading-relaxed text-foreground space-y-1">
+                    <p className="font-bold">Esta busca não cobriu o PNCP inteiro.</p>
+                    {resultadoParcial && (
+                      <p>
+                        A varredura atingiu o limite de tempo antes de terminar. Estreite o período, os estados ou as
+                        modalidades para que o resultado fique completo.
+                      </p>
+                    )}
+                    {avisosPNCP.map((aviso, i) => (
+                      <p key={i} className="text-muted-foreground">{aviso}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Items List Container */}
               {loading ? (
                 <div className="flex flex-col items-center justify-center py-24 text-muted-foreground gap-3">
@@ -879,6 +971,28 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                           <span className="font-bold text-success">{item.valorEstimado}</span>
                           <span className="text-muted-foreground">{item.modalidade}</span>
                         </div>
+
+                        {/* Analisar sem sair da busca: o caminho antigo obrigava a
+                            abrir a ficha, baixar o PDF e subir de novo na aba de
+                            análise. Aqui a plataforma localiza o edital no PNCP,
+                            baixa e manda analisar. */}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={preparandoAnalise !== null}
+                          onClick={(e) => {
+                            // Sem isto o clique também selecionaria o card.
+                            e.stopPropagation();
+                            analisarEditalDaLista(item);
+                          }}
+                          className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          {preparandoAnalise === `lista:${item.numeroControlePNCP}`
+                            ? "Baixando o edital..."
+                            : "Analisar edital com IA"}
+                        </Button>
                       </Card>
                     );
                   })}
@@ -1086,18 +1200,19 @@ DOCUMENTAÇÃO HABILITATÓRIA EXIGIDA:
                     <Sparkles className="w-4 h-4 text-primary shrink-0 mt-0.5" />
                     <span>
                       Para a análise mais completa, use <strong>Analisar com IA</strong> em um dos arquivos acima — a IA lê o edital
-                      inteiro. O botão abaixo analisa apenas os dados resumidos desta ficha.
+                      inteiro. O botão abaixo usa somente os campos desta ficha, que são poucos: sem o edital, a análise
+                      não tem como apontar exigências de habilitação, prazos ou pegadinhas.
                     </span>
                   </div>
 
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => handleTriggerAnalysis(activeItem)}
+                    onClick={() => analisarSomenteFichaOficial(activeItem)}
                     className="w-full h-auto py-2.5 font-bold text-xs gap-2"
                   >
                     <Sparkles className="w-4 h-4" />
-                    Analisar apenas o resumo desta ficha
+                    Analisar apenas a ficha oficial
                   </Button>
                 </div>
               </div>
