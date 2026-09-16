@@ -1985,12 +1985,135 @@ Se você deseja:
 Como posso orientar sua empresa hoje?`;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// LIMITE DE REQUISIÇÕES
+//
+// Até aqui nenhuma rota tinha teto. Um laço no cliente — um useEffect sem
+// dependência correta, um retry mal escrito, ou simplesmente alguém com o
+// endereço da API — dispara chamadas de IA em sequência, e cada uma delas
+// é cobrada: da chave do próprio usuário, ou do GEMINI_API_KEY de quem
+// publicou o app quando o fallback está ligado. O prejuízo aparece na
+// fatura, não no log.
+//
+// O contador vive na memória do processo. Em serverless (Vercel) cada
+// instância tem o seu, então isto é um redutor de dano, não uma cota
+// contábil: segura o laço acidental e o abuso ingênuo, que é o que
+// acontece na prática. Cota real exige contador compartilhado (Postgres
+// ou Redis) e entra junto com o painel de consumo de IA.
+// ═══════════════════════════════════════════════════════════════════════
+
+const JANELA_LIMITE_MS = 60_000;
+
+// Rotas que gastam token de IA: o teto é baixo de propósito. Uma pessoa
+// trabalhando normalmente não chega perto disso — analisar um edital, pedir
+// uma revisão e conversar no chat somam poucas chamadas por minuto.
+const LIMITE_IA_POR_MINUTO = Number(process.env.RATE_LIMIT_IA_POR_MINUTO || 20);
+// Upload em pedaços: um PDF de 60 MB vira ~32 partes, e o chat aceita 100 MB.
+// O teto precisa caber um arquivo grande inteiro sem atrapalhar.
+const LIMITE_UPLOAD_POR_MINUTO = Number(process.env.RATE_LIMIT_UPLOAD_POR_MINUTO || 300);
+// Demais rotas (consultas ao PNCP, status, configuração).
+const LIMITE_API_POR_MINUTO = Number(process.env.RATE_LIMIT_API_POR_MINUTO || 120);
+
+const ROTAS_IA = new Set([
+  "/api/analyze-edital",
+  "/api/analyze-competitor",
+  "/api/analyze-cert",
+  "/api/generate-document",
+  "/api/compare-products",
+  "/api/chat",
+  "/api/chat/title",
+  "/api/generate-cert-description",
+]);
+
+interface JanelaDeUso {
+  inicio: number;
+  usos: number;
+}
+
+const contadoresDeUso = new Map<string, JanelaDeUso>();
+
+/**
+ * Identifica quem está chamando. O usuário autenticado é o alvo certo — o
+ * limite acompanha a pessoa, não a rede. Sem token, sobra o IP, que agrupa
+ * todo mundo atrás do mesmo NAT; por isso o teto por IP não é menor que o
+ * por usuário, para não punir um escritório inteiro pelo uso de um.
+ */
+function identificarChamador(req: any): string {
+  const auth = String(req.headers?.authorization || "");
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const userId = token ? getUserIdFromJwt(token) : null;
+  if (userId) return `user:${userId}`;
+
+  const encaminhado = String(req.headers?.["x-forwarded-for"] || "").split(",")[0].trim();
+  return `ip:${encaminhado || req.socket?.remoteAddress || "desconhecido"}`;
+}
+
+function consumirCota(chave: string, limite: number): { permitido: boolean; segundosParaLiberar: number } {
+  const agora = Date.now();
+  const janela = contadoresDeUso.get(chave);
+
+  if (!janela || agora - janela.inicio >= JANELA_LIMITE_MS) {
+    contadoresDeUso.set(chave, { inicio: agora, usos: 1 });
+    return { permitido: true, segundosParaLiberar: 0 };
+  }
+
+  janela.usos += 1;
+  if (janela.usos > limite) {
+    return {
+      permitido: false,
+      segundosParaLiberar: Math.max(1, Math.ceil((JANELA_LIMITE_MS - (agora - janela.inicio)) / 1000)),
+    };
+  }
+
+  return { permitido: true, segundosParaLiberar: 0 };
+}
+
+// Sem isso o Map cresceria para sempre em um processo de longa duração:
+// cada IP novo deixa uma entrada que nunca mais é lida.
+function limparJanelasExpiradas() {
+  const agora = Date.now();
+  for (const [chave, janela] of contadoresDeUso) {
+    if (agora - janela.inicio >= JANELA_LIMITE_MS) contadoresDeUso.delete(chave);
+  }
+}
+
+function limitarRequisicoes(req: any, res: any, next: any) {
+  // O health check é o que o monitoramento e a própria Vercel chamam para
+  // saber se o processo está vivo; limitá-lo só produziria alarme falso.
+  if (req.path === "/health" || req.path === "/api/health") return next();
+
+  if (contadoresDeUso.size > 5000) limparJanelasExpiradas();
+
+  const rota = req.originalUrl?.split("?")[0] || req.path;
+  const ehIA = ROTAS_IA.has(rota);
+  const ehUpload = rota.startsWith("/api/upload-chunk");
+
+  const balde = ehIA ? "ia" : ehUpload ? "upload" : "api";
+  const limite = ehIA ? LIMITE_IA_POR_MINUTO : ehUpload ? LIMITE_UPLOAD_POR_MINUTO : LIMITE_API_POR_MINUTO;
+
+  const { permitido, segundosParaLiberar } = consumirCota(`${balde}:${identificarChamador(req)}`, limite);
+
+  if (!permitido) {
+    res.setHeader("Retry-After", String(segundosParaLiberar));
+    return res.status(429).json({
+      error: ehIA
+        ? `Muitas análises seguidas (limite de ${limite} por minuto). Aguarde ${segundosParaLiberar}s e tente de novo.`
+        : `Muitas requisições seguidas. Aguarde ${segundosParaLiberar}s e tente de novo.`,
+      retryAfter: segundosParaLiberar,
+    });
+  }
+
+  return next();
+}
+
 const app = express();
 const PORT = 3000;
 
 // Increase payload limit for large PDF uploads
   app.use(express.json({ limit: "250mb" }));
   app.use(express.urlencoded({ limit: "250mb", extended: true }));
+
+  app.use("/api", limitarRequisicoes);
 
   // API Route: Health Check
   app.get("/api/health", (req, res) => {
