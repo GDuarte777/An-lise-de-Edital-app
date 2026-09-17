@@ -1,0 +1,48 @@
+name: Contrato da API do PNCP
+
+# Confere se a API do PNCP ainda se comporta como a plataforma assume.
+#
+# Os testes normais verificam a nossa lógica. Este verifica a PREMISSA: foi uma
+# premissa desatualizada sobre a API de terceiros (tamanhoPagina até 500, quando
+# nas contratações o teto é 50) que deixou a Busca de Oportunidades devolvendo
+# zero resultados sem ninguém perceber. Teste de unidade não pega isso — a
+# unidade estava perfeitamente coerente com a premissa errada.
+#
+# Roda diariamente para que uma mudança de regra do portal apareça aqui, e não
+# na forma de um usuário concluindo que não existem licitações.
+
+on:
+  schedule:
+    # 09:10 UTC ≈ 06:10 em Brasília, antes do horário de trabalho.
+    - cron: "10 9 * * *"
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "src/utils/pncpQuery.ts"
+      - "src/utils/pncpQuery.live.test.ts"
+      - "server.ts"
+      - ".github/workflows/pncp-contract.yml"
+  workflow_dispatch:
+
+jobs:
+  contrato:
+    name: Consultar o PNCP de verdade
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificar o contrato contra a API real
+        env:
+          PNCP_LIVE: "1"
+        run: npx vitest run src/utils/pncpQuery.live.test.ts --reporter=verbose
