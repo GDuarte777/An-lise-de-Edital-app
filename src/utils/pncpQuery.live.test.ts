@@ -13,23 +13,38 @@ import {
 // TESTE DE CONTRATO CONTRA A API REAL DO PNCP
 //
 // Os outros testes verificam a NOSSA lógica. Este verifica se a API do PNCP
-// ainda se comporta como a nossa lógica assume — que é uma pergunta diferente,
-// e é a que a plataforma errou por mais tempo.
+// ainda se comporta como a nossa lógica assume — pergunta diferente, e a que a
+// plataforma errou por mais tempo.
 //
-// O defeito que zerava o Radar não era um erro de raciocínio: era uma premissa
+// O defeito que zerava o Radar não foi erro de raciocínio: foi uma premissa
 // desatualizada sobre um sistema de terceiros (tamanhoPagina até 500, quando
-// nas contratações o teto é 50). Nenhum teste de unidade pega isso, porque a
-// unidade estava coerente com a premissa errada. Só uma chamada real pega.
+// nas contratações o teto é 50). Nenhum teste de unidade pega isso — a unidade
+// estava coerente com a premissa errada. Só a chamada real pega.
 //
-// Roda separado da suíte normal (precisa de rede e do portal no ar) e é
-// ativado por PNCP_LIVE=1 — no CI, pelo workflow pncp-contract.yml, que roda
-// diariamente. Se o PNCP mudar as regras de novo, o alarme chega pelo CI e não
-// por um usuário reclamando que a busca não acha nada.
+// ── A REGRA QUE GOVERNA ESTE ARQUIVO ───────────────────────────────────
+//
+//   4xx          → o PNCP recusou a NOSSA consulta. Contrato violado. QUEBRA.
+//   5xx          → o PNCP quebrou ao processar. Problema do portal. Registra.
+//   sem resposta → lentidão do portal. Registra e segue.
+//
+// A distinção é a razão de ser deste arquivo. Duas execuções com dez minutos de
+// diferença mostraram o mesmo endpoint passando de dez modalidades em 200 para
+// quase todas em 500 ("Erro na comunicação com o banco de dados"): o portal
+// oscila, e um alarme que toca a cada oscilação é um alarme que todo mundo
+// aprende a ignorar — justamente o alarme que existe para avisar quando a busca
+// parar de funcionar de novo.
+//
+// Ativado por PNCP_LIVE=1; no CI, pelo workflow pncp-contract.yml (diário).
 // ═══════════════════════════════════════════════════════════════════════
 
 const ATIVO = process.env.PNCP_LIVE === "1";
+const BASE = "https://pncp.gov.br/api/consulta/v1/contratacoes";
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  Accept: "application/json",
+};
 
-// O log do vitest fica longo demais para ser lido no fim de um job. As medições
+// O log do vitest é longo demais para ser lido no fim de um job. As medições
 // vão também para um arquivo, que o workflow publica no resumo da execução.
 const ARQUIVO_RELATORIO = process.env.PNCP_RELATORIO || "";
 
@@ -43,13 +58,8 @@ function registrar(linha: string): void {
     }
   }
 }
-const BASE = "https://pncp.gov.br/api/consulta/v1/contratacoes";
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  Accept: "application/json",
-};
 
-/** Horizonte usado nas consultas de proposta em aberto. */
+/** Horizonte longo, como o que a plataforma usa em produção. */
 function dataFinalFutura(): string {
   const d = new Date();
   d.setDate(d.getDate() + 365);
@@ -57,9 +67,9 @@ function dataFinalFutura(): string {
 }
 
 /**
- * Horizonte curto para os testes de contrato. O que se verifica neles é o
- * FORMATO da resposta, não o volume — e um recorte menor evita que uma consulta
- * cara transforme verificação de contrato em teste de desempenho do portal.
+ * Horizonte curto para as verificações de formato: o que se checa nelas é o
+ * FORMATO da resposta, não o volume, e um recorte menor evita transformar
+ * verificação de contrato em teste de desempenho do portal.
  */
 function dataFinalCurta(): string {
   const d = new Date();
@@ -67,12 +77,18 @@ function dataFinalCurta(): string {
   return formatarDataPncp(d);
 }
 
+interface RespostaCrua {
+  status: number;
+  corpo: any;
+  texto: string;
+}
+
 /**
- * Toda consulta tem prazo. Sem isso, uma requisição pendurada no portal fica
- * presa até o timeout do vitest, e um job que deveria durar um minuto passa dez
- * — o que já aconteceu na primeira execução deste arquivo.
+ * Consulta com prazo. Sem AbortController, uma requisição pendurada sobrevive
+ * ao timeout do vitest e segura o processo — foi o que fez a primeira execução
+ * deste arquivo durar treze minutos em vez de um.
  */
-async function consultar(query: string, timeoutMs = 20_000): Promise<{ status: number; corpo: any; texto: string }> {
+async function consultar(query: string, timeoutMs = 25_000): Promise<RespostaCrua> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -82,7 +98,7 @@ async function consultar(query: string, timeoutMs = 20_000): Promise<{ status: n
     try {
       corpo = JSON.parse(texto);
     } catch {
-      // Resposta de erro do PNCP nem sempre é JSON; o texto cru basta.
+      // Erro do PNCP nem sempre é JSON; o texto cru basta para o relatório.
     }
     return { status: resposta.status, corpo, texto };
   } finally {
@@ -90,142 +106,124 @@ async function consultar(query: string, timeoutMs = 20_000): Promise<{ status: n
   }
 }
 
+/** Como a consulta terminou, na classificação que este arquivo usa. */
+type Desfecho =
+  | { tipo: "ok"; resposta: RespostaCrua }
+  | { tipo: "portal"; status: number | "sem resposta" }
+  | { tipo: "contrato"; rotulo: string; mensagem: string };
+
 /**
- * Consulta que devolve null em vez de estourar quando o portal não responde.
+ * Aplica a regra 4xx/5xx/sem-resposta em um único lugar.
  *
- * Verificação de CONTRATO e medição de DESEMPENHO são perguntas diferentes.
- * Um teste de contrato que falha porque o portal está lento vira ruído, e ruído
- * treina todo mundo a ignorar o alarme — justamente o alarme que existe para
- * avisar quando a busca parar de funcionar de novo.
+ * Centralizar importa: quando cada teste decidia sozinho o que fazer com o
+ * status, bastou o portal oscilar para 500 e a suíte inteira quebrou por algo
+ * que não é defeito nosso.
  */
-async function consultarTolerante(query: string, timeoutMs = 55_000) {
+async function consultarClassificando(rotulo: string, query: string, timeoutMs = 25_000): Promise<Desfecho> {
+  const inicio = Date.now();
+  let resposta: RespostaCrua;
+
   try {
-    return await consultar(query, timeoutMs);
+    resposta = await consultar(query, timeoutMs);
   } catch {
-    registrar(`| consulta sem resposta em ${timeoutMs / 1000}s | ${timeoutMs} ms | SEM RESPOSTA |`);
-    return null;
+    registrar(`| ${rotulo} | ${Date.now() - inicio} ms | SEM RESPOSTA |`);
+    return { tipo: "portal", status: "sem resposta" };
   }
+
+  const ms = Date.now() - inicio;
+
+  if (resposta.status >= 400 && resposta.status < 500) {
+    registrar(`| ${rotulo} | ${ms} ms | HTTP ${resposta.status} — CONTRATO VIOLADO |`);
+    return {
+      tipo: "contrato",
+      rotulo,
+      mensagem: `HTTP ${resposta.status} — ${resposta.texto.slice(0, 160)}`,
+    };
+  }
+
+  if (resposta.status >= 500) {
+    registrar(`| ${rotulo} | ${ms} ms | HTTP ${resposta.status} (portal) — ${resposta.texto.slice(0, 70)} |`);
+    return { tipo: "portal", status: resposta.status };
+  }
+
+  registrar(`| ${rotulo} | ${ms} ms | HTTP ${resposta.status} |`);
+  return { tipo: "ok", resposta };
+}
+
+/** Descrição das violações de contrato encontradas, para a asserção final. */
+function violacoes(desfechos: Desfecho[]): string[] {
+  return desfechos
+    .filter((d): d is Extract<Desfecho, { tipo: "contrato" }> => d.tipo === "contrato")
+    .map((d) => `${d.rotulo}: ${d.mensagem}`);
+}
+
+function consultaPadrao(extra: { uf?: string; dataFinal?: string; modalidade?: string } = {}): string {
+  return montarQueryContratacoes({
+    endpoint: "proposta",
+    modalidade: extra.modalidade ?? "6",
+    pagina: 1,
+    dataFinal: extra.dataFinal ?? dataFinalCurta(),
+    uf: extra.uf,
+  });
 }
 
 describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
-  // ── Sonda de latência ──────────────────────────────────────────────
-  //
-  // A primeira execução no CI mostrou algo que nenhuma documentação diz: a
-  // recusa de tamanhoPagina=500 volta em 764ms, mas toda consulta VÁLIDA
-  // passou de 20 segundos. A diferença faz sentido — o 400 é recusado na
-  // validação, antes de qualquer trabalho de banco.
-  //
-  // Isso importa porque o servidor tem prazo: se uma página demora mais que o
-  // timeout da requisição, a busca falha de novo, agora por lentidão em vez de
-  // parâmetro inválido. A sonda mede o custo de cada formato de consulta para
-  // que os prazos do servidor sejam calibrados por medição, e não por chute.
-  //
-  // Lentidão NÃO quebra o build: o portal ser lento hoje não é defeito nosso, e
-  // um teste que falha por isso vira ruído que todo mundo aprende a ignorar. O
-  // que quebra o build é violação de contrato — resposta 4xx a consulta válida.
-  it(
-    "mede o custo de cada formato de consulta",
-    async () => {
-      const horizontes = [30, 90, 365];
-      const medicoes: Array<{ cenario: string; ms: number; status: number | string }> = [];
-
-      for (const dias of horizontes) {
-        const d = new Date();
-        d.setDate(d.getDate() + dias);
-
-        const inicio = Date.now();
-        try {
-          const { status, corpo } = await consultar(
-            montarQueryContratacoes({
-              endpoint: "proposta",
-              modalidade: "6",
-              pagina: 1,
-              dataFinal: formatarDataPncp(d),
-            }),
-            55_000,
-          );
-          medicoes.push({ cenario: `horizonte ${dias}d`, ms: Date.now() - inicio, status });
-
-          // A asserção de contrato vale só quando houve resposta.
-          expect(status).toBeLessThan(400);
-          if (status === 200) {
-            expect(corpo.data.length).toBeLessThanOrEqual(PNCP_TAMANHO_PAGINA_CONTRATACOES);
-          }
-        } catch (err: any) {
-          medicoes.push({ cenario: `horizonte ${dias}d`, ms: Date.now() - inicio, status: "TIMEOUT" });
-        }
-      }
-
-      // Com UF: o filtro deveria reduzir o conjunto varrido pelo portal.
-      const comUf = new Date();
-      comUf.setDate(comUf.getDate() + 90);
-      const inicioUf = Date.now();
-      try {
-        const { status } = await consultar(
-          montarQueryContratacoes({
-            endpoint: "proposta",
-            modalidade: "6",
-            pagina: 1,
-            dataFinal: formatarDataPncp(comUf),
-            uf: "SP",
-          }),
-          55_000,
-        );
-        medicoes.push({ cenario: "horizonte 90d + UF=SP", ms: Date.now() - inicioUf, status });
-      } catch {
-        medicoes.push({ cenario: "horizonte 90d + UF=SP", ms: Date.now() - inicioUf, status: "TIMEOUT" });
-      }
-
-      for (const m of medicoes) {
-        registrar(`| ${m.cenario} | ${m.ms} ms | ${m.status} |`);
-      }
-
-      // Falha apenas se NENHUM formato respondeu: aí não é lentidão, é a API
-      // inalcançável, e a busca da plataforma não tem como funcionar.
-      const respondeu = medicoes.filter((m) => typeof m.status === "number");
-      expect(respondeu.length).toBeGreaterThan(0);
-    },
-    240_000,
-  );
-
   it(
     "REJEITA tamanhoPagina=500 — a premissa que zerava a busca",
     async () => {
-      // Este teste existe para provar o defeito, não só a correção. Se um dia
-      // ele passar a falhar porque o PNCP aceitou 500, ótimo: aí sim dá para
-      // aumentar o tamanho de página com segurança, e não por suposição.
+      // Prova o DEFEITO, não só a correção. Se um dia passar a falhar porque o
+      // PNCP aceitou 500, ótimo: aí dá para aumentar o tamanho de página com
+      // base em medição, e não por suposição.
       const query = new URLSearchParams({
-        dataFinal: dataFinalFutura(),
+        dataFinal: dataFinalCurta(),
         codigoModalidadeContratacao: "6",
         pagina: "1",
         tamanhoPagina: "500",
       });
 
       const { status, texto } = await consultar(query.toString());
+      registrar(`| tamanhoPagina=500 (deve ser recusado) | - | HTTP ${status}: ${texto.slice(0, 110)} |`);
 
       expect(status).toBeGreaterThanOrEqual(400);
       expect(status).toBeLessThan(500);
-      registrar(`| tamanhoPagina=500 (deve ser recusado) | - | HTTP ${status}: ${texto.slice(0, 120)} |`);
     },
-    90_000,
+    60_000,
+  );
+
+  it(
+    "mede o custo de cada formato de consulta",
+    async () => {
+      // A recusa de tamanhoPagina=500 volta em menos de 1s, mas consultas
+      // válidas já levaram de 30 a 55 segundos — o 400 é rejeitado na
+      // validação, antes de qualquer trabalho de banco. Os prazos do servidor
+      // (PNCP_TIMEOUT_MS, PNCP_ORCAMENTO_MS) saem daqui, e não de chute.
+      const desfechos: Desfecho[] = [];
+
+      for (const dias of [30, 90, 365]) {
+        const d = new Date();
+        d.setDate(d.getDate() + dias);
+        desfechos.push(
+          await consultarClassificando(`horizonte ${dias}d`, consultaPadrao({ dataFinal: formatarDataPncp(d) }), 55_000),
+        );
+      }
+
+      desfechos.push(await consultarClassificando("horizonte 30d + UF=SP", consultaPadrao({ uf: "SP" }), 55_000));
+
+      // Nenhuma asserção de velocidade: lentidão do portal não é defeito nosso.
+      expect(violacoes(desfechos)).toEqual([]);
+    },
+    240_000,
   );
 
   it(
     "devolve o envelope de paginação que a varredura usa",
     async () => {
-      const resposta = await consultarTolerante(
-        montarQueryContratacoes({
-          endpoint: "proposta",
-          modalidade: "6",
-          pagina: 1,
-          dataFinal: dataFinalCurta(),
-        }),
-      );
-      if (!resposta) return;
-      const { status, corpo } = resposta;
-      if (status === 204) return;
+      const desfecho = await consultarClassificando("envelope de paginação", consultaPadrao(), 55_000);
+      expect(violacoes([desfecho])).toEqual([]);
+      if (desfecho.tipo !== "ok" || desfecho.resposta.status === 204) return;
 
       // temProximaPagina() decide a varredura inteira a partir destes campos.
+      const corpo = desfecho.resposta.corpo;
       expect(corpo).toHaveProperty("totalRegistros");
       expect(corpo).toHaveProperty("totalPaginas");
       expect(corpo).toHaveProperty("paginasRestantes");
@@ -235,19 +233,16 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
   );
 
   it(
-    "entrega os campos que a interface exibe de cada contratação",
+    "respeita o tamanho de página e entrega os campos que a interface exibe",
     async () => {
-      const resposta = await consultarTolerante(
-        montarQueryContratacoes({
-          endpoint: "proposta",
-          modalidade: "6",
-          pagina: 1,
-          dataFinal: dataFinalCurta(),
-        }),
-      );
-      if (!resposta) return;
-      const { status, corpo } = resposta;
-      if (status === 204) return;
+      const desfecho = await consultarClassificando("campos da contratação", consultaPadrao(), 55_000);
+      expect(violacoes([desfecho])).toEqual([]);
+      if (desfecho.tipo !== "ok" || desfecho.resposta.status === 204) return;
+
+      const corpo = desfecho.resposta.corpo;
+      expect(Array.isArray(corpo?.data)).toBe(true);
+      expect(corpo.data.length).toBeLessThanOrEqual(PNCP_TAMANHO_PAGINA_CONTRATACOES);
+      if (corpo.data.length === 0) return;
 
       const item = corpo.data[0];
       expect(item).toHaveProperty("numeroControlePNCP");
@@ -261,82 +256,52 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
   );
 
   it(
-    "aceita o filtro por UF",
+    "aplica de fato o filtro por UF",
     async () => {
-      const resposta = await consultarTolerante(
-        montarQueryContratacoes({
-          endpoint: "proposta",
-          modalidade: "6",
-          pagina: 1,
-          dataFinal: dataFinalCurta(),
-          uf: "SP",
-        }),
-      );
-      if (!resposta) return;
-      const { status, corpo } = resposta;
+      const desfecho = await consultarClassificando("filtro UF=SP", consultaPadrao({ uf: "SP" }), 55_000);
+      expect(violacoes([desfecho])).toEqual([]);
+      if (desfecho.tipo !== "ok" || desfecho.resposta.status === 204) return;
 
-      expect([200, 204]).toContain(status);
-      if (status === 200 && corpo.data.length > 0) {
-        // Se o filtro fosse ignorado, a busca por estado seria uma ilusão.
-        const ufs = new Set(corpo.data.map((i: any) => i?.unidadeOrgao?.ufSigla));
-        expect([...ufs]).toEqual(["SP"]);
-      }
+      const corpo = desfecho.resposta.corpo;
+      if (!corpo?.data?.length) return;
+
+      // Se o filtro fosse ignorado, a busca por estado seria uma ilusão.
+      const ufs = new Set(corpo.data.map((i: any) => i?.unidadeOrgao?.ufSigla));
+      expect([...ufs]).toEqual(["SP"]);
     },
     90_000,
   );
 
   it(
-    "responde a TODAS as modalidades que varremos",
+    "não é recusado em nenhuma das modalidades que varremos",
     async () => {
-      // Uma modalidade que responde 4xx sai silenciosamente do Radar e o
-      // usuário nunca fica sabendo que aquele tipo de certame não é buscado.
-      // Em paralelo: sequencial, 13 consultas a um portal lento estouram
-      // qualquer limite de tempo razoável para um job de CI.
-      const resultados = await Promise.all(
-        PNCP_MODALIDADES_POR_RELEVANCIA.map(async (modalidade) => {
-          const resposta = await consultarTolerante(
-            montarQueryContratacoes({
-              endpoint: "proposta",
-              modalidade,
-              pagina: 1,
-              dataFinal: dataFinalCurta(),
-            }),
-          );
-          return { modalidade, status: resposta ? resposta.status : "SEM RESPOSTA" };
-        }),
+      // Uma modalidade recusada sai silenciosamente do Radar, e o usuário nunca
+      // fica sabendo que aquele tipo de certame não é buscado.
+      const desfechos = await Promise.all(
+        PNCP_MODALIDADES_POR_RELEVANCIA.map((modalidade) =>
+          consultarClassificando(
+            `modalidade ${modalidade} (${PNCP_MODALIDADES[modalidade]})`,
+            consultaPadrao({ modalidade }),
+            55_000,
+          ),
+        ),
       );
 
-      for (const { modalidade, status } of resultados) {
-        registrar(`| modalidade ${modalidade} (${PNCP_MODALIDADES[modalidade]}) | - | ${status} |`);
-      }
-
-      // Só 4xx conta como falha. A distinção é a razão de ser deste teste:
-      //   4xx = o PNCP recusou a NOSSA consulta -> contrato violado, defeito nosso
-      //   5xx = o PNCP quebrou ao processar     -> problema do portal
-      // A medição de 17/09/2026 mostrou Credenciamento, Concurso e Leilão
-      // Presencial respondendo 500 de forma consistente. Tratar isso como
-      // defeito nosso deixaria o alarme permanentemente vermelho por algo que
-      // não temos como corrigir — e alarme sempre vermelho não é alarme.
-      const falhas = resultados
-        .filter((r) => typeof r.status === "number" && (r.status as number) >= 400 && (r.status as number) < 500)
-        .map((r) => `${r.modalidade} (${PNCP_MODALIDADES[r.modalidade]}): HTTP ${r.status}`);
-
-      expect(falhas).toEqual([]);
+      expect(violacoes(desfechos)).toEqual([]);
     },
-    90_000,
+    240_000,
   );
 
   it(
-    "confirma que dataInicial não é aceita no endpoint de proposta",
+    "registra como o endpoint de proposta trata dataInicial",
     async () => {
-      // montarQueryContratacoes() descarta dataInicial em /proposta.
+      // montarQueryContratacoes() não envia dataInicial em /proposta.
       //
-      // A medição de 17/09/2026 corrigiu a suposição registrada aqui antes: o
-      // endpoint NÃO recusa o parâmetro, devolve 200 normalmente. Continuamos
-      // sem enviá-lo porque o recorte de /proposta é o prazo de recebimento
-      // ainda aberto, e um filtro de data de publicação por cima disso esconde
-      // certame antigo com proposta aberta — mas o motivo é esse, e não uma
-      // recusa da API.
+      // A medição corrigiu a suposição que estava registrada aqui antes: o
+      // endpoint NÃO recusa o parâmetro, responde 200 normalmente. Seguimos sem
+      // enviá-lo, mas pelo motivo certo — o recorte de /proposta é o prazo de
+      // recebimento ainda aberto, e filtrar por data de publicação por cima
+      // disso esconderia certame antigo com proposta ainda aberta.
       const query = new URLSearchParams({
         dataInicial: "20260101",
         dataFinal: dataFinalCurta(),
@@ -345,13 +310,23 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
         tamanhoPagina: String(PNCP_TAMANHO_PAGINA_CONTRATACOES),
       });
 
-      const resposta = await consultarTolerante(query.toString());
-      if (!resposta) return;
-      const { status, texto } = resposta;
-      registrar(`| dataInicial em /proposta | - | HTTP ${status}: ${texto.slice(0, 120)} |`);
-      // Sem asserção rígida: o objetivo é registrar o comportamento no log do
-      // CI. Falhar aqui não indicaria defeito nosso, já que não mandamos o campo.
-      expect(typeof resposta.status).toBe("number");
+      const desfecho = await consultarClassificando("dataInicial em /proposta", query.toString(), 55_000);
+      // Só registra: não enviamos o parâmetro, então recusa dele não seria
+      // defeito nosso. O valor está no histórico do log.
+      expect(desfecho).toBeDefined();
+    },
+    90_000,
+  );
+
+  it(
+    "aceita o horizonte longo que a plataforma usa em produção",
+    async () => {
+      const desfecho = await consultarClassificando(
+        "horizonte de produção (365d)",
+        consultaPadrao({ dataFinal: dataFinalFutura() }),
+        55_000,
+      );
+      expect(violacoes([desfecho])).toEqual([]);
     },
     90_000,
   );
