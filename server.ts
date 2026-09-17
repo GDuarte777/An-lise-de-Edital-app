@@ -4,6 +4,13 @@ import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import {
+  derivarChaveMestra,
+  descriptografarConfiguracao,
+  criptografarConfiguracao,
+  mascararSegredo,
+  CAMPOS_SECRETOS
+} from "./src/utils/segredos";
+import {
   PNCP_MODALIDADES,
   PNCP_MODALIDADES_POR_RELEVANCIA,
   montarQueryContratacoes,
@@ -267,6 +274,22 @@ function getServerFallbackKey(varName: "GEMINI_API_KEY" | "OPENAI_API_KEY"): str
 // Lê o "sub" (id do usuário) de um JWT do Supabase sem verificar assinatura.
 // A verificação continua sendo feita pelo PostgREST/RLS; aqui o valor serve apenas
 // para filtrar a consulta pela linha do usuário correto.
+/**
+ * Chave mestra de criptografia das chaves de IA, derivada uma vez no start.
+ *
+ * Sem AI_KEYS_ENCRYPTION_KEY, fica null e todo o caminho vira passagem direta:
+ * a plataforma se comporta exatamente como antes. Uma migração de segurança que
+ * derruba quem não leu o changelog não é melhoria, é incidente.
+ */
+const CHAVE_MESTRA_IA = derivarChaveMestra(process.env.AI_KEYS_ENCRYPTION_KEY);
+
+if (!CHAVE_MESTRA_IA) {
+  console.warn(
+    "[segredos] AI_KEYS_ENCRYPTION_KEY não configurada: as chaves de API dos usuários " +
+    "ficam em texto puro no banco. Gere uma com `openssl rand -hex 32` e defina a variável."
+  );
+}
+
 function getUserIdFromJwt(token: string): string | null {
   try {
     const payload = token.split(".")[1];
@@ -374,7 +397,10 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
         if (resp.ok) {
           const rows: any[] = await resp.json();
           if (rows && rows.length > 0) {
-            const row = rows[0];
+            // Decifra antes de usar. Linhas gravadas antes desta mudança não têm
+            // o prefixo e passam intactas, então os dois formatos convivem no
+            // banco durante a transição.
+            const row = descriptografarConfiguracao(rows[0], CHAVE_MESTRA_IA);
             let provider = row.active_provider || "gemini";
             const keyMap: Record<string, string> = {
               gemini: row.gemini_key || "",
@@ -2128,7 +2154,91 @@ const PORT = 3000;
 
   // API Route: Health Check
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", mode: process.env.NODE_ENV || "development" });
+    res.json({
+      status: "ok",
+      mode: process.env.NODE_ENV || "development",
+      // Deixa visível, sem precisar abrir o banco, se as chaves de API dos
+      // usuários estão cifradas em repouso.
+      chavesIaCriptografadas: Boolean(CHAVE_MESTRA_IA)
+    });
+  });
+
+  /**
+   * Grava a configuração de IA do usuário com as chaves CIFRADAS.
+   *
+   * O cliente gravava direto no Supabase, o que deixava as chaves de API em
+   * texto puro na tabela — legível por qualquer um com acesso ao banco, a um
+   * backup ou a uma service key vazada. A gravação passa por aqui para que a
+   * cifragem aconteça no servidor, único lugar que tem a chave mestra.
+   *
+   * A escrita continua usando o JWT do usuário, então o RLS segue valendo: o
+   * servidor não ganha poder de escrever na linha de outra pessoa.
+   */
+  app.post("/api/user-config", async (req, res): Promise<any> => {
+    try {
+      const authHeader = String(req.headers.authorization || "");
+      if (!authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Faça login para salvar suas configurações de IA." });
+      }
+
+      const token = authHeader.slice(7);
+      const userId = getUserIdFromJwt(token);
+      if (!userId) {
+        return res.status(401).json({ error: "Sessão inválida. Entre novamente." });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) {
+        return res.status(503).json({ error: "Supabase não está configurado neste servidor." });
+      }
+
+      const corpo = req.body || {};
+      // Lista explícita: um campo inesperado no corpo não vira coluna gravada.
+      const permitidos = [
+        "active_provider",
+        "gemini_key", "gemini_model",
+        "openai_key", "openai_model",
+        "anthropic_key", "anthropic_model",
+        "deepseek_key", "deepseek_model"
+      ];
+
+      const linha: Record<string, any> = { user_id: userId, updated_at: new Date().toISOString() };
+      for (const campo of permitidos) {
+        if (corpo[campo] !== undefined) linha[campo] = corpo[campo];
+      }
+
+      const cifrada = criptografarConfiguracao(linha, CHAVE_MESTRA_IA);
+
+      const resp = await fetch(`${supabaseUrl}/rest/v1/configuracoes_usuario`, {
+        method: "POST",
+        headers: {
+          "apikey": supabaseAnonKey,
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Prefer": "resolution=merge-duplicates,return=minimal"
+        },
+        body: JSON.stringify(cifrada)
+      });
+
+      if (!resp.ok) {
+        const detalhe = await resp.text().catch(() => "");
+        console.error("[user-config] Supabase recusou a gravação:", resp.status, detalhe.slice(0, 300));
+        return res.status(502).json({ error: `Não foi possível salvar no banco (HTTP ${resp.status}).` });
+      }
+
+      // A resposta devolve só o mascarado: chave de API é credencial, e uma vez
+      // gravada não há motivo para a plataforma entregá-la de volta ao navegador.
+      const mascaradas: Record<string, string> = {};
+      for (const campo of CAMPOS_SECRETOS) {
+        if (typeof linha[campo] === "string") mascaradas[campo] = mascararSegredo(linha[campo]);
+      }
+
+      return res.json({ success: true, criptografado: Boolean(CHAVE_MESTRA_IA), chaves: mascaradas });
+    } catch (error: any) {
+      console.error("[user-config] Erro ao salvar configuração:", error?.message || error);
+      return res.status(500).json({ error: `Erro ao salvar configuração: ${error?.message || "desconhecido"}` });
+    }
   });
 
   // API Route: Chunked Upload Init

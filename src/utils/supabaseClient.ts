@@ -1827,6 +1827,46 @@ export async function saveUserConfigToSupabase(config: {
       updated_at: new Date().toISOString()
     };
 
+    // Grava pelo servidor, que cifra as chaves de API antes de escrever.
+    // A gravação direta daqui deixava a credencial em texto puro na tabela,
+    // legível por qualquer um com acesso ao banco ou a um backup.
+    const { data: sessao } = await client.auth.getSession();
+    const token = sessao?.session?.access_token;
+
+    if (token) {
+      try {
+        const resp = await fetch("/api/user-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(record)
+        });
+
+        if (resp.ok) {
+          const json = await resp.json().catch(() => ({}));
+          return {
+            success: true,
+            message: json?.criptografado
+              ? "Configurações salvas e chaves criptografadas no banco."
+              : "Configurações de chaves salvas com sucesso no Supabase!"
+          };
+        }
+
+        // 404 é o app rodando numa versão do servidor sem esta rota ainda.
+        // Qualquer outro erro é real e não deve ser mascarado por um fallback
+        // que grava em texto puro sem o usuário saber.
+        if (resp.status !== 404) {
+          const json = await resp.json().catch(() => ({}));
+          throw new Error(json?.error || `Falha ao salvar (HTTP ${resp.status}).`);
+        }
+      } catch (erroServidor: any) {
+        // Só cai para a gravação direta quando o servidor não respondeu; um
+        // erro vindo dele já é definitivo.
+        if (erroServidor?.message && !/fetch|network|Failed to fetch/i.test(erroServidor.message)) {
+          throw erroServidor;
+        }
+      }
+    }
+
     const { error } = await client
       .from("configuracoes_usuario")
       .upsert([record], { onConflict: "user_id" });
