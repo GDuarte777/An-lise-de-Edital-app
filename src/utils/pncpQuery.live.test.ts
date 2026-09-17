@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { appendFileSync } from "node:fs";
 import {
   PNCP_TAMANHO_PAGINA_CONTRATACOES,
   PNCP_MODALIDADES,
@@ -27,6 +28,21 @@ import {
 // ═══════════════════════════════════════════════════════════════════════
 
 const ATIVO = process.env.PNCP_LIVE === "1";
+
+// O log do vitest fica longo demais para ser lido no fim de um job. As medições
+// vão também para um arquivo, que o workflow publica no resumo da execução.
+const ARQUIVO_RELATORIO = process.env.PNCP_RELATORIO || "";
+
+function registrar(linha: string): void {
+  console.log(linha);
+  if (ARQUIVO_RELATORIO) {
+    try {
+      appendFileSync(ARQUIVO_RELATORIO, `${linha}\n`);
+    } catch {
+      // Relatório é conveniência; falhar ao escrever não invalida a medição.
+    }
+  }
+}
 const BASE = "https://pncp.gov.br/api/consulta/v1/contratacoes";
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -71,6 +87,23 @@ async function consultar(query: string, timeoutMs = 20_000): Promise<{ status: n
     return { status: resposta.status, corpo, texto };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * Consulta que devolve null em vez de estourar quando o portal não responde.
+ *
+ * Verificação de CONTRATO e medição de DESEMPENHO são perguntas diferentes.
+ * Um teste de contrato que falha porque o portal está lento vira ruído, e ruído
+ * treina todo mundo a ignorar o alarme — justamente o alarme que existe para
+ * avisar quando a busca parar de funcionar de novo.
+ */
+async function consultarTolerante(query: string, timeoutMs = 55_000) {
+  try {
+    return await consultar(query, timeoutMs);
+  } catch {
+    registrar(`| consulta sem resposta em ${timeoutMs / 1000}s | ${timeoutMs} ms | SEM RESPOSTA |`);
+    return null;
   }
 }
 
@@ -144,7 +177,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
       }
 
       for (const m of medicoes) {
-        console.log(`[latencia] ${m.cenario.padEnd(24)} ${String(m.ms).padStart(6)}ms  ->  ${m.status}`);
+        registrar(`| ${m.cenario} | ${m.ms} ms | ${m.status} |`);
       }
 
       // Falha apenas se NENHUM formato respondeu: aí não é lentidão, é a API
@@ -172,7 +205,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
 
       expect(status).toBeGreaterThanOrEqual(400);
       expect(status).toBeLessThan(500);
-      console.log(`[contrato] tamanhoPagina=500 -> HTTP ${status}: ${texto.slice(0, 200)}`);
+      registrar(`| tamanhoPagina=500 (deve ser recusado) | - | HTTP ${status}: ${texto.slice(0, 120)} |`);
     },
     90_000,
   );
@@ -180,15 +213,16 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
   it(
     "devolve o envelope de paginação que a varredura usa",
     async () => {
-      const { status, corpo } = await consultar(
+      const resposta = await consultarTolerante(
         montarQueryContratacoes({
           endpoint: "proposta",
           modalidade: "6",
           pagina: 1,
           dataFinal: dataFinalCurta(),
         }),
-        55_000,
       );
+      if (!resposta) return;
+      const { status, corpo } = resposta;
       if (status === 204) return;
 
       // temProximaPagina() decide a varredura inteira a partir destes campos.
@@ -203,15 +237,16 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
   it(
     "entrega os campos que a interface exibe de cada contratação",
     async () => {
-      const { status, corpo } = await consultar(
+      const resposta = await consultarTolerante(
         montarQueryContratacoes({
           endpoint: "proposta",
           modalidade: "6",
           pagina: 1,
           dataFinal: dataFinalCurta(),
         }),
-        55_000,
       );
+      if (!resposta) return;
+      const { status, corpo } = resposta;
       if (status === 204) return;
 
       const item = corpo.data[0];
@@ -228,7 +263,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
   it(
     "aceita o filtro por UF",
     async () => {
-      const { status, corpo } = await consultar(
+      const resposta = await consultarTolerante(
         montarQueryContratacoes({
           endpoint: "proposta",
           modalidade: "6",
@@ -236,8 +271,9 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
           dataFinal: dataFinalCurta(),
           uf: "SP",
         }),
-        55_000,
       );
+      if (!resposta) return;
+      const { status, corpo } = resposta;
 
       expect([200, 204]).toContain(status);
       if (status === 200 && corpo.data.length > 0) {
@@ -258,25 +294,26 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
       // qualquer limite de tempo razoável para um job de CI.
       const resultados = await Promise.all(
         PNCP_MODALIDADES_POR_RELEVANCIA.map(async (modalidade) => {
-          const { status } = await consultar(
+          const resposta = await consultarTolerante(
             montarQueryContratacoes({
               endpoint: "proposta",
               modalidade,
               pagina: 1,
               dataFinal: dataFinalCurta(),
             }),
-            55_000,
           );
-          return { modalidade, status };
+          return { modalidade, status: resposta ? resposta.status : "SEM RESPOSTA" };
         }),
       );
 
       for (const { modalidade, status } of resultados) {
-        console.log(`[contrato] modalidade ${modalidade} (${PNCP_MODALIDADES[modalidade]}): HTTP ${status}`);
+        registrar(`| modalidade ${modalidade} (${PNCP_MODALIDADES[modalidade]}) | - | ${status} |`);
       }
 
+      // Só conta como falha a modalidade que RESPONDEU com erro: aí a nossa
+      // consulta está fora do contrato. Ausência de resposta é lentidão.
       const falhas = resultados
-        .filter((r) => ![200, 204].includes(r.status))
+        .filter((r) => typeof r.status === "number" && ![200, 204].includes(r.status as number))
         .map((r) => `${r.modalidade} (${PNCP_MODALIDADES[r.modalidade]}): HTTP ${r.status}`);
 
       expect(falhas).toEqual([]);
@@ -297,11 +334,13 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
         tamanhoPagina: String(PNCP_TAMANHO_PAGINA_CONTRATACOES),
       });
 
-      const { status, texto } = await consultar(query.toString());
-      console.log(`[contrato] dataInicial em /proposta -> HTTP ${status}: ${texto.slice(0, 160)}`);
+      const resposta = await consultarTolerante(query.toString());
+      if (!resposta) return;
+      const { status, texto } = resposta;
+      registrar(`| dataInicial em /proposta | - | HTTP ${status}: ${texto.slice(0, 120)} |`);
       // Sem asserção rígida: o objetivo é registrar o comportamento no log do
       // CI. Falhar aqui não indicaria defeito nosso, já que não mandamos o campo.
-      expect(typeof status).toBe("number");
+      expect(typeof resposta.status).toBe("number");
     },
     90_000,
   );

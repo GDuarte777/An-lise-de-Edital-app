@@ -10,6 +10,10 @@ name: Contrato da API do PNCP
 #
 # Roda diariamente para que uma mudança de regra do portal apareça aqui, e não
 # na forma de um usuário concluindo que não existem licitações.
+#
+# Falha significa VIOLAÇÃO DE CONTRATO (o PNCP recusou uma consulta que
+# consideramos válida), nunca lentidão: o portal ser lento hoje não é defeito
+# nosso, e um alarme que toca por isso é um alarme que todos aprendem a ignorar.
 
 on:
   schedule:
@@ -31,7 +35,7 @@ jobs:
     name: Consultar o PNCP de verdade
     runs-on: ubuntu-latest
     # Portal fora do ar não pode segurar o runner indefinidamente.
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -47,4 +51,20 @@ jobs:
       - name: Verificar o contrato contra a API real
         env:
           PNCP_LIVE: "1"
+          PNCP_RELATORIO: ${{ github.workspace }}/pncp-latencia.md
         run: npx vitest run src/utils/pncpQuery.live.test.ts --reporter=verbose
+
+      # Sempre publica as medições, inclusive quando o teste falha — é
+      # justamente aí que os números importam para o diagnóstico.
+      - name: Publicar medições no resumo da execução
+        if: always()
+        run: |
+          {
+            echo "## Consulta ao PNCP — medições"
+            echo ""
+            echo "| Cenário | Tempo | Resultado |"
+            echo "| --- | --- | --- |"
+            cat "${{ github.workspace }}/pncp-latencia.md" 2>/dev/null || echo "| (nenhuma medição registrada) | - | - |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "───────── medições ─────────"
+          cat "${{ github.workspace }}/pncp-latencia.md" 2>/dev/null || echo "(nenhuma medição registrada)"

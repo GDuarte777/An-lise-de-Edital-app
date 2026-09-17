@@ -2525,98 +2525,131 @@ const pncpKey = chaveContratacao;
 
 interface ResultadoVarredura {
   items: any[];
-  totalRegistros: number;
+  totalPNCP: number;
   truncado: boolean;
-  /** Preenchido quando a combinação falhou por completo. */
-  erro?: string;
+  erros: string[];
 }
 
-/**
- * Percorre as páginas de uma combinação (modalidade × UF).
- *
- * Duas mudanças em relação à versão anterior, ambas causadas pelo mesmo bug:
- * o tamanho de página passou a respeitar o teto real da API (50), e uma
- * rejeição da API deixou de ser confundida com fim de resultados. Se o PNCP
- * recusar a primeira página, a combinação volta com `erro` em vez de voltar
- * silenciosamente vazia.
- */
-async function pncpFetchAllPages(params: {
-  endpoint: EndpointContratacao;
+interface ComboConsulta {
   modalidade: string;
-  uf?: string;
+  uf: string;
+}
+
+// Prazos calibrados por medição contra o portal real (workflow
+// pncp-contract.yml), não por chute. São configuráveis porque a latência do
+// PNCP varia com a origem da requisição, e o limite de duração da função
+// serverless varia com o plano da hospedagem.
+const PNCP_TIMEOUT_MS = Number(process.env.PNCP_TIMEOUT_MS || 20_000);
+const PNCP_ORCAMENTO_MS = Number(process.env.PNCP_ORCAMENTO_MS || 25_000);
+const PNCP_CONCORRENCIA = Number(process.env.PNCP_CONCORRENCIA || 6);
+
+/**
+ * Varre as combinações (modalidade × UF) EM LARGURA.
+ *
+ * A versão anterior ia em profundidade: cada combinação puxava até 20 páginas
+ * antes da próxima começar. Com um portal lento — e a medição no CI mostrou
+ * consultas passando de 20 segundos — o orçamento de tempo acabava dentro das
+ * primeiras modalidades, e as últimas não devolviam NADA. Pior: falhava em
+ * silêncio, porque o usuário via resultados e não tinha como saber que
+ * Credenciamento ou Inexigibilidade nem chegaram a ser consultados.
+ *
+ * Em largura, a primeira página de TODAS as modalidades vem antes da segunda de
+ * qualquer uma. Assim, quando o tempo acaba — e com um portal lento ele vai
+ * acabar — o que já foi carregado é uma amostra de todo o PNCP, e não o começo
+ * de um pedaço dele.
+ */
+async function pncpVarrerEmLargura(params: {
+  endpoint: EndpointContratacao;
+  combos: ComboConsulta[];
   municipio?: string;
   dataInicial?: string;
   dataFinal: string;
-  maxPages: number;
+  maxPaginasPorCombo: number;
   deadline: number;
 }): Promise<ResultadoVarredura> {
+  const vistos = new Set<string>();
   const items: any[] = [];
-  let totalRegistros = 0;
+  const erros: string[] = [];
+  let totalPNCP = 0;
   let truncado = false;
 
-  for (let pagina = 1; pagina <= params.maxPages; pagina++) {
-    if (Date.now() > params.deadline) {
-      truncado = true;
-      break;
+  // Combinações ainda com páginas por buscar.
+  let ativos = params.combos.map((combo) => ({ combo, pagina: 1 }));
+
+  while (ativos.length > 0 && Date.now() < params.deadline) {
+    const proximaRodada: typeof ativos = [];
+
+    for (let i = 0; i < ativos.length; i += PNCP_CONCORRENCIA) {
+      if (Date.now() >= params.deadline) {
+        truncado = true;
+        break;
+      }
+
+      const lote = ativos.slice(i, i + PNCP_CONCORRENCIA);
+      const respostas = await Promise.all(
+        lote.map(async (alvo) => {
+          const query = montarQueryContratacoes({
+            endpoint: params.endpoint,
+            modalidade: alvo.combo.modalidade,
+            pagina: alvo.pagina,
+            dataInicial: params.dataInicial,
+            dataFinal: params.dataFinal,
+            uf: alvo.combo.uf || undefined,
+            municipio: params.municipio
+          });
+
+          const resposta = await pncpFetchRaw(
+            `${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query}`,
+            PNCP_TIMEOUT_MS
+          );
+          return { alvo, resposta };
+        })
+      );
+
+      for (const { alvo, resposta } of respostas) {
+        if (!resposta.ok) {
+          // Erro na primeira página é falha daquela modalidade e precisa ser
+          // relatado; nas seguintes, apenas encerra a varredura dela.
+          if (alvo.pagina === 1 && resposta.erro) {
+            // Compara a mensagem já montada: comparar com a mensagem crua
+            // deixaria a deduplicação sem efeito, e o usuário receberia treze
+            // vezes o mesmo aviso — um por modalidade.
+            const aviso = `${PNCP_MODALIDADES[alvo.combo.modalidade] || alvo.combo.modalidade}: ${resposta.erro}`;
+            if (!erros.includes(aviso)) erros.push(aviso);
+          }
+          truncado = true;
+          continue;
+        }
+
+        const json = resposta.json || {};
+        const pageItems = Array.isArray(json.data) ? json.data : [];
+
+        if (alvo.pagina === 1) totalPNCP += Number(json.totalRegistros) || pageItems.length;
+
+        for (const raw of pageItems) {
+          const chave = pncpKey(raw);
+          if (!chave || vistos.has(chave)) continue;
+          vistos.add(chave);
+          items.push(pncpNormalizeItem(raw));
+        }
+
+        if (temProximaPagina(json, alvo.pagina)) {
+          if (alvo.pagina < params.maxPaginasPorCombo) {
+            proximaRodada.push({ combo: alvo.combo, pagina: alvo.pagina + 1 });
+          } else {
+            truncado = true;
+          }
+        }
+      }
     }
 
-    const query = montarQueryContratacoes({
-      endpoint: params.endpoint,
-      modalidade: params.modalidade,
-      pagina,
-      dataInicial: params.dataInicial,
-      dataFinal: params.dataFinal,
-      uf: params.uf,
-      municipio: params.municipio
-    });
-
-    const resposta = await pncpFetchRaw(`${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query}`);
-
-    if (!resposta.ok) {
-      // Erro na primeira página é falha da combinação inteira e precisa ser
-      // relatado. Erro numa página seguinte apenas interrompe a varredura:
-      // o que já veio é dado real e vale mais que nada.
-      if (pagina === 1) return { items, totalRegistros, truncado: true, erro: resposta.erro };
-      truncado = true;
-      break;
-    }
-
-    const json = resposta.json || {};
-    const pageItems = Array.isArray(json.data) ? json.data : [];
-    if (pageItems.length > 0) items.push(...pageItems);
-    if (pagina === 1) totalRegistros = Number(json.totalRegistros) || pageItems.length;
-
-    if (!temProximaPagina(json, pagina)) break;
-    if (pagina === params.maxPages) truncado = true;
+    if (Date.now() >= params.deadline && proximaRodada.length > 0) truncado = true;
+    ativos = proximaRodada;
   }
 
-  return { items, totalRegistros, truncado };
-}
+  if (ativos.length > 0) truncado = true;
 
-/**
- * Executa as varreduras com um teto de chamadas simultâneas.
- *
- * Cobrir todas as modalidades multiplica as combinações, e disparar todas de
- * uma vez com Promise.all castiga um portal público e rende 429. A fila
- * mantém a varredura ampla sem transformar a busca em enxurrada.
- */
-async function pncpVarrerComLimite<T>(
-  tarefas: Array<() => Promise<T>>,
-  limite: number
-): Promise<T[]> {
-  const resultados: T[] = new Array(tarefas.length);
-  let proxima = 0;
-
-  const trabalhador = async () => {
-    while (true) {
-      const indice = proxima++;
-      if (indice >= tarefas.length) return;
-      resultados[indice] = await tarefas[indice]();
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(limite, tarefas.length) }, trabalhador));
-  return resultados;
+  return { items, totalPNCP, truncado, erros };
 }
 
 /** Normaliza uma contratação do PNCP para o formato consumido pela interface. */
@@ -2770,46 +2803,27 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         agregado = cached.data;
       } else {
         // Orçamento de tempo: a rota agrega muitas páginas, mas não pode
-        // estourar o limite da função serverless.
-        const deadline = Date.now() + 25_000;
-        const maxPagesPorCombo = 20; // até 1.000 registros por combinação
+        // estourar o limite de duração da função serverless.
+        const deadline = Date.now() + PNCP_ORCAMENTO_MS;
+        const maxPaginasPorCombo = 20; // até 1.000 registros por combinação
 
-        const combos: Array<{ modalidade: string; uf: string }> = [];
+        const combos: ComboConsulta[] = [];
         for (const m of targetMods) for (const u of targetUfs) combos.push({ modalidade: m, uf: u });
 
-        const resultados = await pncpVarrerComLimite(
-          combos.map(c => () =>
-            pncpFetchAllPages({
-              endpoint,
-              modalidade: c.modalidade,
-              uf: c.uf || undefined,
-              municipio: String(municipio || "") || undefined,
-              dataInicial,
-              dataFinal,
-              maxPages: maxPagesPorCombo,
-              deadline
-            })
-          ),
-          6
-        );
+        const varredura = await pncpVarrerEmLargura({
+          endpoint,
+          combos,
+          municipio: String(municipio || "") || undefined,
+          dataInicial,
+          dataFinal,
+          maxPaginasPorCombo,
+          deadline
+        });
 
-        const vistos = new Set<string>();
-        const items: any[] = [];
-        const erros: string[] = [];
-        let totalPNCP = 0;
-        let truncado = false;
-
-        for (const r of resultados) {
-          totalPNCP += r.totalRegistros;
-          if (r.truncado) truncado = true;
-          if (r.erro && !erros.includes(r.erro)) erros.push(r.erro);
-          for (const raw of r.items) {
-            const key = pncpKey(raw);
-            if (!key || vistos.has(key)) continue;
-            vistos.add(key);
-            items.push(pncpNormalizeItem(raw));
-          }
-        }
+        const items = varredura.items;
+        const erros = varredura.erros;
+        const totalPNCP = varredura.totalPNCP;
+        const truncado = varredura.truncado;
 
         // Mais recentes primeiro.
         items.sort((a, b) => String(b.dataPublicacaoPncp || "").localeCompare(String(a.dataPublicacaoPncp || "")));
