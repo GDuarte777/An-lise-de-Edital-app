@@ -310,10 +310,15 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
         registrar(`| modalidade ${modalidade} (${PNCP_MODALIDADES[modalidade]}) | - | ${status} |`);
       }
 
-      // Só conta como falha a modalidade que RESPONDEU com erro: aí a nossa
-      // consulta está fora do contrato. Ausência de resposta é lentidão.
+      // Só 4xx conta como falha. A distinção é a razão de ser deste teste:
+      //   4xx = o PNCP recusou a NOSSA consulta -> contrato violado, defeito nosso
+      //   5xx = o PNCP quebrou ao processar     -> problema do portal
+      // A medição de 17/09/2026 mostrou Credenciamento, Concurso e Leilão
+      // Presencial respondendo 500 de forma consistente. Tratar isso como
+      // defeito nosso deixaria o alarme permanentemente vermelho por algo que
+      // não temos como corrigir — e alarme sempre vermelho não é alarme.
       const falhas = resultados
-        .filter((r) => typeof r.status === "number" && ![200, 204].includes(r.status as number))
+        .filter((r) => typeof r.status === "number" && (r.status as number) >= 400 && (r.status as number) < 500)
         .map((r) => `${r.modalidade} (${PNCP_MODALIDADES[r.modalidade]}): HTTP ${r.status}`);
 
       expect(falhas).toEqual([]);
@@ -324,8 +329,14 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
   it(
     "confirma que dataInicial não é aceita no endpoint de proposta",
     async () => {
-      // montarQueryContratacoes() descarta dataInicial em /proposta de
-      // propósito. Se o PNCP passar a aceitar, dá para voltar a usar o filtro.
+      // montarQueryContratacoes() descarta dataInicial em /proposta.
+      //
+      // A medição de 17/09/2026 corrigiu a suposição registrada aqui antes: o
+      // endpoint NÃO recusa o parâmetro, devolve 200 normalmente. Continuamos
+      // sem enviá-lo porque o recorte de /proposta é o prazo de recebimento
+      // ainda aberto, e um filtro de data de publicação por cima disso esconde
+      // certame antigo com proposta aberta — mas o motivo é esse, e não uma
+      // recusa da API.
       const query = new URLSearchParams({
         dataInicial: "20260101",
         dataFinal: dataFinalCurta(),

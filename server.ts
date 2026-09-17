@@ -2539,9 +2539,14 @@ interface ComboConsulta {
 // pncp-contract.yml), não por chute. São configuráveis porque a latência do
 // PNCP varia com a origem da requisição, e o limite de duração da função
 // serverless varia com o plano da hospedagem.
-const PNCP_TIMEOUT_MS = Number(process.env.PNCP_TIMEOUT_MS || 20_000);
+const PNCP_TIMEOUT_MS = Number(process.env.PNCP_TIMEOUT_MS || 22_000);
 const PNCP_ORCAMENTO_MS = Number(process.env.PNCP_ORCAMENTO_MS || 25_000);
-const PNCP_CONCORRENCIA = Number(process.env.PNCP_CONCORRENCIA || 6);
+// Uma rodada precisa caber dentro do orçamento, e a medição mostrou consultas
+// de 30 a 55 segundos. Com concorrência 6 e 13 modalidades seriam três lotes em
+// série — o tempo acabaria no primeiro, e sete modalidades sequer seriam
+// tentadas. Com 13, a primeira página de todas sai de uma vez, e o custo da
+// rodada passa a ser o de UMA consulta em vez de três.
+const PNCP_CONCORRENCIA = Number(process.env.PNCP_CONCORRENCIA || 13);
 
 /**
  * Varre as combinações (modalidade × UF) EM LARGURA.
