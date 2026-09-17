@@ -40,16 +40,27 @@ function dataFinalFutura(): string {
   return formatarDataPncp(d);
 }
 
-async function consultar(query: string): Promise<{ status: number; corpo: any; texto: string }> {
-  const resposta = await fetch(`${BASE}/proposta?${query}`, { headers: HEADERS });
-  const texto = await resposta.text();
-  let corpo: any = null;
+/**
+ * Toda consulta tem prazo. Sem isso, uma requisição pendurada no portal fica
+ * presa até o timeout do vitest, e um job que deveria durar um minuto passa dez
+ * — o que já aconteceu na primeira execução deste arquivo.
+ */
+async function consultar(query: string, timeoutMs = 20_000): Promise<{ status: number; corpo: any; texto: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    corpo = JSON.parse(texto);
-  } catch {
-    // Resposta de erro do PNCP nem sempre é JSON; o texto cru basta.
+    const resposta = await fetch(`${BASE}/proposta?${query}`, { headers: HEADERS, signal: controller.signal });
+    const texto = await resposta.text();
+    let corpo: any = null;
+    try {
+      corpo = JSON.parse(texto);
+    } catch {
+      // Resposta de erro do PNCP nem sempre é JSON; o texto cru basta.
+    }
+    return { status: resposta.status, corpo, texto };
+  } finally {
+    clearTimeout(timer);
   }
-  return { status: resposta.status, corpo, texto };
 }
 
 describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
@@ -174,26 +185,34 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
     async () => {
       // Uma modalidade que responde 4xx sai silenciosamente do Radar e o
       // usuário nunca fica sabendo que aquele tipo de certame não é buscado.
-      const falhas: string[] = [];
+      // Em paralelo: sequencial, 13 consultas a um portal lento estouram
+      // qualquer limite de tempo razoável para um job de CI.
+      const resultados = await Promise.all(
+        PNCP_MODALIDADES_POR_RELEVANCIA.map(async (modalidade) => {
+          const { status } = await consultar(
+            montarQueryContratacoes({
+              endpoint: "proposta",
+              modalidade,
+              pagina: 1,
+              dataFinal: dataFinalFutura(),
+            }),
+            25_000,
+          );
+          return { modalidade, status };
+        }),
+      );
 
-      for (const modalidade of PNCP_MODALIDADES_POR_RELEVANCIA) {
-        const { status } = await consultar(
-          montarQueryContratacoes({
-            endpoint: "proposta",
-            modalidade,
-            pagina: 1,
-            dataFinal: dataFinalFutura(),
-          }),
-        );
-
-        if (![200, 204].includes(status)) {
-          falhas.push(`${modalidade} (${PNCP_MODALIDADES[modalidade]}): HTTP ${status}`);
-        }
+      for (const { modalidade, status } of resultados) {
+        console.log(`[contrato] modalidade ${modalidade} (${PNCP_MODALIDADES[modalidade]}): HTTP ${status}`);
       }
+
+      const falhas = resultados
+        .filter((r) => ![200, 204].includes(r.status))
+        .map((r) => `${r.modalidade} (${PNCP_MODALIDADES[r.modalidade]}): HTTP ${r.status}`);
 
       expect(falhas).toEqual([]);
     },
-    180_000,
+    60_000,
   );
 
   it(

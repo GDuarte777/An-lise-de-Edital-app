@@ -30,6 +30,8 @@ jobs:
   contrato:
     name: Consultar o PNCP de verdade
     runs-on: ubuntu-latest
+    # Portal fora do ar não pode segurar o runner indefinidamente.
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
