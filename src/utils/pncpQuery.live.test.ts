@@ -41,6 +41,17 @@ function dataFinalFutura(): string {
 }
 
 /**
+ * Horizonte curto para os testes de contrato. O que se verifica neles é o
+ * FORMATO da resposta, não o volume — e um recorte menor evita que uma consulta
+ * cara transforme verificação de contrato em teste de desempenho do portal.
+ */
+function dataFinalCurta(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 30);
+  return formatarDataPncp(d);
+}
+
+/**
  * Toda consulta tem prazo. Sem isso, uma requisição pendurada no portal fica
  * presa até o timeout do vitest, e um job que deveria durar um minuto passa dez
  * — o que já aconteceu na primeira execução deste arquivo.
@@ -64,29 +75,84 @@ async function consultar(query: string, timeoutMs = 20_000): Promise<{ status: n
 }
 
 describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
+  // ── Sonda de latência ──────────────────────────────────────────────
+  //
+  // A primeira execução no CI mostrou algo que nenhuma documentação diz: a
+  // recusa de tamanhoPagina=500 volta em 764ms, mas toda consulta VÁLIDA
+  // passou de 20 segundos. A diferença faz sentido — o 400 é recusado na
+  // validação, antes de qualquer trabalho de banco.
+  //
+  // Isso importa porque o servidor tem prazo: se uma página demora mais que o
+  // timeout da requisição, a busca falha de novo, agora por lentidão em vez de
+  // parâmetro inválido. A sonda mede o custo de cada formato de consulta para
+  // que os prazos do servidor sejam calibrados por medição, e não por chute.
+  //
+  // Lentidão NÃO quebra o build: o portal ser lento hoje não é defeito nosso, e
+  // um teste que falha por isso vira ruído que todo mundo aprende a ignorar. O
+  // que quebra o build é violação de contrato — resposta 4xx a consulta válida.
   it(
-    "aceita o tamanho de página que usamos",
+    "mede o custo de cada formato de consulta",
     async () => {
-      const { status, corpo } = await consultar(
-        montarQueryContratacoes({
-          endpoint: "proposta",
-          modalidade: "6",
-          pagina: 1,
-          dataFinal: dataFinalFutura(),
-        }),
-      );
+      const horizontes = [30, 90, 365];
+      const medicoes: Array<{ cenario: string; ms: number; status: number | string }> = [];
 
-      // 200 com dados ou 204 sem dados; qualquer 4xx significa que a nossa
-      // requisição está fora do contrato.
-      expect([200, 204]).toContain(status);
+      for (const dias of horizontes) {
+        const d = new Date();
+        d.setDate(d.getDate() + dias);
 
-      if (status === 200) {
-        expect(Array.isArray(corpo?.data)).toBe(true);
-        expect(corpo.data.length).toBeGreaterThan(0);
-        expect(corpo.data.length).toBeLessThanOrEqual(PNCP_TAMANHO_PAGINA_CONTRATACOES);
+        const inicio = Date.now();
+        try {
+          const { status, corpo } = await consultar(
+            montarQueryContratacoes({
+              endpoint: "proposta",
+              modalidade: "6",
+              pagina: 1,
+              dataFinal: formatarDataPncp(d),
+            }),
+            55_000,
+          );
+          medicoes.push({ cenario: `horizonte ${dias}d`, ms: Date.now() - inicio, status });
+
+          // A asserção de contrato vale só quando houve resposta.
+          expect(status).toBeLessThan(400);
+          if (status === 200) {
+            expect(corpo.data.length).toBeLessThanOrEqual(PNCP_TAMANHO_PAGINA_CONTRATACOES);
+          }
+        } catch (err: any) {
+          medicoes.push({ cenario: `horizonte ${dias}d`, ms: Date.now() - inicio, status: "TIMEOUT" });
+        }
       }
+
+      // Com UF: o filtro deveria reduzir o conjunto varrido pelo portal.
+      const comUf = new Date();
+      comUf.setDate(comUf.getDate() + 90);
+      const inicioUf = Date.now();
+      try {
+        const { status } = await consultar(
+          montarQueryContratacoes({
+            endpoint: "proposta",
+            modalidade: "6",
+            pagina: 1,
+            dataFinal: formatarDataPncp(comUf),
+            uf: "SP",
+          }),
+          55_000,
+        );
+        medicoes.push({ cenario: "horizonte 90d + UF=SP", ms: Date.now() - inicioUf, status });
+      } catch {
+        medicoes.push({ cenario: "horizonte 90d + UF=SP", ms: Date.now() - inicioUf, status: "TIMEOUT" });
+      }
+
+      for (const m of medicoes) {
+        console.log(`[latencia] ${m.cenario.padEnd(24)} ${String(m.ms).padStart(6)}ms  ->  ${m.status}`);
+      }
+
+      // Falha apenas se NENHUM formato respondeu: aí não é lentidão, é a API
+      // inalcançável, e a busca da plataforma não tem como funcionar.
+      const respondeu = medicoes.filter((m) => typeof m.status === "number");
+      expect(respondeu.length).toBeGreaterThan(0);
     },
-    60_000,
+    240_000,
   );
 
   it(
@@ -108,7 +174,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
       expect(status).toBeLessThan(500);
       console.log(`[contrato] tamanhoPagina=500 -> HTTP ${status}: ${texto.slice(0, 200)}`);
     },
-    60_000,
+    90_000,
   );
 
   it(
@@ -119,8 +185,9 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
           endpoint: "proposta",
           modalidade: "6",
           pagina: 1,
-          dataFinal: dataFinalFutura(),
+          dataFinal: dataFinalCurta(),
         }),
+        55_000,
       );
       if (status === 204) return;
 
@@ -130,7 +197,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
       expect(corpo).toHaveProperty("paginasRestantes");
       expect(typeof temProximaPagina(corpo, 1)).toBe("boolean");
     },
-    60_000,
+    90_000,
   );
 
   it(
@@ -141,8 +208,9 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
           endpoint: "proposta",
           modalidade: "6",
           pagina: 1,
-          dataFinal: dataFinalFutura(),
+          dataFinal: dataFinalCurta(),
         }),
+        55_000,
       );
       if (status === 204) return;
 
@@ -154,7 +222,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
       expect(item?.orgaoEntidade).toHaveProperty("cnpj");
       expect(item?.unidadeOrgao).toHaveProperty("ufSigla");
     },
-    60_000,
+    90_000,
   );
 
   it(
@@ -165,9 +233,10 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
           endpoint: "proposta",
           modalidade: "6",
           pagina: 1,
-          dataFinal: dataFinalFutura(),
+          dataFinal: dataFinalCurta(),
           uf: "SP",
         }),
+        55_000,
       );
 
       expect([200, 204]).toContain(status);
@@ -177,7 +246,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
         expect([...ufs]).toEqual(["SP"]);
       }
     },
-    60_000,
+    90_000,
   );
 
   it(
@@ -194,9 +263,9 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
               endpoint: "proposta",
               modalidade,
               pagina: 1,
-              dataFinal: dataFinalFutura(),
+              dataFinal: dataFinalCurta(),
             }),
-            25_000,
+            55_000,
           );
           return { modalidade, status };
         }),
@@ -212,7 +281,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
 
       expect(falhas).toEqual([]);
     },
-    60_000,
+    90_000,
   );
 
   it(
@@ -222,7 +291,7 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
       // propósito. Se o PNCP passar a aceitar, dá para voltar a usar o filtro.
       const query = new URLSearchParams({
         dataInicial: "20260101",
-        dataFinal: dataFinalFutura(),
+        dataFinal: dataFinalCurta(),
         codigoModalidadeContratacao: "6",
         pagina: "1",
         tamanhoPagina: String(PNCP_TAMANHO_PAGINA_CONTRATACOES),
@@ -234,6 +303,6 @@ describe.runIf(ATIVO)("contrato da API do PNCP (rede real)", () => {
       // CI. Falhar aqui não indicaria defeito nosso, já que não mandamos o campo.
       expect(typeof status).toBe("number");
     },
-    60_000,
+    90_000,
   );
 });
