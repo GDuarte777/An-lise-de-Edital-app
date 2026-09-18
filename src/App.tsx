@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   FileText, ShieldCheck, FolderGit, FileSpreadsheet, CloudLightning,
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser, CalendarDays
+  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser, CalendarDays, ClipboardCheck
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
@@ -10,6 +10,7 @@ import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
 import DisputasSheetTab from "./components/DisputasSheetTab";
 import CalendarTab from "./components/CalendarTab";
 import { resetEditalHistory } from "./utils/editalHistory";
+import HabilitacaoChecklistTab from "./components/HabilitacaoChecklistTab";
 import CompanyDocsTab from "./components/CompanyDocsTab";
 import CreateDocTab from "./components/CreateDocTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
@@ -84,7 +85,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
   bankDetails: ""
 };
 
-type TabId = "analyzer" | "radar" | "disputasSheet" | "calendar" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
+type TabId = "analyzer" | "radar" | "disputasSheet" | "calendar" | "habilitacao" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
 
 const CORE_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
   { id: "analyzer", label: "Análise de Edital", icon: FileText },
@@ -94,6 +95,7 @@ const CORE_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
 ];
 
 const OPERATIONS_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
+  { id: "habilitacao", label: "Checklist de Habilitação", icon: ClipboardCheck },
   { id: "createDoc", label: "Criar Documentos", icon: FileEdit },
   { id: "documents", label: "Gestão de Certidões", icon: ListTodo },
   { id: "calculator", label: "Calculadora de Preços", icon: Calculator },
@@ -107,6 +109,7 @@ const TAB_LABELS: Record<TabId, string> = {
   radar: "Radar de Oportunidades",
   disputasSheet: "Planilha de Disputas",
   calendar: "Calendário",
+  habilitacao: "Checklist de Habilitação",
   createDoc: "Criar Documentos",
   documents: "Gestão de Certidões",
   calculator: "Calculadora de Preços",
@@ -815,6 +818,13 @@ export default function App() {
                 />
               ) : activeTab === "calendar" ? (
                 <CalendarTab onNavigateToDisputas={() => setActiveTab("disputasSheet")} />
+              ) : activeTab === "habilitacao" ? (
+                <HabilitacaoChecklistTab
+                  activeEdital={activeEdital}
+                  onNavigateToDocs={() => setActiveTab("documents")}
+                  onNavigateToCreateDoc={() => setActiveTab("createDoc")}
+                  onNavigateToAnalyzer={() => setActiveTab("analyzer")}
+                />
               ) : activeTab === "createDoc" ? (
                 <CreateDocTab
                   companyData={companyData}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Filter, Landmark, AlertCircle
+  CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Filter, Landmark, AlertCircle, CalendarPlus
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, DisputaStatusType } from "../types";
 import {
@@ -9,6 +9,7 @@ import {
   subscribeToSupabaseTable
 } from "../utils/supabaseClient";
 import { parseDisputaDate, getContrastTextColor } from "../utils/disputaDates";
+import { baixarIcsDeDisputas, contarDisputasExportaveis } from "../utils/icsExport";
 import DisputaDateTag from "./DisputaDateTag";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
@@ -174,6 +175,11 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
     [disputas, statusFilter]
   );
 
+  // O botão de exportar mostra quantos eventos sairiam de fato: disputa sem
+  // data legível não vira evento, e anunciar um número maior que o exportado
+  // faria o usuário achar que o arquivo veio incompleto.
+  const exportaveis = useMemo(() => contarDisputasExportaveis(filteredDisputas), [filteredDisputas]);
+
   const eventsByDay = useMemo(() => {
     const map = new Map<string, DisputaRow[]>();
     filteredDisputas.forEach(row => {
@@ -225,16 +231,38 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
     <div className="flex flex-col gap-5 select-text font-sans text-foreground">
 
       {/* ─────────── Cabeçalho ─────────── */}
-      <div className="flex items-start gap-3 min-w-0">
-        <span className="shrink-0 rounded-xl border border-primary/20 bg-primary/10 p-2 text-primary">
-          <CalendarDays className="h-5 w-5" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="text-lg font-bold tracking-tight sm:text-xl">Calendário de Disputas</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            As datas de sessão extraídas pela IA nas análises de editais aparecem aqui automaticamente.
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-start gap-3 min-w-0">
+          <span className="shrink-0 rounded-xl border border-primary/20 bg-primary/10 p-2 text-primary">
+            <CalendarDays className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold tracking-tight sm:text-xl">Calendário de Disputas</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              As datas de sessão extraídas pela IA nas análises de editais aparecem aqui automaticamente.
+            </p>
+          </div>
         </div>
+
+        {/* O calendário da plataforma só avisa quem está com ela aberta. O .ics
+            leva a sessão para a agenda que a pessoa realmente consulta, com
+            alarme na véspera e uma hora antes. */}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={exportaveis === 0}
+          onClick={() => baixarIcsDeDisputas(filteredDisputas)}
+          title={
+            exportaveis === 0
+              ? "Nenhuma disputa com data de sessão reconhecível para exportar"
+              : "Baixar .ics para Google Agenda, Outlook ou o calendário do celular"
+          }
+        >
+          <CalendarPlus className="h-3.5 w-3.5" />
+          Exportar agenda ({exportaveis})
+        </Button>
       </div>
 
       {/* Aviso de disputas sem data reconhecível */}

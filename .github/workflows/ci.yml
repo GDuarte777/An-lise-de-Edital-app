@@ -1,0 +1,48 @@
+name: CI
+
+# Verifica o aplicativo web a cada push e pull request.
+#
+# Até aqui o único workflow do repositório era o build do LanceBot desktop, então
+# nada impedia que uma alteração quebrasse a tipagem ou o build da aplicação
+# principal e só fosse descoberta no deploy da Vercel.
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+  workflow_dispatch:
+
+# Um push novo cancela a verificação ainda em andamento do mesmo branch:
+# só o último commit interessa.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    name: Tipos, testes e build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificar tipos
+        run: npm run lint
+
+      - name: Rodar testes
+        run: npm test
+
+      # O build cobre o que a checagem de tipos não pega: import quebrado,
+      # asset ausente e o empacotamento do servidor para a Vercel.
+      - name: Build de produção
+        run: npm run build

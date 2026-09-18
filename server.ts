@@ -3,6 +3,24 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import {
+  derivarChaveMestra,
+  descriptografarConfiguracao,
+  criptografarConfiguracao,
+  mascararSegredo,
+  CAMPOS_SECRETOS
+} from "./src/utils/segredos";
+import {
+  PNCP_MODALIDADES,
+  PNCP_MODALIDADES_POR_RELEVANCIA,
+  montarQueryContratacoes,
+  temProximaPagina,
+  chaveContratacao,
+  parseNumeroControlePNCP,
+  escolherArquivoEdital,
+  formatarDataPncp,
+  type EndpointContratacao
+} from "./src/utils/pncpQuery";
 
 /**
  * pdf-parse é carregado sob demanda, com um `import()` de especificador literal.
@@ -256,6 +274,22 @@ function getServerFallbackKey(varName: "GEMINI_API_KEY" | "OPENAI_API_KEY"): str
 // Lê o "sub" (id do usuário) de um JWT do Supabase sem verificar assinatura.
 // A verificação continua sendo feita pelo PostgREST/RLS; aqui o valor serve apenas
 // para filtrar a consulta pela linha do usuário correto.
+/**
+ * Chave mestra de criptografia das chaves de IA, derivada uma vez no start.
+ *
+ * Sem AI_KEYS_ENCRYPTION_KEY, fica null e todo o caminho vira passagem direta:
+ * a plataforma se comporta exatamente como antes. Uma migração de segurança que
+ * derruba quem não leu o changelog não é melhoria, é incidente.
+ */
+const CHAVE_MESTRA_IA = derivarChaveMestra(process.env.AI_KEYS_ENCRYPTION_KEY);
+
+if (!CHAVE_MESTRA_IA) {
+  console.warn(
+    "[segredos] AI_KEYS_ENCRYPTION_KEY não configurada: as chaves de API dos usuários " +
+    "ficam em texto puro no banco. Gere uma com `openssl rand -hex 32` e defina a variável."
+  );
+}
+
 function getUserIdFromJwt(token: string): string | null {
   try {
     const payload = token.split(".")[1];
@@ -363,7 +397,10 @@ async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: 
         if (resp.ok) {
           const rows: any[] = await resp.json();
           if (rows && rows.length > 0) {
-            const row = rows[0];
+            // Decifra antes de usar. Linhas gravadas antes desta mudança não têm
+            // o prefixo e passam intactas, então os dois formatos convivem no
+            // banco durante a transição.
+            const row = descriptografarConfiguracao(rows[0], CHAVE_MESTRA_IA);
             let provider = row.active_provider || "gemini";
             const keyMap: Record<string, string> = {
               gemini: row.gemini_key || "",
@@ -1985,6 +2022,127 @@ Se você deseja:
 Como posso orientar sua empresa hoje?`;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// LIMITE DE REQUISIÇÕES
+//
+// Até aqui nenhuma rota tinha teto. Um laço no cliente — um useEffect sem
+// dependência correta, um retry mal escrito, ou simplesmente alguém com o
+// endereço da API — dispara chamadas de IA em sequência, e cada uma delas
+// é cobrada: da chave do próprio usuário, ou do GEMINI_API_KEY de quem
+// publicou o app quando o fallback está ligado. O prejuízo aparece na
+// fatura, não no log.
+//
+// O contador vive na memória do processo. Em serverless (Vercel) cada
+// instância tem o seu, então isto é um redutor de dano, não uma cota
+// contábil: segura o laço acidental e o abuso ingênuo, que é o que
+// acontece na prática. Cota real exige contador compartilhado (Postgres
+// ou Redis) e entra junto com o painel de consumo de IA.
+// ═══════════════════════════════════════════════════════════════════════
+
+const JANELA_LIMITE_MS = 60_000;
+
+// Rotas que gastam token de IA: o teto é baixo de propósito. Uma pessoa
+// trabalhando normalmente não chega perto disso — analisar um edital, pedir
+// uma revisão e conversar no chat somam poucas chamadas por minuto.
+const LIMITE_IA_POR_MINUTO = Number(process.env.RATE_LIMIT_IA_POR_MINUTO || 20);
+// Upload em pedaços: um PDF de 60 MB vira ~32 partes, e o chat aceita 100 MB.
+// O teto precisa caber um arquivo grande inteiro sem atrapalhar.
+const LIMITE_UPLOAD_POR_MINUTO = Number(process.env.RATE_LIMIT_UPLOAD_POR_MINUTO || 300);
+// Demais rotas (consultas ao PNCP, status, configuração).
+const LIMITE_API_POR_MINUTO = Number(process.env.RATE_LIMIT_API_POR_MINUTO || 120);
+
+const ROTAS_IA = new Set([
+  "/api/analyze-edital",
+  "/api/analyze-competitor",
+  "/api/analyze-cert",
+  "/api/generate-document",
+  "/api/compare-products",
+  "/api/chat",
+  "/api/chat/title",
+  "/api/generate-cert-description",
+]);
+
+interface JanelaDeUso {
+  inicio: number;
+  usos: number;
+}
+
+const contadoresDeUso = new Map<string, JanelaDeUso>();
+
+/**
+ * Identifica quem está chamando. O usuário autenticado é o alvo certo — o
+ * limite acompanha a pessoa, não a rede. Sem token, sobra o IP, que agrupa
+ * todo mundo atrás do mesmo NAT; por isso o teto por IP não é menor que o
+ * por usuário, para não punir um escritório inteiro pelo uso de um.
+ */
+function identificarChamador(req: any): string {
+  const auth = String(req.headers?.authorization || "");
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const userId = token ? getUserIdFromJwt(token) : null;
+  if (userId) return `user:${userId}`;
+
+  const encaminhado = String(req.headers?.["x-forwarded-for"] || "").split(",")[0].trim();
+  return `ip:${encaminhado || req.socket?.remoteAddress || "desconhecido"}`;
+}
+
+function consumirCota(chave: string, limite: number): { permitido: boolean; segundosParaLiberar: number } {
+  const agora = Date.now();
+  const janela = contadoresDeUso.get(chave);
+
+  if (!janela || agora - janela.inicio >= JANELA_LIMITE_MS) {
+    contadoresDeUso.set(chave, { inicio: agora, usos: 1 });
+    return { permitido: true, segundosParaLiberar: 0 };
+  }
+
+  janela.usos += 1;
+  if (janela.usos > limite) {
+    return {
+      permitido: false,
+      segundosParaLiberar: Math.max(1, Math.ceil((JANELA_LIMITE_MS - (agora - janela.inicio)) / 1000)),
+    };
+  }
+
+  return { permitido: true, segundosParaLiberar: 0 };
+}
+
+// Sem isso o Map cresceria para sempre em um processo de longa duração:
+// cada IP novo deixa uma entrada que nunca mais é lida.
+function limparJanelasExpiradas() {
+  const agora = Date.now();
+  for (const [chave, janela] of contadoresDeUso) {
+    if (agora - janela.inicio >= JANELA_LIMITE_MS) contadoresDeUso.delete(chave);
+  }
+}
+
+function limitarRequisicoes(req: any, res: any, next: any) {
+  // O health check é o que o monitoramento e a própria Vercel chamam para
+  // saber se o processo está vivo; limitá-lo só produziria alarme falso.
+  if (req.path === "/health" || req.path === "/api/health") return next();
+
+  if (contadoresDeUso.size > 5000) limparJanelasExpiradas();
+
+  const rota = req.originalUrl?.split("?")[0] || req.path;
+  const ehIA = ROTAS_IA.has(rota);
+  const ehUpload = rota.startsWith("/api/upload-chunk");
+
+  const balde = ehIA ? "ia" : ehUpload ? "upload" : "api";
+  const limite = ehIA ? LIMITE_IA_POR_MINUTO : ehUpload ? LIMITE_UPLOAD_POR_MINUTO : LIMITE_API_POR_MINUTO;
+
+  const { permitido, segundosParaLiberar } = consumirCota(`${balde}:${identificarChamador(req)}`, limite);
+
+  if (!permitido) {
+    res.setHeader("Retry-After", String(segundosParaLiberar));
+    return res.status(429).json({
+      error: ehIA
+        ? `Muitas análises seguidas (limite de ${limite} por minuto). Aguarde ${segundosParaLiberar}s e tente de novo.`
+        : `Muitas requisições seguidas. Aguarde ${segundosParaLiberar}s e tente de novo.`,
+      retryAfter: segundosParaLiberar,
+    });
+  }
+
+  return next();
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -1992,9 +2150,95 @@ const PORT = 3000;
   app.use(express.json({ limit: "250mb" }));
   app.use(express.urlencoded({ limit: "250mb", extended: true }));
 
+  app.use("/api", limitarRequisicoes);
+
   // API Route: Health Check
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", mode: process.env.NODE_ENV || "development" });
+    res.json({
+      status: "ok",
+      mode: process.env.NODE_ENV || "development",
+      // Deixa visível, sem precisar abrir o banco, se as chaves de API dos
+      // usuários estão cifradas em repouso.
+      chavesIaCriptografadas: Boolean(CHAVE_MESTRA_IA)
+    });
+  });
+
+  /**
+   * Grava a configuração de IA do usuário com as chaves CIFRADAS.
+   *
+   * O cliente gravava direto no Supabase, o que deixava as chaves de API em
+   * texto puro na tabela — legível por qualquer um com acesso ao banco, a um
+   * backup ou a uma service key vazada. A gravação passa por aqui para que a
+   * cifragem aconteça no servidor, único lugar que tem a chave mestra.
+   *
+   * A escrita continua usando o JWT do usuário, então o RLS segue valendo: o
+   * servidor não ganha poder de escrever na linha de outra pessoa.
+   */
+  app.post("/api/user-config", async (req, res): Promise<any> => {
+    try {
+      const authHeader = String(req.headers.authorization || "");
+      if (!authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Faça login para salvar suas configurações de IA." });
+      }
+
+      const token = authHeader.slice(7);
+      const userId = getUserIdFromJwt(token);
+      if (!userId) {
+        return res.status(401).json({ error: "Sessão inválida. Entre novamente." });
+      }
+
+      const supabaseUrl = process.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) {
+        return res.status(503).json({ error: "Supabase não está configurado neste servidor." });
+      }
+
+      const corpo = req.body || {};
+      // Lista explícita: um campo inesperado no corpo não vira coluna gravada.
+      const permitidos = [
+        "active_provider",
+        "gemini_key", "gemini_model",
+        "openai_key", "openai_model",
+        "anthropic_key", "anthropic_model",
+        "deepseek_key", "deepseek_model"
+      ];
+
+      const linha: Record<string, any> = { user_id: userId, updated_at: new Date().toISOString() };
+      for (const campo of permitidos) {
+        if (corpo[campo] !== undefined) linha[campo] = corpo[campo];
+      }
+
+      const cifrada = criptografarConfiguracao(linha, CHAVE_MESTRA_IA);
+
+      const resp = await fetch(`${supabaseUrl}/rest/v1/configuracoes_usuario`, {
+        method: "POST",
+        headers: {
+          "apikey": supabaseAnonKey,
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Prefer": "resolution=merge-duplicates,return=minimal"
+        },
+        body: JSON.stringify(cifrada)
+      });
+
+      if (!resp.ok) {
+        const detalhe = await resp.text().catch(() => "");
+        console.error("[user-config] Supabase recusou a gravação:", resp.status, detalhe.slice(0, 300));
+        return res.status(502).json({ error: `Não foi possível salvar no banco (HTTP ${resp.status}).` });
+      }
+
+      // A resposta devolve só o mascarado: chave de API é credencial, e uma vez
+      // gravada não há motivo para a plataforma entregá-la de volta ao navegador.
+      const mascaradas: Record<string, string> = {};
+      for (const campo of CAMPOS_SECRETOS) {
+        if (typeof linha[campo] === "string") mascaradas[campo] = mascararSegredo(linha[campo]);
+      }
+
+      return res.json({ success: true, criptografado: Boolean(CHAVE_MESTRA_IA), chaves: mascaradas });
+    } catch (error: any) {
+      console.error("[user-config] Erro ao salvar configuração:", error?.message || error);
+      return res.status(500).json({ error: `Erro ao salvar configuração: ${error?.message || "desconhecido"}` });
+    }
   });
 
   // API Route: Chunked Upload Init
@@ -2205,141 +2449,212 @@ const PNCP_CONSULTA_BASE = "https://pncp.gov.br/api/consulta";
 const PNCP_INTEGRACAO_BASE = "https://pncp.gov.br/api/pncp";
 
 // O PNCP entrega no máximo 500 registros por página.
-const PNCP_MAX_PAGE_SIZE = 500;
-
 /**
- * Tabela de domínio "Modalidade da Contratação" do PNCP.
- *
- * ⚠️ O código anterior tratava 5 como "Pregão Eletrônico". Está errado: 5 é
- * Concorrência PRESENCIAL, e Pregão Eletrônico é 6. Como o Pregão Eletrônico é
- * de longe a modalidade mais usada, a plataforma simplesmente nunca o consultava
- * — daí a impressão de que "só aparecem algumas oportunidades".
+ * Regras da API de consulta vivem em src/utils/pncpQuery.ts, com testes.
+ * Era aqui que estava o defeito que zerava o Radar, e regra que decide se o
+ * usuário vê ou não uma licitação precisa ser verificável sem subir servidor.
  */
-const PNCP_MODALIDADES: Record<string, string> = {
-  "1": "Leilão - Eletrônico",
-  "2": "Diálogo Competitivo",
-  "3": "Concurso",
-  "4": "Concorrência - Eletrônica",
-  "5": "Concorrência - Presencial",
-  "6": "Pregão - Eletrônico",
-  "7": "Pregão - Presencial",
-  "8": "Dispensa de Licitação",
-  "9": "Inexigibilidade",
-  "10": "Manifestação de Interesse",
-  "11": "Pré-qualificação",
-  "12": "Credenciamento",
-  "13": "Leilão - Presencial"
-};
-
-// Modalidades consultadas quando o usuário não escolhe nenhuma: as que
-// concentram a esmagadora maioria das oportunidades reais de disputa.
-const PNCP_MODALIDADES_PADRAO = ["6", "8", "4", "9"];
 
 const PNCP_HEADERS = {
   "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   "Accept": "application/json"
 };
 
-async function pncpFetchJson(url: string, timeoutMs = 20_000): Promise<any | null> {
+interface RespostaPncp {
+  ok: boolean;
+  status: number;
+  json: any | null;
+  /** Frase pronta para o usuário quando a consulta não deu certo. */
+  erro?: string;
+}
+
+/**
+ * Busca no PNCP devolvendo SEMPRE o que aconteceu.
+ *
+ * A versão anterior devolvia `null` tanto para "o portal está fora do ar"
+ * quanto para "o PNCP recusou os seus parâmetros". Quem chamava tratava os
+ * dois como fim de paginação, e foi assim que um erro 400 nosso — tamanho de
+ * página acima do teto — virou, na tela, "não foi possível obter as
+ * contratações do PNCP". Um defeito de parâmetro ficou dois anos parecendo
+ * instabilidade do portal. Agora o motivo sobe junto.
+ */
+async function pncpFetchRaw(url: string, timeoutMs = 20_000): Promise<RespostaPncp> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { headers: PNCP_HEADERS, signal: controller.signal });
-    if (response.status === 204) return { data: [], totalRegistros: 0, totalPaginas: 0, paginasRestantes: 0 };
-    if (!response.ok) {
-      console.warn(`[PNCP] HTTP ${response.status} em ${url}`);
-      return null;
+
+    // 204 é resposta de sucesso do PNCP para "nada encontrado no recorte".
+    if (response.status === 204) {
+      return { ok: true, status: 204, json: { data: [], totalRegistros: 0, totalPaginas: 0, paginasRestantes: 0 } };
     }
-    return await response.json();
+
+    if (!response.ok) {
+      const corpo = await response.text().catch(() => "");
+      const detalhe = corpo.slice(0, 300).replace(/\s+/g, " ").trim();
+      console.warn(`[PNCP] HTTP ${response.status} em ${url}${detalhe ? ` — ${detalhe}` : ""}`);
+      return {
+        ok: false,
+        status: response.status,
+        json: null,
+        erro: `O PNCP respondeu ${response.status}${detalhe ? `: ${detalhe}` : ""}`
+      };
+    }
+
+    return { ok: true, status: response.status, json: await response.json() };
   } catch (err: any) {
-    console.warn(`[PNCP] Falha em ${url}:`, err?.name === "AbortError" ? `timeout de ${timeoutMs}ms` : err?.message || err);
-    return null;
-  } finally {
-    clearTimeout(timer);
+    const timeout = err?.name === "AbortError";
+    console.warn(`[PNCP] Falha em ${url}:`, timeout ? `timeout de ${timeoutMs}ms` : err?.message || err);
+    return {
+      ok: false,
+      status: 0,
+      json: null,
+      erro: timeout ? `O PNCP não respondeu em ${timeoutMs / 1000}s.` : `Falha de rede ao falar com o PNCP: ${err?.message || err}`
+    };
   }
 }
 
-function pncpFormatDate(date: Date): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return `${yyyy}${mm}${dd}`;
+/** Compatibilidade com os trechos que só querem o corpo da resposta. */
+async function pncpFetchJson(url: string, timeoutMs = 20_000): Promise<any | null> {
+  const r = await pncpFetchRaw(url, timeoutMs);
+  return r.ok ? r.json : null;
 }
 
-/** Chave estável de uma contratação, para deduplicar entre modalidades e UFs. */
-function pncpKey(item: any): string {
-  return (
-    item?.numeroControlePNCP ||
-    `${item?.orgaoEntidade?.cnpj || item?.cnpjOrgao || ""}-${item?.anoCompra || ""}-${item?.sequencialCompra || ""}`
-  );
+const pncpFormatDate = formatarDataPncp;
+const pncpKey = chaveContratacao;
+
+interface ResultadoVarredura {
+  items: any[];
+  totalPNCP: number;
+  truncado: boolean;
+  erros: string[];
 }
 
-/**
- * Decompõe o número de controle PNCP (ex.: "79151312000156-1-000501/2026")
- * nas partes necessárias para as consultas de detalhe, itens e arquivos.
- */
-function parseNumeroControlePNCP(numero: string): { cnpj: string; ano: string; sequencial: string } | null {
-  const m = String(numero || "").match(/(\d{14})-\d+-(\d+)\/(\d{4})/);
-  if (!m) return null;
-  return { cnpj: m[1], sequencial: String(parseInt(m[2], 10)), ano: m[3] };
-}
-
-/**
- * Percorre TODAS as páginas de uma combinação (modalidade × UF).
- *
- * O código anterior pedia uma única página de 20 registros por modalidade e
- * ainda parava cedo — por isso a tela nunca mostrava o conjunto real. Aqui a
- * paginação vai até `paginasRestantes` zerar, respeitando um teto de páginas e
- * um orçamento de tempo para a rota não travar.
- */
-async function pncpFetchAllPages(params: {
-  endpoint: "publicacao" | "proposta";
+interface ComboConsulta {
   modalidade: string;
-  uf?: string;
+  uf: string;
+}
+
+// Prazos calibrados por medição contra o portal real (workflow
+// pncp-contract.yml), não por chute. São configuráveis porque a latência do
+// PNCP varia com a origem da requisição, e o limite de duração da função
+// serverless varia com o plano da hospedagem.
+const PNCP_TIMEOUT_MS = Number(process.env.PNCP_TIMEOUT_MS || 22_000);
+const PNCP_ORCAMENTO_MS = Number(process.env.PNCP_ORCAMENTO_MS || 25_000);
+// Uma rodada precisa caber dentro do orçamento, e a medição mostrou consultas
+// de 30 a 55 segundos. Com concorrência 6 e 13 modalidades seriam três lotes em
+// série — o tempo acabaria no primeiro, e sete modalidades sequer seriam
+// tentadas. Com 13, a primeira página de todas sai de uma vez, e o custo da
+// rodada passa a ser o de UMA consulta em vez de três.
+const PNCP_CONCORRENCIA = Number(process.env.PNCP_CONCORRENCIA || 13);
+
+/**
+ * Varre as combinações (modalidade × UF) EM LARGURA.
+ *
+ * A versão anterior ia em profundidade: cada combinação puxava até 20 páginas
+ * antes da próxima começar. Com um portal lento — e a medição no CI mostrou
+ * consultas passando de 20 segundos — o orçamento de tempo acabava dentro das
+ * primeiras modalidades, e as últimas não devolviam NADA. Pior: falhava em
+ * silêncio, porque o usuário via resultados e não tinha como saber que
+ * Credenciamento ou Inexigibilidade nem chegaram a ser consultados.
+ *
+ * Em largura, a primeira página de TODAS as modalidades vem antes da segunda de
+ * qualquer uma. Assim, quando o tempo acaba — e com um portal lento ele vai
+ * acabar — o que já foi carregado é uma amostra de todo o PNCP, e não o começo
+ * de um pedaço dele.
+ */
+async function pncpVarrerEmLargura(params: {
+  endpoint: EndpointContratacao;
+  combos: ComboConsulta[];
   municipio?: string;
   dataInicial?: string;
   dataFinal: string;
-  maxPages: number;
+  maxPaginasPorCombo: number;
   deadline: number;
-}): Promise<{ items: any[]; totalRegistros: number; truncado: boolean }> {
+}): Promise<ResultadoVarredura> {
+  const vistos = new Set<string>();
   const items: any[] = [];
-  let totalRegistros = 0;
+  const erros: string[] = [];
+  let totalPNCP = 0;
   let truncado = false;
 
-  for (let pagina = 1; pagina <= params.maxPages; pagina++) {
-    if (Date.now() > params.deadline) {
-      truncado = true;
-      break;
+  // Combinações ainda com páginas por buscar.
+  let ativos = params.combos.map((combo) => ({ combo, pagina: 1 }));
+
+  while (ativos.length > 0 && Date.now() < params.deadline) {
+    const proximaRodada: typeof ativos = [];
+
+    for (let i = 0; i < ativos.length; i += PNCP_CONCORRENCIA) {
+      if (Date.now() >= params.deadline) {
+        truncado = true;
+        break;
+      }
+
+      const lote = ativos.slice(i, i + PNCP_CONCORRENCIA);
+      const respostas = await Promise.all(
+        lote.map(async (alvo) => {
+          const query = montarQueryContratacoes({
+            endpoint: params.endpoint,
+            modalidade: alvo.combo.modalidade,
+            pagina: alvo.pagina,
+            dataInicial: params.dataInicial,
+            dataFinal: params.dataFinal,
+            uf: alvo.combo.uf || undefined,
+            municipio: params.municipio
+          });
+
+          const resposta = await pncpFetchRaw(
+            `${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query}`,
+            PNCP_TIMEOUT_MS
+          );
+          return { alvo, resposta };
+        })
+      );
+
+      for (const { alvo, resposta } of respostas) {
+        if (!resposta.ok) {
+          // Erro na primeira página é falha daquela modalidade e precisa ser
+          // relatado; nas seguintes, apenas encerra a varredura dela.
+          if (alvo.pagina === 1 && resposta.erro) {
+            // Compara a mensagem já montada: comparar com a mensagem crua
+            // deixaria a deduplicação sem efeito, e o usuário receberia treze
+            // vezes o mesmo aviso — um por modalidade.
+            const aviso = `${PNCP_MODALIDADES[alvo.combo.modalidade] || alvo.combo.modalidade}: ${resposta.erro}`;
+            if (!erros.includes(aviso)) erros.push(aviso);
+          }
+          truncado = true;
+          continue;
+        }
+
+        const json = resposta.json || {};
+        const pageItems = Array.isArray(json.data) ? json.data : [];
+
+        if (alvo.pagina === 1) totalPNCP += Number(json.totalRegistros) || pageItems.length;
+
+        for (const raw of pageItems) {
+          const chave = pncpKey(raw);
+          if (!chave || vistos.has(chave)) continue;
+          vistos.add(chave);
+          items.push(pncpNormalizeItem(raw));
+        }
+
+        if (temProximaPagina(json, alvo.pagina)) {
+          if (alvo.pagina < params.maxPaginasPorCombo) {
+            proximaRodada.push({ combo: alvo.combo, pagina: alvo.pagina + 1 });
+          } else {
+            truncado = true;
+          }
+        }
+      }
     }
 
-    const query = new URLSearchParams({
-      dataFinal: params.dataFinal,
-      codigoModalidadeContratacao: params.modalidade,
-      pagina: String(pagina),
-      tamanhoPagina: String(PNCP_MAX_PAGE_SIZE)
-    });
-    // `dataInicial` só existe no endpoint de publicação; o de proposta filtra
-    // pelo prazo de recebimento ainda aberto.
-    if (params.endpoint === "publicacao" && params.dataInicial) query.set("dataInicial", params.dataInicial);
-    if (params.uf) query.set("uf", params.uf);
-    if (params.municipio) query.set("codigoMunicipioIbge", params.municipio);
-
-    const json = await pncpFetchJson(`${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query.toString()}`);
-    if (!json) break;
-
-    const pageItems = Array.isArray(json.data) ? json.data : [];
-    if (pageItems.length > 0) items.push(...pageItems);
-    if (pagina === 1) totalRegistros = Number(json.totalRegistros) || pageItems.length;
-
-    const restantes = Number(json.paginasRestantes);
-    const totalPaginas = Number(json.totalPaginas) || 1;
-    const acabou = Number.isFinite(restantes) ? restantes <= 0 : pagina >= totalPaginas;
-    if (acabou || pageItems.length === 0) break;
-
-    if (pagina === params.maxPages) truncado = true;
+    if (Date.now() >= params.deadline && proximaRodada.length > 0) truncado = true;
+    ativos = proximaRodada;
   }
 
-  return { items, totalRegistros, truncado };
+  if (ativos.length > 0) truncado = true;
+
+  return { items, totalPNCP, truncado, erros };
 }
 
 /** Normaliza uma contratação do PNCP para o formato consumido pela interface. */
@@ -2477,71 +2792,74 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         ? String(reqDataFinal).replace(/-/g, "")
         : pncpFormatDate(endpoint === "proposta" ? horizonte : hoje);
 
-      const targetMods = selectedModalidades.length > 0 ? selectedModalidades : PNCP_MODALIDADES_PADRAO;
+      // `codigoModalidadeContratacao` é obrigatório na API: não existe "buscar
+      // todas de uma vez". Trazer o PNCP inteiro significa varrer modalidade
+      // por modalidade — antes o padrão cobria só 4 das 13, e Credenciamento,
+      // Concurso e os Leilões simplesmente não existiam para o usuário.
+      const targetMods = selectedModalidades.length > 0 ? selectedModalidades : PNCP_MODALIDADES_POR_RELEVANCIA;
       // Sem UF escolhida, uma única consulta sem filtro cobre o Brasil inteiro.
       const targetUfs = selectedUfs.length > 0 ? selectedUfs : [""];
 
       const cacheKey = `${endpoint}|${targetUfs.join(",")}|${targetMods.join(",")}|${municipio}|${dataInicial}|${dataFinal}`;
       const cached = pncpCache.get(cacheKey);
-      let agregado: { items: any[]; totalPNCP: number; truncado: boolean };
+      let agregado: { items: any[]; totalPNCP: number; truncado: boolean; erros: string[] };
 
       if (cached && Date.now() - cached.timestamp < 180_000) {
         agregado = cached.data;
       } else {
         // Orçamento de tempo: a rota agrega muitas páginas, mas não pode
-        // estourar o limite da função serverless.
-        const deadline = Date.now() + 25_000;
-        const maxPagesPorCombo = 10; // até 5.000 registros por combinação
+        // estourar o limite de duração da função serverless.
+        const deadline = Date.now() + PNCP_ORCAMENTO_MS;
+        const maxPaginasPorCombo = 20; // até 1.000 registros por combinação
 
-        const combos: Array<{ modalidade: string; uf: string }> = [];
+        const combos: ComboConsulta[] = [];
         for (const m of targetMods) for (const u of targetUfs) combos.push({ modalidade: m, uf: u });
 
-        const resultados = await Promise.all(
-          combos.map(c =>
-            pncpFetchAllPages({
-              endpoint,
-              modalidade: c.modalidade,
-              uf: c.uf || undefined,
-              municipio: String(municipio || "") || undefined,
-              dataInicial,
-              dataFinal,
-              maxPages: maxPagesPorCombo,
-              deadline
-            })
-          )
-        );
+        const varredura = await pncpVarrerEmLargura({
+          endpoint,
+          combos,
+          municipio: String(municipio || "") || undefined,
+          dataInicial,
+          dataFinal,
+          maxPaginasPorCombo,
+          deadline
+        });
 
-        const vistos = new Set<string>();
-        const items: any[] = [];
-        let totalPNCP = 0;
-        let truncado = false;
-
-        for (const r of resultados) {
-          totalPNCP += r.totalRegistros;
-          if (r.truncado) truncado = true;
-          for (const raw of r.items) {
-            const key = pncpKey(raw);
-            if (!key || vistos.has(key)) continue;
-            vistos.add(key);
-            items.push(pncpNormalizeItem(raw));
-          }
-        }
+        const items = varredura.items;
+        const erros = varredura.erros;
+        const totalPNCP = varredura.totalPNCP;
+        const truncado = varredura.truncado;
 
         // Mais recentes primeiro.
         items.sort((a, b) => String(b.dataPublicacaoPncp || "").localeCompare(String(a.dataPublicacaoPncp || "")));
 
-        agregado = { items, totalPNCP, truncado };
-        pncpCache.set(cacheKey, { timestamp: Date.now(), data: agregado });
+        agregado = { items, totalPNCP, truncado, erros };
+        // Resultado vazio por erro não entra no cache: senão uma instabilidade
+        // de 10 segundos apagaria o Radar pelos 3 minutos seguintes.
+        if (items.length > 0 || erros.length === 0) {
+          pncpCache.set(cacheKey, { timestamp: Date.now(), data: agregado });
+        }
       }
 
       if (agregado.items.length === 0) {
-        return res.status(502).json({
-          error: "Não foi possível obter as contratações do PNCP no momento. O portal pode estar indisponível — tente novamente em alguns minutos.",
+        // Distinguir os dois casos importa: "o recorte não tem nada" é uma
+        // resposta legítima e o usuário deve ajustar o filtro; "o PNCP recusou
+        // a consulta" é problema nosso ou do portal. Tratar tudo como portal
+        // fora do ar foi o que escondeu este defeito por tanto tempo.
+        const houveFalha = (agregado.erros || []).length > 0;
+        return res.status(houveFalha ? 502 : 200).json({
+          error: houveFalha
+            ? `Não foi possível obter as contratações do PNCP. ${agregado.erros[0]}`
+            : undefined,
+          aviso: houveFalha
+            ? undefined
+            : "Nenhuma contratação encontrada para estes filtros. Tente ampliar o período, as modalidades ou os estados.",
           data: [],
           totalRegistros: 0,
           totalPaginas: 0,
           numeroPagina: pageNum,
-          source: "pncp_indisponivel"
+          detalhesErro: houveFalha ? agregado.erros : undefined,
+          source: houveFalha ? "pncp_indisponivel" : "pncp_sem_resultados"
         });
       }
 
@@ -2577,6 +2895,11 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         // carregados — deixa explícito quando a busca foi limitada.
         totalDisponivelPNCP: agregado.totalPNCP,
         resultadoParcial: agregado.truncado,
+        // Varredura parcial não é o mesmo que varredura completa. Se alguma
+        // modalidade falhou, o usuário precisa saber que o que ele está vendo
+        // não é o PNCP inteiro — senão conclui que a licitação não existe.
+        avisosPNCP: (agregado.erros || []).length > 0 ? agregado.erros : undefined,
+        modalidadesConsultadas: targetMods.length,
         fonte: endpoint,
         source: "pncp_api_real"
       });
