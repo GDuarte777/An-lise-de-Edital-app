@@ -19,6 +19,8 @@ import {
   parseNumeroControlePNCP,
   escolherArquivoEdital,
   formatarDataPncp,
+  PNCP_TIMEOUT_PADRAO_MS,
+  PNCP_ORCAMENTO_PADRAO_MS,
   type EndpointContratacao
 } from "./src/utils/pncpQuery";
 
@@ -2535,12 +2537,17 @@ interface ComboConsulta {
   uf: string;
 }
 
-// Prazos calibrados por medição contra o portal real (workflow
-// pncp-contract.yml), não por chute. São configuráveis porque a latência do
-// PNCP varia com a origem da requisição, e o limite de duração da função
-// serverless varia com o plano da hospedagem.
-const PNCP_TIMEOUT_MS = Number(process.env.PNCP_TIMEOUT_MS || 22_000);
-const PNCP_ORCAMENTO_MS = Number(process.env.PNCP_ORCAMENTO_MS || 25_000);
+// Prazos calibrados pela execução do pncp-contract.yml contra o portal real.
+// Os valores e a medição que os justifica ficam em src/utils/pncpQuery.ts,
+// com testes que travam a relação entre eles — foi a falta dessa amarração
+// que deixou o timeout em 22 s enquanto a medição já mostrava que nenhuma
+// consulta bem-sucedida responde em menos de 33 s, e o Radar não trazia nada.
+// Continuam configuráveis por ambiente: a latência do PNCP varia com a origem
+// da requisição, e o teto de duração da função varia com o plano da hospedagem.
+const PNCP_TIMEOUT_MS = Number(process.env.PNCP_TIMEOUT_MS || PNCP_TIMEOUT_PADRAO_MS);
+// Precisa caber na duração da função (ver `export const config` no fim do
+// arquivo) com folga para montar e serializar a resposta.
+const PNCP_ORCAMENTO_MS = Number(process.env.PNCP_ORCAMENTO_MS || PNCP_ORCAMENTO_PADRAO_MS);
 // Uma rodada precisa caber dentro do orçamento, e a medição mostrou consultas
 // de 30 a 55 segundos. Com concorrência 6 e 13 modalidades seriam três lotes em
 // série — o tempo acabaria no primeiro, e sete modalidades sequer seriam
@@ -2603,9 +2610,15 @@ async function pncpVarrerEmLargura(params: {
             municipio: params.municipio
           });
 
+          // O prazo só era conferido ENTRE lotes, então uma consulta travada
+          // rodava seus 45 s inteiros mesmo com o orçamento já no fim — e a
+          // função estourava o teto da plataforma justamente esperando por
+          // quem não ia responder. O timeout de cada consulta agora é o que
+          // sobrou do orçamento.
+          const restante = params.deadline - Date.now();
           const resposta = await pncpFetchRaw(
             `${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query}`,
-            PNCP_TIMEOUT_MS
+            Math.max(1_000, Math.min(PNCP_TIMEOUT_MS, restante))
           );
           return { alvo, resposta };
         })
@@ -2804,7 +2817,12 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
       const cached = pncpCache.get(cacheKey);
       let agregado: { items: any[]; totalPNCP: number; truncado: boolean; erros: string[] };
 
-      if (cached && Date.now() - cached.timestamp < 180_000) {
+      // Cada varredura custa mais de 30 s contra um portal que responde 500
+      // em boa parte das modalidades. Com 3 minutos de validade, quase toda
+      // visita pagava esse preço de novo. O dado de licitação não muda de
+      // minuto a minuto; 15 minutos de cache trocam frescor por uma tela que
+      // abre na hora.
+      if (cached && Date.now() - cached.timestamp < 900_000) {
         agregado = cached.data;
       } else {
         // Orçamento de tempo: a rota agrega muitas páginas, mas não pode
@@ -2834,10 +2852,25 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         items.sort((a, b) => String(b.dataPublicacaoPncp || "").localeCompare(String(a.dataPublicacaoPncp || "")));
 
         agregado = { items, totalPNCP, truncado, erros };
-        // Resultado vazio por erro não entra no cache: senão uma instabilidade
-        // de 10 segundos apagaria o Radar pelos 3 minutos seguintes.
+
         if (items.length > 0 || erros.length === 0) {
+          // Resultado vazio por erro não entra no cache: senão uma
+          // instabilidade de 10 segundos apagaria o Radar pelo resto da
+          // validade.
           pncpCache.set(cacheKey, { timestamp: Date.now(), data: agregado });
+        } else if (cached) {
+          // A varredura não trouxe nada e o portal acusou erro — mas já houve
+          // uma busca boa antes. Mostrar o resultado anterior, avisando que
+          // está defasado, é melhor do que devolver uma tela vazia: o portal
+          // responde 500 em boa parte das modalidades, e sem isto o Radar fica
+          // inutilizável exatamente nos momentos de instabilidade.
+          const minutos = Math.max(1, Math.round((Date.now() - cached.timestamp) / 60_000));
+          agregado = {
+            ...cached.data,
+            erros: [
+              `O PNCP está instável agora (${erros[0]}). Mostrando o último resultado obtido, de ${minutos} min atrás.`
+            ]
+          };
         }
       }
 
@@ -4572,5 +4605,26 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
       console.error("[Bootstrap] Falha ao inicializar o servidor:", err?.stack || err?.message || err);
     });
   }
+
+  /**
+   * Teto de duração da função na Vercel.
+   *
+   * Sem isto a função usa o padrão da plataforma (10 s), enquanto o código
+   * orça 50 s para varrer o PNCP — e o portal não responde em menos de 33 s.
+   * A função era morta antes de qualquer resposta, e o usuário recebia a
+   * página de erro da plataforma em vez do nosso JSON: por isso a tela
+   * mostrava a mensagem genérica do cliente, e não o motivo real.
+   *
+   * `functions` no vercel.json não pode conviver com `builds` (o formato deste
+   * projeto), então a configuração vai aqui, que é o caminho suportado pelo
+   * runtime Node. 60 s é o teto do plano Hobby — se o projeto estiver em Pro,
+   * dá para subir mais.
+   *
+   * O 60 é literal de propósito: a Vercel lê este objeto por análise estática
+   * do arquivo, e uma referência a constante pode não ser resolvida — o valor
+   * silenciosamente voltaria ao padrão de 10 s, que é o defeito original.
+   * PNCP_MAX_DURACAO_PADRAO_S guarda o mesmo número para os testes.
+   */
+  export const config = { maxDuration: 60 };
 
   export default app;

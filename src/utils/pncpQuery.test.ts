@@ -10,6 +10,10 @@ import {
   escolherArquivoEdital,
   formatarDataPncp,
   nomeModalidade,
+  PNCP_LATENCIA_OK_MEDIDA_MS,
+  PNCP_TIMEOUT_PADRAO_MS,
+  PNCP_ORCAMENTO_PADRAO_MS,
+  PNCP_MAX_DURACAO_PADRAO_S,
 } from "./pncpQuery";
 
 describe("tamanho de página", () => {
@@ -210,5 +214,29 @@ describe("escolherArquivoEdital", () => {
 describe("formatarDataPncp", () => {
   it("usa AAAAMMDD", () => {
     expect(formatarDataPncp(new Date(2026, 8, 5))).toBe("20260905");
+  });
+});
+
+describe("prazos calibrados pela medição do portal", () => {
+  // Este bloco existe por causa de um defeito real: a medição registrou
+  // consultas boas em 33-34 s, mas o timeout continuou em 22 s. Toda consulta
+  // era abortada antes de o portal responder e o Radar não trazia nada — com a
+  // tela culpando os filtros do usuário.
+  it("o timeout por consulta fica acima da resposta 200 mais lenta já medida", () => {
+    expect(PNCP_TIMEOUT_PADRAO_MS).toBeGreaterThan(PNCP_LATENCIA_OK_MEDIDA_MS);
+  });
+
+  it("o orçamento da varredura comporta ao menos uma consulta inteira", () => {
+    expect(PNCP_ORCAMENTO_PADRAO_MS).toBeGreaterThanOrEqual(PNCP_TIMEOUT_PADRAO_MS);
+  });
+
+  it("a duração da função comporta o orçamento, com folga para responder", () => {
+    // Sem isto a função morre no padrão de 10 s da plataforma e o usuário
+    // recebe a página de erro dela, não o nosso JSON com o motivo.
+    expect(PNCP_MAX_DURACAO_PADRAO_S * 1000).toBeGreaterThan(PNCP_ORCAMENTO_PADRAO_MS);
+  });
+
+  it("não ultrapassa o teto de 60 s do plano Hobby da Vercel", () => {
+    expect(PNCP_MAX_DURACAO_PADRAO_S).toBeLessThanOrEqual(60);
   });
 });
