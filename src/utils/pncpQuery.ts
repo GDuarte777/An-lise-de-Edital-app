@@ -28,6 +28,35 @@ export const PNCP_TAMANHO_PAGINA_CONTRATACOES = 50;
 /** O menor tamanho de página aceito pela API, em qualquer endpoint. */
 export const PNCP_TAMANHO_PAGINA_MINIMO = 10;
 
+// ───────────────────────── prazos ─────────────────────────
+//
+// Medição do workflow pncp-contract.yml em 19/09/2026, contra o portal real:
+//
+//   Pregão Eletrônico (mod. 6)   34,2 s   HTTP 200
+//   Inexigibilidade   (mod. 9)   33,3 s   HTTP 200
+//   horizonte 365d (o do Radar)  53,0 s   HTTP 500
+//   modalidades 8, 7, 1          55,0 s   sem resposta
+//
+// Nenhuma consulta bem-sucedida respondeu em menos de 33 segundos. Os prazos
+// vivem aqui, e não só no server, porque a relação entre eles é o que decide
+// se a busca funciona — e isso precisa ser verificável sem subir servidor.
+
+/** A resposta 200 mais lenta que já medimos. Base de calibração do timeout. */
+export const PNCP_LATENCIA_OK_MEDIDA_MS = 34_200;
+
+/**
+ * Teto por consulta. Precisa ficar ACIMA da latência medida — com 22 s, valor
+ * anterior, toda consulta era abortada antes de o portal responder e o Radar
+ * não trazia nada — e abaixo dos 55 s em que o portal claramente travou.
+ */
+export const PNCP_TIMEOUT_PADRAO_MS = 45_000;
+
+/** Orçamento da varredura inteira. Precisa caber na duração da função. */
+export const PNCP_ORCAMENTO_PADRAO_MS = 50_000;
+
+/** Teto de duração da função serverless (60 s é o limite do plano Hobby). */
+export const PNCP_MAX_DURACAO_PADRAO_S = 60;
+
 /** Tabela de domínio "Modalidade de Contratação" do PNCP. */
 export const PNCP_MODALIDADES: Record<string, string> = {
   "1": "Leilão - Eletrônico",

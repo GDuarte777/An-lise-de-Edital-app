@@ -205,9 +205,20 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
       queryParams.set("tamanhoPagina", String(pageSize));
 
       const res = await fetch(`/api/pncp/contratacoes?${queryParams.toString()}`);
-      const json = await res.json().catch(() => ({}));
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(json?.error || "Falha ao comunicar com o servidor PNCP.");
+        // Sem corpo JSON não foi o servidor que respondeu: a requisição morreu
+        // antes (timeout da função, 502 da plataforma). A mensagem genérica
+        // escondia isso e mandava o usuário mexer nos filtros à toa — era
+        // exatamente o que estava acontecendo. O status precisa aparecer.
+        if (!json) {
+          throw new Error(
+            res.status === 504 || res.status === 502
+              ? `A consulta ao PNCP passou do tempo limite (HTTP ${res.status}). O portal está lento; tente de novo em alguns minutos.`
+              : `O servidor respondeu HTTP ${res.status} sem detalhar o motivo.`
+          );
+        }
+        throw new Error(json?.error || `Falha ao comunicar com o servidor PNCP (HTTP ${res.status}).`);
       }
 
       if (json && Array.isArray(json.data)) {
