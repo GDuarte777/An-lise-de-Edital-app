@@ -13,6 +13,13 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
+import {
+  estadoArquivoCertidao,
+  explicacaoArquivoIndisponivel,
+  validarFormularioCertidao,
+  previaVencimento,
+  ErrosFormularioCertidao,
+} from "../utils/certidoes";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { Badge } from "./ui/badge";
@@ -21,6 +28,81 @@ import { Textarea } from "./ui/textarea";
 import { Label } from "./ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "./ui/table";
+
+/**
+ * Ações do arquivo de uma certidão já enviada.
+ *
+ * Existe para que a lista em cartões e a tabela não tomem essa decisão cada uma
+ * por conta própria — era assim antes, e as duas escondiam o botão de baixar
+ * quando não havia conteúdo guardado, sem dizer nada. O usuário via umas
+ * certidões com opção de baixar e outras sem, sem explicação.
+ *
+ * Agora todo documento enviado mostra uma ação: baixar, quando há arquivo; ou
+ * reenviar, com o motivo, quando o conteúdo não está guardado.
+ */
+function AcoesArquivoCertidao({
+  cert,
+  compacto,
+  onBaixar,
+  onReenviar,
+}: {
+  cert: Certificate;
+  compacto: boolean;
+  onBaixar: (cert: Certificate) => void;
+  onReenviar: (certId: string, event: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  const estado = estadoArquivoCertidao(cert);
+
+  if (estado === "baixavel") {
+    return compacto ? (
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => onBaixar(cert)}
+        className="h-7 w-7 text-muted-foreground hover:text-primary"
+        title={`Baixar ${cert.fileName || "o arquivo enviado"}`}
+      >
+        <Download className="w-3.5 h-3.5" />
+      </Button>
+    ) : (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onBaixar(cert)}
+        className="gap-1 text-[11px] h-auto px-3 py-1.5"
+        title={`Baixar ${cert.fileName || "o arquivo enviado"}`}
+      >
+        <Download className="w-3 h-3" />
+        <span>Baixar</span>
+      </Button>
+    );
+  }
+
+  if (estado === "sem_conteudo") {
+    const explicacao = explicacaoArquivoIndisponivel(cert);
+    return (
+      <label
+        title={explicacao}
+        className={
+          compacto
+            ? "h-7 w-7 inline-flex items-center justify-center rounded-md text-warning hover:bg-warning/10 cursor-pointer"
+            : "inline-flex items-center justify-center gap-1 rounded-md border border-warning/40 bg-warning/10 text-warning font-semibold px-3 py-1.5 text-[11px] cursor-pointer hover:bg-warning/15"
+        }
+      >
+        <FileWarning className={compacto ? "w-3.5 h-3.5" : "w-3 h-3"} />
+        {!compacto && <span>Reenviar para baixar</span>}
+        <input
+          type="file"
+          className="hidden"
+          accept=".pdf,.png,.jpg,.jpeg,.txt"
+          onChange={(e) => onReenviar(cert.id, e)}
+        />
+      </label>
+    );
+  }
+
+  return null;
+}
 
 // Dynamic real-time date extraction for comparative analysis (timezone-safe)
 const getLocalTodayStr = (): string => {
@@ -316,6 +398,13 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
   }, [certs, hasManuallyOrdered]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingCert, setEditingCert] = useState<Certificate | null>(null);
+  // Erros por campo do popup: a validação passou a acontecer antes de salvar,
+  // junto do campo, em vez de virar um alerta genérico depois do clique.
+  const [errosForm, setErrosForm] = useState<ErrosFormularioCertidao>({});
+  // Arquivo escolhido durante a CRIAÇÃO. Antes era preciso criar a certidão,
+  // achá-la na lista e só então anexar — três passos para uma coisa só.
+  const [arquivoNovaCertidao, setArquivoNovaCertidao] = useState<File | null>(null);
+  const [salvandoCertidao, setSalvandoCertidao] = useState(false);
   
   // Extra loading/feedback states for IA document analysis
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
@@ -525,7 +614,12 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     });
   };
 
-  const processCertFile = async (certId: string, file: File) => {
+  /**
+   * @param certBase certidão recém-criada que ainda não entrou em `certs`.
+   *        Sem ela, anexar um arquivo no mesmo passo da criação faria
+   *        `certs.find` falhar e o nome do documento ser gravado em branco.
+   */
+  const processCertFile = async (certId: string, file: File, certBase?: Certificate) => {
     setAnalyzingId(certId);
     setInfoMessage(null);
 
@@ -550,7 +644,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
               fileBase64: base64String,
               fileName: file.name,
               fileType: resolvedFileType,
-              docName: certs.find(c => c.id === certId)?.name || ""
+              docName: certs.find(c => c.id === certId)?.name || certBase?.name || ""
             }
           });
 
@@ -564,7 +658,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
           if (result) {
             const expirationDate = result.expirationDate || "";
             
-            const targetCert = certs.find(c => c.id === certId);
+            const targetCert = certs.find(c => c.id === certId) || certBase;
             const updatedCert = {
               ...targetCert,
               id: certId,
@@ -638,7 +732,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
           const errMsg = formatAiError(err);
           triggerAlert(`Erro na análise da IA: ${errMsg}\n\nO arquivo foi salvo com sucesso — preencha os dados manualmente.`);
           // Fallback: mark as uploaded but allow user to specify a date manually by editing
-          const targetCert = certs.find(c => c.id === certId);
+          const targetCert = certs.find(c => c.id === certId) || certBase;
           const fallbackCert = {
             ...targetCert,
             id: certId,
@@ -679,7 +773,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
               fileBase64: base64String,
               fileName: file.name,
               fileType: resolvedFileType,
-              docName: certs.find(c => c.id === certId)?.name || ""
+              docName: certs.find(c => c.id === certId)?.name || certBase?.name || ""
             }
           });
           if (!response.ok) throw new Error("Erro de processamento.");
@@ -687,7 +781,7 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
           const result = data.result;
           if (result) {
             const expirationDate = result.expirationDate || "";
-            const targetCert = certs.find(c => c.id === certId);
+            const targetCert = certs.find(c => c.id === certId) || certBase;
             const updatedCert = {
               ...targetCert,
               id: certId,
@@ -807,10 +901,14 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
 
   const handleAddOrEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.name.trim()) {
-      triggerAlert("Por favor preencha ao menos o Nome Oficial da Certidão.");
-      return;
-    }
+
+    // A validação inteira antes de qualquer trabalho: o alerta genérico de
+    // antes não dizia qual campo estava errado, e só aparecia depois do clique.
+    const erros = validarFormularioCertidao(formData);
+    setErrosForm(erros);
+    if (Object.keys(erros).length > 0) return;
+
+    setSalvandoCertidao(true);
 
     let finalNotes = formData.notes;
     let finalExpirationDate = formData.expirationDate || "";
@@ -878,11 +976,39 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       
       // Sync instantly
       saveCertificateToSupabase(newCert).catch(err => console.warn("Erro ao salvar nova certidão no Supabase:", err));
+
+      // Arquivo escolhido no popup: anexa em seguida, passando a certidão
+      // recém-criada porque ela ainda não está em `certs` neste instante.
+      if (arquivoNovaCertidao) {
+        const arquivo = arquivoNovaCertidao;
+        setArquivoNovaCertidao(null);
+        processCertFile(newCert.id, arquivo, newCert).catch(err =>
+          console.warn("Erro ao anexar arquivo na criação da certidão:", err)
+        );
+      }
     }
 
-    setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
-    setShowAddForm(false);
+    fecharPopupCertidao();
     confetti({ particleCount: 40, spread: 60, origin: { y: 0.8 } });
+  };
+
+  /** Fecha o popup e devolve o formulário ao estado limpo. */
+  const fecharPopupCertidao = () => {
+    setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
+    setErrosForm({});
+    setArquivoNovaCertidao(null);
+    setEditingCert(null);
+    setSalvandoCertidao(false);
+    setShowAddForm(false);
+  };
+
+  /** Abre o popup em modo de criação. */
+  const abrirPopupNovaCertidao = () => {
+    setEditingCert(null);
+    setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
+    setErrosForm({});
+    setArquivoNovaCertidao(null);
+    setShowAddForm(true);
   };
 
   const startEdit = (cert: Certificate) => {
@@ -893,6 +1019,8 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
       expirationDate: cert.expirationDate,
       notes: cert.notes || ""
     });
+    setErrosForm({});
+    setArquivoNovaCertidao(null);
     setShowAddForm(true);
   };
 
@@ -1242,65 +1370,115 @@ Retorne exclusivamente o JSON estruturado.
               </div>
             </div>
 
-            <Button
-              onClick={() => {
-                setEditingCert(null);
-                setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
-                setShowAddForm(!showAddForm);
-              }}
-              className="cursor-pointer"
-            >
+            <Button onClick={abrirPopupNovaCertidao} className="cursor-pointer">
               <Plus className="w-4 h-4" />
               Nova Certidão
             </Button>
           </div>
 
-          {/* Add Form Accordion */}
-          {showAddForm && (
-            <form onSubmit={handleAddOrEdit} className="bg-muted/40 rounded-xl border p-4 mb-6 space-y-4 animate-fade-in text-xs">
-              <h4 className="font-semibold text-foreground text-sm flex items-center gap-2 border-b pb-2">
-                <FileText className="w-4.5 h-4.5 text-primary" />
-                {editingCert ? "Editar Certidão Cadastrada" : "Adicionar Nova Certidão ao Cadastro"}
-              </h4>
+          {/* ── Popup de criação/edição ──────────────────────────────────
+              Era um formulário sanfona embutido na página: abria empurrando a
+              lista para baixo, e ao editar uma certidão que estava lá embaixo o
+              usuário perdia de vista qual linha estava mexendo. Como popup, a
+              edição fica focada e o contexto da lista não se desfaz. */}
+          <Dialog open={showAddForm} onOpenChange={(aberto) => { if (!aberto) fecharPopupCertidao(); }}>
+            <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <FileText className="w-4.5 h-4.5 text-primary" />
+                  {editingCert ? "Editar certidão" : "Nova certidão"}
+                </DialogTitle>
+                <DialogDescription>
+                  {editingCert
+                    ? "Altere os dados do registro. O arquivo anexado é gerenciado na seção abaixo."
+                    : "Cadastre o documento. Você já pode anexar o arquivo aqui — a IA lê a data de vencimento sozinha."}
+                </DialogDescription>
+              </DialogHeader>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Nome Oficial da Certidão / Certificado</Label>
+              <form onSubmit={handleAddOrEdit} className="space-y-4 text-xs">
+                <div>
+                  <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">
+                    Nome oficial da certidão <span className="text-destructive">*</span>
+                  </Label>
                   <Input
                     type="text"
-                    required
+                    autoFocus
                     value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    onChange={(e) => {
+                      setFormData({ ...formData, name: e.target.value });
+                      if (errosForm.name) setErrosForm({ ...errosForm, name: undefined });
+                    }}
                     onBlur={handleNameBlur}
-                    className="bg-background"
+                    className={`bg-background ${errosForm.name ? "border-destructive" : ""}`}
                     placeholder="Ex: Certidão Negativa de Tributos Estaduais - SEFAZ"
                   />
-                  <p className="text-[10px] text-muted-foreground mt-1">Ao sair deste campo ou salvar, a IA definirá a descrição automaticamente se deixada em branco.</p>
+                  {errosForm.name ? (
+                    <p className="text-[10px] text-destructive mt-1 font-medium">{errosForm.name}</p>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Se as observações ficarem em branco, a IA escreve a descrição ao salvar.
+                    </p>
+                  )}
                 </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Data de emissão</Label>
+                    <Input
+                      type="date"
+                      value={formData.emissionDate}
+                      onChange={(e) => {
+                        setFormData({ ...formData, emissionDate: e.target.value });
+                        setErrosForm({});
+                      }}
+                      className={`bg-background ${errosForm.emissionDate ? "border-destructive" : ""}`}
+                    />
+                    {errosForm.emissionDate && (
+                      <p className="text-[10px] text-destructive mt-1 font-medium">{errosForm.emissionDate}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Data de vencimento</Label>
+                    <Input
+                      type="date"
+                      value={formData.expirationDate}
+                      onChange={(e) => {
+                        setFormData({ ...formData, expirationDate: e.target.value });
+                        setErrosForm({});
+                      }}
+                      className={`bg-background ${errosForm.expirationDate ? "border-destructive" : ""}`}
+                    />
+                    {errosForm.expirationDate && (
+                      <p className="text-[10px] text-destructive mt-1 font-medium">{errosForm.expirationDate}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Prazo traduzido enquanto se digita: quem informa "30/09" não
+                    calcula de cabeça quantos dias faltam, e o prazo é o dado
+                    que decide se a empresa se habilita. */}
+                {!errosForm.expirationDate && (() => {
+                  const previa = previaVencimento(formData.expirationDate);
+                  const cor =
+                    previa.tom === "vencido"
+                      ? "border-destructive/40 bg-destructive/10 text-destructive"
+                      : previa.tom === "atencao"
+                        ? "border-warning/40 bg-warning/10 text-warning"
+                        : previa.tom === "valido"
+                          ? "border-success/40 bg-success/10 text-success"
+                          : "border-border bg-muted/40 text-muted-foreground";
+                  return (
+                    <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${cor}`}>
+                      <Clock className="w-3.5 h-3.5 shrink-0" />
+                      <span>{previa.texto}</span>
+                    </div>
+                  );
+                })()}
 
                 <div>
-                  <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Data de Emissão (Opcional)</Label>
-                  <Input
-                    type="date"
-                    value={formData.emissionDate}
-                    onChange={(e) => setFormData({ ...formData, emissionDate: e.target.value })}
-                    className="bg-background"
-                  />
-                </div>
-
-                <div>
-                  <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">Data de Vencimento (Opcional)</Label>
-                  <Input
-                    type="date"
-                    value={formData.expirationDate}
-                    onChange={(e) => setFormData({ ...formData, expirationDate: e.target.value })}
-                    className="bg-background text-destructive font-medium"
-                  />
-                </div>
-
-                <div className="md:col-span-2">
                   <div className="flex items-center justify-between mb-1">
-                    <Label className="block text-xs font-medium text-muted-foreground font-sans">Observações / Para que serve</Label>
+                    <Label className="block text-xs font-medium text-muted-foreground font-sans">Observações / para que serve</Label>
                     {formData.name && formData.name.trim() && (
                       <Button
                         type="button"
@@ -1319,29 +1497,89 @@ Retorne exclusivamente o JSON estruturado.
                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                     className="bg-background"
                     rows={2}
-                    placeholder="Ex: Utilizada para provar no pregão que não há débitos tributários tributos estaduais no estado sede."
+                    placeholder="Ex: Prova, no pregão, que não há débitos tributários estaduais no estado sede."
                   />
                 </div>
-              </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowAddForm(false)}
-                  className="text-xs"
-                >
-                  Cancelar
-                </Button>
-                <Button
-                  type="submit"
-                  className="text-xs font-semibold"
-                >
-                  {editingCert ? "Salvar Alterações" : "Adicionar ao Cadastro"}
-                </Button>
-              </div>
-            </form>
-          )}
+                {/* ── Arquivo ── */}
+                <div className="rounded-xl border bg-muted/30 p-3 space-y-2">
+                  <p className="text-[11px] font-bold text-foreground uppercase tracking-wide">Arquivo do documento</p>
+
+                  {editingCert ? (
+                    (() => {
+                      const estado = estadoArquivoCertidao(editingCert);
+                      if (estado === "baixavel") {
+                        return (
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <span className="text-[11px] text-muted-foreground break-all">
+                              {editingCert.fileName || "Arquivo enviado"}
+                            </span>
+                            <AcoesArquivoCertidao
+                              cert={editingCert}
+                              compacto={false}
+                              onBaixar={handleDownloadFile}
+                              onReenviar={handleUploadFile}
+                            />
+                          </div>
+                        );
+                      }
+                      if (estado === "sem_conteudo") {
+                        return (
+                          <div className="space-y-2">
+                            <p className="text-[11px] text-warning leading-relaxed">
+                              {explicacaoArquivoIndisponivel(editingCert)}
+                            </p>
+                            <AcoesArquivoCertidao
+                              cert={editingCert}
+                              compacto={false}
+                              onBaixar={handleDownloadFile}
+                              onReenviar={handleUploadFile}
+                            />
+                          </div>
+                        );
+                      }
+                      return (
+                        <p className="text-[11px] text-muted-foreground">
+                          Nenhum arquivo anexado. Use o botão de upload na lista para enviar e deixar a IA ler a validade.
+                        </p>
+                      );
+                    })()
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="inline-flex items-center gap-1.5 bg-primary/10 hover:bg-primary/15 border border-primary/30 text-primary font-semibold rounded-lg px-3 py-1.5 text-[11px] cursor-pointer">
+                        <FileUp className="w-3.5 h-3.5" />
+                        <span>{arquivoNovaCertidao ? "Trocar arquivo" : "Anexar arquivo (opcional)"}</span>
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept=".pdf,.png,.jpg,.jpeg,.txt"
+                          onChange={(e) => setArquivoNovaCertidao(e.target.files?.[0] || null)}
+                        />
+                      </label>
+                      {arquivoNovaCertidao && (
+                        <p className="text-[11px] text-muted-foreground break-all">
+                          {arquivoNovaCertidao.name} — a IA vai ler a data de vencimento depois de salvar.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <DialogFooter className="gap-2 pt-2 border-t">
+                  <Button type="button" variant="outline" onClick={fecharPopupCertidao} className="text-xs">
+                    Cancelar
+                  </Button>
+                  <Button type="submit" disabled={salvandoCertidao} className="text-xs font-semibold">
+                    {salvandoCertidao
+                      ? "Salvando..."
+                      : editingCert
+                        ? "Salvar alterações"
+                        : "Adicionar certidão"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
 
           {/* Info message for automatic AI-extracted data */}
           {infoMessage && (
@@ -1665,18 +1903,12 @@ Retorne exclusivamente o JSON estruturado.
                             </label>
                           ) : (
                             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                              {cert.fileBase64 && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleDownloadFile(cert)}
-                                  className="gap-1 text-[11px] h-auto px-3 py-1.5"
-                                  title="Baixar o arquivo enviado"
-                                >
-                                  <Download className="w-3 h-3" />
-                                  <span>Baixar</span>
-                                </Button>
-                              )}
+                              <AcoesArquivoCertidao
+                                cert={cert}
+                                compacto={false}
+                                onBaixar={handleDownloadFile}
+                                onReenviar={handleUploadFile}
+                              />
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -1880,17 +2112,12 @@ Retorne exclusivamente o JSON estruturado.
                                 </label>
                               ) : (
                                 <div className="flex items-center gap-1">
-                                  {cert.fileBase64 && (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() => handleDownloadFile(cert)}
-                                      className="h-7 w-7 text-muted-foreground hover:text-primary"
-                                      title="Baixar o arquivo enviado"
-                                    >
-                                      <Download className="w-3.5 h-3.5" />
-                                    </Button>
-                                  )}
+                                  <AcoesArquivoCertidao
+                                    cert={cert}
+                                    compacto={true}
+                                    onBaixar={handleDownloadFile}
+                                    onReenviar={handleUploadFile}
+                                  />
                                   <Button
                                     variant="ghost"
                                     size="icon"
