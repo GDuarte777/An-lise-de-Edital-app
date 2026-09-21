@@ -2146,6 +2146,59 @@ function limitarRequisicoes(req: any, res: any, next: any) {
 }
 
 const app = express();
+
+/**
+ * Faz rejeições de rotas assíncronas chegarem ao tratador de erros do Express.
+ *
+ * O Express 4 não entende `async` handlers: se a promessa de um handler rejeita
+ * fora do try/catch dele, ninguém captura. O Node moderno trata rejeição não
+ * tratada como fatal e DERRUBA O PROCESSO — que num ambiente serverless é
+ * exatamente o FUNCTION_INVOCATION_FAILED que o usuário vê, sem nenhuma pista do
+ * que aconteceu, porque o log morre junto.
+ *
+ * O envelope abaixo é aplicado a todo handler registrado depois daqui, inclusive
+ * os que vierem a ser criados: a rejeição vira next(err), o tratador devolve um
+ * JSON 500 com motivo legível e a função continua viva para a próxima requisição.
+ * Middlewares de erro têm 4 argumentos e ficam de fora, para não perder essa
+ * assinatura.
+ */
+for (const metodo of ["get", "post", "put", "patch", "delete", "all", "use"] as const) {
+  const original = (app as any)[metodo].bind(app);
+  (app as any)[metodo] = (...args: any[]) =>
+    original(
+      ...args.map((arg: any) =>
+        typeof arg === "function" && arg.length <= 3
+          ? function envelopado(req: any, res: any, next: any) {
+              try {
+                const resultado = arg(req, res, next);
+                if (resultado && typeof resultado.catch === "function") {
+                  resultado.catch(next);
+                }
+                return resultado;
+              } catch (erro) {
+                next(erro);
+              }
+            }
+          : arg
+      )
+    );
+}
+
+/**
+ * Última linha de defesa do processo.
+ *
+ * Mesmo com o envelope acima, código fora do ciclo de uma requisição (um timer,
+ * um `.then` esquecido numa tarefa de fundo) pode rejeitar sem dono. Derrubar a
+ * função inteira por causa disso apaga o log e devolve ao usuário uma página de
+ * erro da hospedagem em vez de uma mensagem. Registrar e seguir em frente é
+ * melhor: a requisição em curso ainda responde, e o motivo fica gravado.
+ */
+process.on("unhandledRejection", (motivo: any) => {
+  console.error("[processo] Promessa rejeitada sem tratamento:", motivo?.stack || motivo?.message || motivo);
+});
+process.on("uncaughtException", (erro: any) => {
+  console.error("[processo] Exceção não capturada:", erro?.stack || erro?.message || erro);
+});
 const PORT = 3000;
 
 // Increase payload limit for large PDF uploads
@@ -4558,10 +4611,19 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
   // Tratador de erros do Express. Sem ele, qualquer exceção não capturada numa rota
   // derruba a função e o usuário recebe a página de erro da hospedagem
   // (FUNCTION_INVOCATION_FAILED) em vez de uma mensagem que diga o que houve.
-  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error("[Express] Erro não tratado:", err?.stack || err?.message || err);
+  app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const rota = `${req.method} ${req.originalUrl?.split("?")[0] || req.path}`;
+    console.error(`[Express] Erro não tratado em ${rota}:`, err?.stack || err?.message || err);
     if (res.headersSent) return;
-    res.status(500).json({ error: describeAiFailure(err) });
+    // A rota e o tipo do erro vão na resposta de propósito: quando isso
+    // acontecer em produção, a mensagem que o usuário vê na tela já diz onde
+    // quebrou, sem depender de acesso ao log da hospedagem.
+    res.status(500).json({
+      error: describeAiFailure(err),
+      rota,
+      tipo: err?.name || "Error",
+      detalhe: String(err?.message || err).slice(0, 300)
+    });
   });
 
   // Ambiente serverless (Vercel): o módulo só exporta o app, sem escutar porta e sem
