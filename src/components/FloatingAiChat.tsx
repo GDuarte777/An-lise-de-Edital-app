@@ -100,6 +100,18 @@ function buildDefaultSession(selectedEditalId: string): ChatSession {
   };
 }
 
+/**
+ * Teto de anexo do chat.
+ *
+ * O chat manda o arquivo inline no corpo da requisição, sem envio em partes. Em
+ * base64 o arquivo cresce cerca de 33%, e a função serverless precisa segurar o
+ * corpo cru e o objeto já convertido ao mesmo tempo. O limite anterior, de
+ * 100MB, garantia estouro de memória. Editais grandes têm caminho próprio na
+ * aba de Análise de Edital, que envia em partes.
+ */
+const MAX_ANEXO_CHAT_MB = 8;
+const MAX_ANEXO_CHAT_BYTES = MAX_ANEXO_CHAT_MB * 1024 * 1024;
+
 const MAX_CHATS_PER_USER = 20;
 const MAX_MESSAGES_PER_CHAT = 200;
 
@@ -753,8 +765,8 @@ PARECER E ESTRATÉGIA:
         if (!file) continue;
 
         // Reject files larger than 100MB
-        if (file.size > 100 * 1024 * 1024) {
-          alert("A imagem colada excede o limite de 100MB.");
+        if (file.size > MAX_ANEXO_CHAT_BYTES) {
+          alert(`A imagem colada excede o limite de ${MAX_ANEXO_CHAT_MB}MB do chat. Para documentos grandes, use a aba "Análise de Edital".`);
           continue;
         }
 
@@ -781,8 +793,8 @@ PARECER E ESTRATÉGIA:
     if (!file) return;
 
     // Reject files larger than 100MB to support larger documents
-    if (file.size > 100 * 1024 * 1024) {
-      alert("O arquivo excede o limite de 100MB. Por favor, selecione uma imagem ou documento menor.");
+    if (file.size > MAX_ANEXO_CHAT_BYTES) {
+      alert(`O arquivo excede o limite de ${MAX_ANEXO_CHAT_MB}MB do chat. Para editais grandes, use a aba "Análise de Edital", que envia o arquivo em partes.`);
       return;
     }
 
@@ -877,11 +889,28 @@ PARECER E ESTRATÉGIA:
       const selectedEditalObj = activeSession.selectedEditalId ? getSelectedEditalObject(activeSession.selectedEditalId) : null;
       let replyText = "";
 
+      /**
+       * Só o anexo da mensagem ATUAL viaja com o base64.
+       *
+       * O histórico inteiro era reenviado a cada mensagem, com o base64 de todos
+       * os anexos anteriores junto. Uma conversa com um PDF de 40MB passava a
+       * mandar 40MB em TODA mensagem seguinte — o corpo da requisição estourava
+       * a memória da função serverless, que é morta de fora: nenhum tratador
+       * roda, nenhum log sobra, e o usuário recebe FUNCTION_INVOCATION_FAILED
+       * sem explicação. O servidor já sabe lidar com isso: anexo de mensagem
+       * antiga vira uma marcação de texto no contexto.
+       */
+      const mensagensParaEnviar = updatedMessages.map((m, idx) =>
+        idx === updatedMessages.length - 1 || !m.attachment?.data
+          ? m
+          : { ...m, attachment: { ...m.attachment, data: `[anexo anterior: ${m.attachment.name || "arquivo"}]` } }
+      );
+
       const response = await apiFetch("/api/chat", {
         method: "POST",
         signal: abortControllerRef.current.signal,
         body: {
-          messages: updatedMessages,
+          messages: mensagensParaEnviar,
           companyData: companyData,
           activeEditalAnalysis: selectedEditalObj,
           systemCertificates: loadSystemCertificates(),

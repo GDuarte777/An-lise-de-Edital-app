@@ -2202,8 +2202,34 @@ process.on("uncaughtException", (erro: any) => {
 const PORT = 3000;
 
 // Increase payload limit for large PDF uploads
-  app.use(express.json({ limit: "250mb" }));
-  app.use(express.urlencoded({ limit: "250mb", extended: true }));
+  /**
+   * Teto do corpo da requisição.
+   *
+   * Estava em 250mb. Numa função serverless isso é uma garantia de morte: o
+   * Express segura o corpo cru E a string já convertida ao mesmo tempo, então um
+   * corpo de 100mb consome centenas de MB de heap. Nesse caso o processo é morto
+   * DE FORA por estouro de memória — nenhum tratador de erro roda, nenhum log
+   * sobra, e a hospedagem devolve FUNCTION_INVOCATION_FAILED sem explicação.
+   *
+   * Com um teto que a função aguenta, um corpo grande demais recebe um 413
+   * limpo e explicado. Arquivos grandes continuam entrando por /api/upload-chunk,
+   * que envia em partes e nunca materializa tudo de uma vez.
+   */
+  const LIMITE_CORPO = process.env.MAX_REQUEST_BODY || "24mb";
+  app.use(express.json({ limit: LIMITE_CORPO }));
+  app.use(express.urlencoded({ limit: LIMITE_CORPO, extended: true }));
+
+  // O erro de corpo grande demais precisa chegar como JSON explicando o caminho
+  // alternativo — senão vira "Unexpected token" na tela do usuário.
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err?.type === "entity.too.large" || err?.status === 413) {
+      return res.status(413).json({
+        error: `Arquivo grande demais para envio direto (limite de ${LIMITE_CORPO}). ` +
+          `Para editais extensos, use a aba "Análise de Edital", que envia o documento em partes.`
+      });
+    }
+    return next(err);
+  });
 
   app.use("/api", limitarRequisicoes);
 
