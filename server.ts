@@ -2145,6 +2145,80 @@ function limitarRequisicoes(req: any, res: any, next: any) {
   return next();
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+ * TELEMETRIA DE DIAGNÓSTICO (temporária)
+ *
+ * A função serverless vem morrendo com FUNCTION_INVOCATION_FAILED sem deixar
+ * rastro, e não há acesso aos logs da hospedagem: o conector responde 403 nas
+ * listas e 404 nos gets. Sem observabilidade, o diagnóstico virou eliminação de
+ * hipóteses às cegas — três rodadas de correção sem mudar o sintoma.
+ *
+ * Isto grava numa tabela do Supabase, que é legível. O importante são as fases:
+ *
+ *   boot    — o módulo carregou. Se NUNCA aparecer, a função nem chega a subir,
+ *             e o problema é de build/empacotamento, não das rotas.
+ *   inicio  — a requisição entrou no Express, com a memória do processo.
+ *   fim     — a resposta saiu, com status, duração e memória.
+ *   erro    — exceção capturada, com pilha.
+ *   processo— rejeição ou exceção fora do ciclo de requisição.
+ *
+ * "inicio" sem "fim" e sem "erro" significa que o processo foi morto no meio —
+ * estouro de memória ou limite de tempo da hospedagem. É a única assinatura que
+ * não dá para obter de dentro do código de outra forma.
+ *
+ * Desligue com DIAGNOSTICO_ATIVO=false quando a causa estiver resolvida.
+ * ══════════════════════════════════════════════════════════════════════ */
+const DIAGNOSTICO_ATIVO = String(process.env.DIAGNOSTICO_ATIVO || "true").toLowerCase() !== "false";
+
+function memoriaMb(): number {
+  try {
+    return Math.round(process.memoryUsage().rss / 1024 / 1024);
+  } catch {
+    return 0;
+  }
+}
+
+function registrarDiagnostico(fase: string, rota: string, detalhe: string, pilha = ""): void {
+  if (!DIAGNOSTICO_ATIVO) return;
+  try {
+    const url = process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
+    const chave = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
+
+    // Dispara e esquece, com prazo curto: diagnóstico nunca pode atrasar nem
+    // derrubar a requisição que está tentando observar.
+    const controle = new AbortController();
+    setTimeout(() => controle.abort(), 3000);
+
+    void fetch(`${url}/rest/v1/logs_diagnostico`, {
+      method: "POST",
+      headers: {
+        "apikey": chave,
+        "Authorization": `Bearer ${chave}`,
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+      },
+      body: JSON.stringify({
+        fase,
+        rota: String(rota || "").slice(0, 200),
+        detalhe: String(detalhe || "").slice(0, 1000),
+        pilha: String(pilha || "").slice(0, 3000),
+        memoria_mb: memoriaMb()
+      }),
+      signal: controle.signal
+    }).catch(() => {});
+  } catch {
+    // telemetria jamais interrompe o fluxo
+  }
+}
+
+// Marca que o módulo carregou. A ausência desta linha na tabela é a prova de
+// que a função não chega nem a iniciar em produção.
+registrarDiagnostico(
+  "boot",
+  "",
+  `node=${process.version} vercel=${Boolean(process.env.VERCEL)} env=${process.env.NODE_ENV || "?"} região=${process.env.VERCEL_REGION || "?"}`
+);
+
 const app = express();
 
 /**
@@ -2195,9 +2269,11 @@ for (const metodo of ["get", "post", "put", "patch", "delete", "all", "use"] as 
  */
 process.on("unhandledRejection", (motivo: any) => {
   console.error("[processo] Promessa rejeitada sem tratamento:", motivo?.stack || motivo?.message || motivo);
+  registrarDiagnostico("processo", "unhandledRejection", String(motivo?.message || motivo).slice(0, 500), String(motivo?.stack || ""));
 });
 process.on("uncaughtException", (erro: any) => {
   console.error("[processo] Exceção não capturada:", erro?.stack || erro?.message || erro);
+  registrarDiagnostico("processo", "uncaughtException", String(erro?.message || erro).slice(0, 500), String(erro?.stack || ""));
 });
 const PORT = 3000;
 
@@ -2216,6 +2292,22 @@ const PORT = 3000;
    * que envia em partes e nunca materializa tudo de uma vez.
    */
   const LIMITE_CORPO = process.env.MAX_REQUEST_BODY || "24mb";
+  // Registra entrada e saída de cada chamada de API. Vem ANTES do parser de
+  // corpo de propósito: se o processo morrer ao converter um corpo grande, o
+  // "inicio" já estará gravado e a ausência do "fim" denuncia o estouro.
+  app.use("/api", (req, res, next) => {
+    if (req.path === "/health") return next();
+    const rota = `${req.method} ${req.originalUrl?.split("?")[0] || req.path}`;
+    const comecou = Date.now();
+    const tamanho = req.headers["content-length"] || "0";
+
+    registrarDiagnostico("inicio", rota, `corpo=${tamanho}B memoria=${memoriaMb()}MB`);
+    res.on("finish", () => {
+      registrarDiagnostico("fim", rota, `status=${res.statusCode} ${Date.now() - comecou}ms memoria=${memoriaMb()}MB`);
+    });
+    next();
+  });
+
   app.use(express.json({ limit: LIMITE_CORPO }));
   app.use(express.urlencoded({ limit: LIMITE_CORPO, extended: true }));
 
@@ -4640,6 +4732,7 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
   app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const rota = `${req.method} ${req.originalUrl?.split("?")[0] || req.path}`;
     console.error(`[Express] Erro não tratado em ${rota}:`, err?.stack || err?.message || err);
+    registrarDiagnostico("erro", rota, String(err?.message || err).slice(0, 500), String(err?.stack || ""));
     if (res.headersSent) return;
     // A rota e o tipo do erro vão na resposta de propósito: quando isso
     // acontecer em produção, a mensagem que o usuário vê na tela já diz onde
