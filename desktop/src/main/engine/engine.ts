@@ -58,6 +58,15 @@ export class MotorLances {
     return this.estado;
   }
 
+  /**
+   * Verdadeiro enquanto um ciclo está em andamento — ou seja, enquanto pode haver um
+   * lance a caminho. O guardião de sessão consulta isto para não rotacionar a sessão
+   * exatamente durante um envio.
+   */
+  get ocupado(): boolean {
+    return this.ciclando;
+  }
+
   iniciar(): void {
     if (this.estado === "rodando") return;
 
@@ -131,6 +140,16 @@ export class MotorLances {
 
       this.log("concorrente", `Menor lance no item: R$ ${estadoItem.menorLance.toFixed(2)}.`);
       const envio = await this.portal.enviarLance(this.cfg.ref, decisao.valor);
+
+      // Sem desfecho do portal, o robô para. Rodar outro ciclo poderia empilhar um
+      // segundo lance sobre um primeiro que talvez tenha entrado — e isso é dinheiro.
+      if (envio.confirmado === false) {
+        this.nossoUltimoLance = decisao.valor;
+        this.log("alerta", `Lance de R$ ${decisao.valor.toFixed(2)} sem confirmação. ${envio.mensagem}`);
+        this.mudarEstado("erro");
+        this.parar("Robô parado: o portal não confirmou o último lance. Confira a sala antes de retomar.");
+        return;
+      }
 
       if (envio.aceito) {
         this.nossoUltimoLance = decisao.valor;
