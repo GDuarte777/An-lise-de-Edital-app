@@ -5,6 +5,16 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    define: {
+      // Carimbo da versão publicada. Serve para responder uma pergunta que
+      // esteve em aberto por várias rodadas: o que está no ar é mesmo o último
+      // commit? A Vercel expõe o SHA em VERCEL_GIT_COMMIT_SHA no build.
+      __BUILD_ID__: JSON.stringify(
+        (process.env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 8) +
+          ' · ' +
+          new Date().toISOString().slice(0, 16).replace('T', ' ')
+      ),
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

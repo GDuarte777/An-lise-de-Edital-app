@@ -524,9 +524,16 @@ export default function AiConfigTab() {
                   Configurações salvas e ativas!
                 </div>
               ) : (
-                <p className="text-[10px] text-muted-foreground max-w-sm leading-normal">
-                  *As chaves são armazenadas localmente no seu navegador e usadas apenas nas requisições diretas de IA.
-                </p>
+                <div className="max-w-sm">
+                  {/* Carimbo da versão publicada: responde de forma direta se o
+                      que está no ar é mesmo o último commit. */}
+                  <span className="block text-[10px] text-muted-foreground/70 font-mono mb-1">
+                    versão publicada: {typeof __BUILD_ID__ !== "undefined" ? __BUILD_ID__ : "desconhecida"}
+                  </span>
+                  <p className="text-[10px] text-muted-foreground leading-normal">
+                    *As chaves são armazenadas localmente no seu navegador e usadas apenas nas requisições diretas de IA.
+                  </p>
+                </div>
               )}
             </div>
 
