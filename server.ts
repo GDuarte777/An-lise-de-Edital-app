@@ -1,3 +1,6 @@
+// ⚠️ PRIMEIRO import de propósito: registra que o processo chegou a executar
+// código, antes que qualquer outra dependência possa falhar ao carregar.
+import "./src/utils/marcaBoot";
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -2332,7 +2335,11 @@ const PORT = 3000;
       mode: process.env.NODE_ENV || "development",
       // Deixa visível, sem precisar abrir o banco, se as chaves de API dos
       // usuários estão cifradas em repouso.
-      chavesIaCriptografadas: Boolean(CHAVE_MESTRA_IA)
+      chavesIaCriptografadas: Boolean(CHAVE_MESTRA_IA),
+      // Identifica qual commit está de fato publicado. Responde sem ambiguidade
+      // se o que está no ar é o último merge.
+      commit: (process.env.VERCEL_GIT_COMMIT_SHA || "local").slice(0, 8),
+      regiao: process.env.VERCEL_REGION || "local"
     });
   });
 

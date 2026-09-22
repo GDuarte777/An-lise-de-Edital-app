@@ -170,4 +170,3 @@ export interface DisputaRow {
   observacoes?: string; // Anotações / Estratégia
   linkPNCP?: string; // Link direto do edital/contratação no PNCP
 }
-
