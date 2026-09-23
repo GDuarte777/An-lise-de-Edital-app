@@ -4766,7 +4766,13 @@ Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idonei
 
   async function initializeViteAndListen() {
     if (process.env.NODE_ENV !== "production" && !isServerless) {
-      const { createServer: createViteServer } = await import("vite");
+      // Especificador indireto de propósito: com uma string literal, os
+      // empacotadores rastreiam o Vite e o arrastam (com rollup e os binários do
+      // esbuild) para dentro da função serverless, que tem teto de 250 MB e não
+      // usa nada disso. Guardado numa variável, o import só é resolvido em tempo
+      // de execução — no servidor de desenvolvimento, onde o Vite existe.
+      const pacoteVite = "vite";
+      const { createServer: createViteServer } = await import(/* @vite-ignore */ pacoteVite);
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
