@@ -91,8 +91,11 @@ export function registrarRotas(app: AplicativoExpresso): void {
         return res.status(401).json({ error: "Sessão inválida. Entre novamente." });
       }
 
-      const supabaseUrl = process.env.VITE_SUPABASE_URL;
-      const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
+      // SUPABASE_URL/SUPABASE_ANON_KEY são injetados pela própria plataforma na
+      // Edge Function; as VITE_* só existiam no servidor Node e ficam como
+      // alternativa para quem rodar o backend fora do Supabase.
+      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
       if (!supabaseUrl || !supabaseAnonKey) {
         return res.status(503).json({ error: "Supabase não está configurado neste servidor." });
       }

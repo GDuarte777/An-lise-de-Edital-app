@@ -2191,10 +2191,11 @@ export function registrarDiagnostico(fase: string, rota: string, detalhe: string
 }
 
 // Marca que o módulo carregou. A ausência desta linha na tabela é a prova de
-// que a função não chega nem a iniciar em produção.
+// que a função não chega nem a iniciar — foi exatamente essa ausência que
+// provou que o backend anterior morria antes de executar qualquer código nosso.
 registrarDiagnostico(
   "boot",
   "",
-  `node=${process.version} vercel=${Boolean(process.env.VERCEL)} env=${process.env.NODE_ENV || "?"} região=${process.env.VERCEL_REGION || "?"}`
+  `runtime=supabase-edge commit=${(process.env.COMMIT_SHA || "?").slice(0, 8)} deploy=${process.env.SB_EXECUTION_ID || "?"}`
 );
 
