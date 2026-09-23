@@ -8,3 +8,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Estado local da CLI do Supabase
+supabase/.temp/

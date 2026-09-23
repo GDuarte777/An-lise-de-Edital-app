@@ -14,7 +14,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "tests/**/*.test.ts"],
     // Node por padrão, porque a maior parte da suíte testa utilitário puro e
     // não precisa de DOM. Os testes de componente pedem jsdom no topo do
     // próprio arquivo, com "@vitest-environment jsdom".

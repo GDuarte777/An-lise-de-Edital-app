@@ -26,7 +26,7 @@ on:
     paths:
       - "src/utils/pncpQuery.ts"
       - "src/utils/pncpQuery.live.test.ts"
-      - "server.ts"
+      - "supabase/functions/api/**"
       - ".github/workflows/pncp-contract.yml"
   workflow_dispatch:
 

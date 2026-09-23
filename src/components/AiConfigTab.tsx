@@ -187,19 +187,12 @@ export default function AiConfigTab() {
     setSyncMessage("");
 
     try {
-      const projectRef = "cghlfhndoqohmrrvppjj";
-      const accessToken = "sbp_e02c61f0dc45290154598e70b63c3ac3535f45dc";
-
-      const response = await fetch("/api/supabase/sync-secrets", {
+      // O token de gerenciamento do Supabase NÃO pode viver aqui: este arquivo
+      // vira JavaScript entregue ao navegador de qualquer visitante. Quem
+      // sincroniza é a Edge Function, que lê o token do próprio segredo.
+      const response = await apiFetch("/api/supabase/sync-secrets", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          geminiKey,
-          projectRef,
-          accessToken
-        })
+        body: { geminiKey }
       });
 
       if (!response.ok) {

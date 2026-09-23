@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { urlDaApi } from "../utils/apiBase";
 import {
   Search, ShieldCheck, MapPin, Calendar, Clock, Landmark, Coins,
   ExternalLink, Sparkles, RefreshCw, AlertCircle, FileText, CheckCircle2,
@@ -204,7 +205,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
       queryParams.set("pagina", String(targetPage));
       queryParams.set("tamanhoPagina", String(pageSize));
 
-      const res = await fetch(`/api/pncp/contratacoes?${queryParams.toString()}`);
+      const res = await fetch(urlDaApi(`/api/pncp/contratacoes?${queryParams.toString()}`));
       const json = await res.json().catch(() => null);
       if (!res.ok) {
         // Sem corpo JSON não foi o servidor que respondeu: a requisição morreu
@@ -335,7 +336,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     let cancelado = false;
     setArquivosLoading(true);
 
-    fetch(`/api/pncp/arquivos?numeroControle=${encodeURIComponent(activeItem.numeroControlePNCP)}`)
+    fetch(urlDaApi(`/api/pncp/arquivos?numeroControle=${encodeURIComponent(activeItem.numeroControlePNCP)}`))
       .then(async res => {
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json?.error || "Falha ao listar os arquivos.");
@@ -359,7 +360,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
 
   const baixarArquivo = (arq: { uri: string; titulo: string }) => {
     const nome = /\.\w{2,5}$/.test(arq.titulo) ? arq.titulo : `${arq.titulo}.pdf`;
-    window.open(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`, "_blank");
+    window.open(urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`), "_blank");
   };
 
   /**
@@ -375,7 +376,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     setPreparandoAnalise(arq.uri);
     try {
       const nome = /\.\w{2,5}$/.test(arq.titulo) ? arq.titulo : `${arq.titulo}.pdf`;
-      const res = await fetch(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`);
+      const res = await fetch(urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`));
       if (!res.ok) {
         const erro = await res.json().catch(() => ({}));
         throw new Error(erro?.error || "Não foi possível baixar o edital do PNCP.");
@@ -471,7 +472,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     const chave = `lista:${item.numeroControlePNCP}`;
     setPreparandoAnalise(chave);
     try {
-      const res = await fetch(`/api/pncp/arquivos?numeroControle=${encodeURIComponent(item.numeroControlePNCP)}`);
+      const res = await fetch(urlDaApi(`/api/pncp/arquivos?numeroControle=${encodeURIComponent(item.numeroControlePNCP)}`));
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || "Não foi possível consultar os arquivos deste certame no PNCP.");
 

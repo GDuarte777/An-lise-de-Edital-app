@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { urlDaApi, cabecalhosDaApi } from "./apiBase";
 
 // Helper to get Supabase credentials from Env or LocalStorage for maximum ease of use
 export interface SupabaseConfig {
@@ -1835,9 +1836,9 @@ export async function saveUserConfigToSupabase(config: {
 
     if (token) {
       try {
-        const resp = await fetch("/api/user-config", {
+        const resp = await fetch(urlDaApi("/api/user-config"), {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...cabecalhosDaApi() },
           body: JSON.stringify(record)
         });
 
