@@ -2190,12 +2190,8 @@ export function registrarDiagnostico(fase: string, rota: string, detalhe: string
   }
 }
 
-// Marca que o módulo carregou. A ausência desta linha na tabela é a prova de
-// que a função não chega nem a iniciar — foi exatamente essa ausência que
-// provou que o backend anterior morria antes de executar qualquer código nosso.
-registrarDiagnostico(
-  "boot",
-  "",
-  `runtime=supabase-edge commit=${(process.env.COMMIT_SHA || "?").slice(0, 8)} deploy=${process.env.SB_EXECUTION_ID || "?"}`
-);
+// A marca de boot fica só em index.ts. Este módulo é importado por ele, então
+// duas marcas por partida fria diriam a mesma coisa duas vezes — e um sinal de
+// diagnóstico que se repete sem significar nada é o começo de um log que
+// ninguém lê.
 
