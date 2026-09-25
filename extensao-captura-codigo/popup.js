@@ -119,11 +119,24 @@ elAlternar.addEventListener("change", async () => {
   if (tabId == null) return;
   const ativo = elAlternar.checked;
   elPonto.classList.toggle("ligado", ativo);
-  await chrome.runtime.sendMessage({
+  elAlternar.disabled = true;
+
+  const resposta = await chrome.runtime.sendMessage({
     tipo: "alternar-captura",
     tabId,
     ativo,
   });
+
+  elAlternar.disabled = false;
+
+  if (resposta && resposta.ok === false) {
+    // Não deu para falar com a página (aba aberta antes de instalar a
+    // extensão, página interna do navegador, etc.). Desfaz o toggle e avisa.
+    elAlternar.checked = false;
+    elPonto.classList.remove("ligado");
+    elUltimaAtualizacao.textContent =
+      resposta.erro || "Não foi possível iniciar a captura nesta página.";
+  }
 });
 
 elBtnBaixar.addEventListener("click", () => {

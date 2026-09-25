@@ -3,6 +3,12 @@
 // chrome.storage.local para que o popup possa ler o tamanho e baixar.
 
 (() => {
+  // Evita registrar tudo de novo se o background injetar este script mais
+  // de uma vez na mesma página (ex.: reforço manual via scripting.executeScript
+  // além da injeção automática declarada no manifest).
+  if (window.__capturaCodigoInjetado) return;
+  window.__capturaCodigoInjetado = true;
+
   const CHAVE_PREFIXO = "captura_";
   let ativo = false;
   let observer = null;

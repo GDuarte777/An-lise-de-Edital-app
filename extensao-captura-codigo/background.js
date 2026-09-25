@@ -15,13 +15,36 @@ async function salvarAbasAtivas(conjunto) {
   });
 }
 
+async function injetarContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+    return true;
+  } catch (erro) {
+    // Páginas internas do navegador (chrome://, a loja de extensões, etc.)
+    // bloqueiam a injeção — não há o que fazer nesses casos.
+    return false;
+  }
+}
+
 async function enviarParaConteudo(tabId, mensagem) {
   try {
     return await chrome.tabs.sendMessage(tabId, mensagem);
   } catch (erro) {
-    // A página pode não ter o content script (ex.: chrome://, páginas
-    // internas do navegador) — não há o que fazer nesses casos.
-    return null;
+    // O content script provavelmente ainda não foi injetado nesta aba —
+    // isso acontece quando a aba já estava aberta antes de a extensão ser
+    // instalada/recarregada, já que o manifest só injeta automaticamente em
+    // páginas carregadas depois disso. Injeta agora "na marra" e tenta de
+    // novo antes de desistir.
+    const injetado = await injetarContentScript(tabId);
+    if (!injetado) return null;
+    try {
+      return await chrome.tabs.sendMessage(tabId, mensagem);
+    } catch (erroFinal) {
+      return null;
+    }
   }
 }
 
@@ -37,11 +60,36 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
         abas.delete(mensagem.tabId);
       }
       await salvarAbasAtivas(abas);
-      await enviarParaConteudo(mensagem.tabId, {
+
+      if (!mensagem.ativo) {
+        await enviarParaConteudo(mensagem.tabId, {
+          tipo: "definir-ativo",
+          ativo: false,
+          tabId: mensagem.tabId,
+        });
+        responder({ ok: true });
+        return;
+      }
+
+      const resposta = await enviarParaConteudo(mensagem.tabId, {
         tipo: "definir-ativo",
-        ativo: mensagem.ativo,
+        ativo: true,
         tabId: mensagem.tabId,
       });
+
+      if (!resposta) {
+        // Não deu para falar com a página — desfaz o registro de "ativa"
+        // para não ficar um estado inconsistente, e avisa o popup.
+        abas.delete(mensagem.tabId);
+        await salvarAbasAtivas(abas);
+        responder({
+          ok: false,
+          erro:
+            "Não foi possível iniciar a captura nesta página. Recarregue a aba e tente de novo.",
+        });
+        return;
+      }
+
       responder({ ok: true });
     })();
     return true;
