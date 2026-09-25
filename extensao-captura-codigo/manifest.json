@@ -1,25 +1,35 @@
 {
   "manifest_version": 3,
   "name": "Captura de Código de Sites",
-  "version": "1.0.0",
-  "description": "Captura o código-fonte (HTML) da página atual, mostra em tempo real quanto foi captado e permite baixar o resultado.",
+  "version": "1.1.0",
+  "description": "Capta o código-fonte (HTML) das páginas visitadas, acumula tudo num acervo global e permite baixar o resultado consolidado.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
   },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "downloads", "activeTab", "scripting", "tabs"],
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "downloads",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "sidePanel"
+  ],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {

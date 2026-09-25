@@ -1,9 +1,10 @@
-// popup.js — interface do popup: liga/desliga a captura da aba atual e
-// mostra o ACERVO ACUMULADO (global, entre todas as abas e sites) — trocar
-// de aba ou fechar uma página não zera nada, só some captura em cima do
-// que já existe.
+// popup.js — interface (usada como PAINEL LATERAL). Liga/desliga a captura
+// da aba ativa e mostra o ACERVO ACUMULADO (append-only, global): cada
+// captura entra como um novo registro; trocar de aba, navegar ou fechar a
+// aba não apaga nada. O painel fica aberto enquanto você navega, então ele
+// atualiza a métrica ao vivo e reflete a aba ativa do momento.
 
-const CHAVE_PAGINAS = "paginas_captadas";
+const CHAVE_CAPTURAS = "capturas";
 const CHAVE_ABAS_ATIVAS = "abas_ativas";
 
 const elAlternar = document.getElementById("alternar");
@@ -19,7 +20,7 @@ const elBtnBaixar = document.getElementById("btn-baixar");
 const elBtnLimpar = document.getElementById("btn-limpar");
 
 // Escala usada só para desenhar a barra de progresso (não é um limite real).
-const ESCALA_VISUAL_BYTES = 5 * 1024 * 1024; // 5 MB
+const ESCALA_VISUAL_BYTES = 10 * 1024 * 1024; // 10 MB
 
 let tabId = null;
 
@@ -45,33 +46,34 @@ function formatarHorario(timestamp) {
     second: "2-digit",
   });
   return mesmoDia
-    ? `Última atualização às ${hora}`
-    : `Última atualização em ${data.toLocaleString("pt-BR")}`;
+    ? `Última captura às ${hora}`
+    : `Última captura em ${data.toLocaleString("pt-BR")}`;
 }
 
-function renderizarLista(paginas) {
+function renderizarLista(capturas) {
   elListaPaginas.innerHTML = "";
-  const entradas = Object.values(paginas).sort(
-    (a, b) => b.atualizadoEm - a.atualizadoEm,
+  // Mais recentes primeiro.
+  const ordenadas = [...capturas].sort(
+    (a, b) => b.capturadoEm - a.capturadoEm,
   );
 
-  for (const pagina of entradas) {
+  for (const captura of ordenadas) {
     const li = document.createElement("li");
 
     const titulo = document.createElement("span");
     titulo.className = "item-titulo";
-    titulo.textContent = pagina.titulo || pagina.url;
-    titulo.title = pagina.url;
+    titulo.textContent = captura.titulo || captura.url;
+    titulo.title = captura.url;
 
     const info = document.createElement("div");
     info.className = "item-info";
 
     const url = document.createElement("span");
-    url.textContent = pagina.url;
-    url.title = pagina.url;
+    url.textContent = captura.url;
+    url.title = captura.url;
 
     const tamanho = document.createElement("span");
-    tamanho.textContent = formatarBytes(pagina.tamanhoBytes);
+    tamanho.textContent = formatarBytes(captura.tamanhoBytes);
 
     info.append(url, tamanho);
     li.append(titulo, info);
@@ -79,23 +81,17 @@ function renderizarLista(paginas) {
   }
 }
 
-function renderizarAcervo(paginas) {
-  const entradas = Object.values(paginas || {});
-  const totalBytes = entradas.reduce(
-    (soma, p) => soma + (p.tamanhoBytes || 0),
-    0,
-  );
-  const ultimaAtualizacao = entradas.reduce(
-    (max, p) => Math.max(max, p.atualizadoEm || 0),
-    0,
-  );
+function renderizarAcervo(capturas) {
+  const lista = Array.isArray(capturas) ? capturas : [];
+  const totalBytes = lista.reduce((s, c) => s + (c.tamanhoBytes || 0), 0);
+  const ultima = lista.reduce((m, c) => Math.max(m, c.capturadoEm || 0), 0);
+  const paginasDistintas = new Set(lista.map((c) => c.url)).size;
 
   elTamanho.textContent = formatarBytes(totalBytes);
-  elUltimaAtualizacao.textContent = formatarHorario(ultimaAtualizacao);
+  elUltimaAtualizacao.textContent = formatarHorario(ultima);
   elContagemPaginas.textContent =
-    entradas.length === 1
-      ? "1 página no acervo"
-      : `${entradas.length} páginas no acervo`;
+    `${lista.length} ${lista.length === 1 ? "captura" : "capturas"}` +
+    ` · ${paginasDistintas} ${paginasDistintas === 1 ? "página" : "páginas"}`;
 
   const percentual = Math.min(
     100,
@@ -103,13 +99,13 @@ function renderizarAcervo(paginas) {
   );
   elBarra.style.width = `${totalBytes > 0 ? Math.max(4, percentual) : 0}%`;
 
-  const temConteudo = entradas.length > 0;
+  const temConteudo = lista.length > 0;
   elBtnBaixar.disabled = !temConteudo;
   elBtnLimpar.disabled = !temConteudo;
   elListaPaginas.hidden = !temConteudo;
-  if (temConteudo) renderizarLista(paginas);
+  if (temConteudo) renderizarLista(lista);
 
-  return { totalBytes, quantidade: entradas.length };
+  atualizarEstadoVazio();
 }
 
 function atualizarEstadoVazio() {
@@ -117,21 +113,18 @@ function atualizarEstadoVazio() {
   elEstadoVazio.hidden = elAlternar.checked || !semConteudo;
 }
 
-async function iniciar() {
+async function atualizarAbaAtual() {
   const [aba] = await chrome.tabs.query({
     active: true,
     currentWindow: true,
   });
 
-  const resultadoStorage = await chrome.storage.local.get([
-    CHAVE_PAGINAS,
-    CHAVE_ABAS_ATIVAS,
-  ]);
-  renderizarAcervo(resultadoStorage[CHAVE_PAGINAS] || {});
-
   if (!aba || !aba.id) {
+    tabId = null;
     elSiteAtual.textContent = "Nenhuma aba ativa";
     elAlternar.disabled = true;
+    elAlternar.checked = false;
+    elPonto.classList.remove("ligado");
     atualizarEstadoVazio();
     return;
   }
@@ -143,15 +136,25 @@ async function iniciar() {
   if (restrito) {
     elSiteAtual.textContent = "Esta página não pode ser captada";
     elAlternar.disabled = true;
+    elAlternar.checked = false;
+    elPonto.classList.remove("ligado");
     atualizarEstadoVazio();
     return;
   }
 
-  const abasAtivas = new Set(resultadoStorage[CHAVE_ABAS_ATIVAS] || []);
+  elAlternar.disabled = false;
+  const resultado = await chrome.storage.local.get(CHAVE_ABAS_ATIVAS);
+  const abasAtivas = new Set(resultado[CHAVE_ABAS_ATIVAS] || []);
   const ativoNestaAba = abasAtivas.has(tabId);
   elAlternar.checked = ativoNestaAba;
   elPonto.classList.toggle("ligado", ativoNestaAba);
   atualizarEstadoVazio();
+}
+
+async function iniciar() {
+  const resultado = await chrome.storage.local.get(CHAVE_CAPTURAS);
+  renderizarAcervo(resultado[CHAVE_CAPTURAS] || []);
+  await atualizarAbaAtual();
 }
 
 elAlternar.addEventListener("change", async () => {
@@ -169,8 +172,6 @@ elAlternar.addEventListener("change", async () => {
   elAlternar.disabled = false;
 
   if (resposta && resposta.ok === false) {
-    // Não deu para falar com a página (aba aberta antes de instalar a
-    // extensão, página interna do navegador, etc.). Desfaz o toggle e avisa.
     elAlternar.checked = false;
     elPonto.classList.remove("ligado");
     elUltimaAtualizacao.textContent =
@@ -181,22 +182,21 @@ elAlternar.addEventListener("change", async () => {
 });
 
 elBtnBaixar.addEventListener("click", async () => {
-  const resultado = await chrome.storage.local.get(CHAVE_PAGINAS);
-  const paginas = resultado[CHAVE_PAGINAS] || {};
-  const entradas = Object.values(paginas);
-  if (entradas.length === 0) return;
+  const resultado = await chrome.storage.local.get(CHAVE_CAPTURAS);
+  const capturas = resultado[CHAVE_CAPTURAS] || [];
+  if (capturas.length === 0) return;
 
   const exportacao = {
     geradoEm: new Date().toISOString(),
-    totalPaginas: entradas.length,
-    totalBytes: entradas.reduce((s, p) => s + (p.tamanhoBytes || 0), 0),
-    paginas: entradas.map((p) => ({
-      url: p.url,
-      titulo: p.titulo,
-      tamanhoBytes: p.tamanhoBytes,
-      capturadoEm: new Date(p.capturadoEm).toISOString(),
-      atualizadoEm: new Date(p.atualizadoEm).toISOString(),
-      html: p.html,
+    totalCapturas: capturas.length,
+    totalPaginas: new Set(capturas.map((c) => c.url)).size,
+    totalBytes: capturas.reduce((s, c) => s + (c.tamanhoBytes || 0), 0),
+    capturas: capturas.map((c) => ({
+      url: c.url,
+      titulo: c.titulo,
+      tamanhoBytes: c.tamanhoBytes,
+      capturadoEm: new Date(c.capturadoEm).toISOString(),
+      html: c.html,
     })),
   };
 
@@ -220,23 +220,32 @@ elBtnBaixar.addEventListener("click", async () => {
 
 elBtnLimpar.addEventListener("click", async () => {
   const confirmado = window.confirm(
-    "Isso apaga todo o acervo acumulado (todas as páginas captadas até agora). Continuar?",
+    "Isso apaga TODO o acervo acumulado (todas as capturas até agora). Continuar?",
   );
   if (!confirmado) return;
 
   await chrome.runtime.sendMessage({ tipo: "limpar-tudo" });
-  renderizarAcervo({});
-  atualizarEstadoVazio();
+  renderizarAcervo([]);
 });
 
-// Mantém o popup atualizado ao vivo, inclusive enquanto outra aba está
-// captando em segundo plano.
+// Atualiza a métrica ao vivo enquanto o painel fica aberto (inclusive quando
+// outra aba está captando em segundo plano).
 chrome.storage.onChanged.addListener((mudancas, area) => {
   if (area !== "local") return;
-  if (mudancas[CHAVE_PAGINAS]) {
-    renderizarAcervo(mudancas[CHAVE_PAGINAS].newValue || {});
-    atualizarEstadoVazio();
+  if (mudancas[CHAVE_CAPTURAS]) {
+    renderizarAcervo(mudancas[CHAVE_CAPTURAS].newValue || []);
+  }
+  if (mudancas[CHAVE_ABAS_ATIVAS]) {
+    atualizarAbaAtual();
   }
 });
+
+// Como o painel lateral permanece aberto ao navegar, ele acompanha a aba
+// ativa do momento (toggle + site mostrado).
+chrome.tabs.onActivated.addListener(atualizarAbaAtual);
+chrome.tabs.onUpdated.addListener((_id, changeInfo) => {
+  if (changeInfo.status === "complete" || changeInfo.url) atualizarAbaAtual();
+});
+chrome.windows.onFocusChanged.addListener(atualizarAbaAtual);
 
 iniciar();
