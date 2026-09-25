@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>Captura de Código</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="painel">
+      <header class="cabecalho">
+        <div class="titulo">
+          <span class="ponto" id="ponto-status"></span>
+          <h1>Captura de Código</h1>
+        </div>
+        <label class="interruptor" title="Ativar ou desativar a captura">
+          <input type="checkbox" id="alternar" />
+          <span class="trilho"></span>
+        </label>
+      </header>
+
+      <p class="site-atual" id="site-atual">carregando…</p>
+
+      <section class="metrica">
+        <div class="metrica-linha">
+          <span class="metrica-rotulo">Capturado</span>
+          <span class="metrica-valor" id="tamanho-captado">0 B</span>
+        </div>
+        <div class="barra">
+          <div class="barra-preenchimento" id="barra-preenchimento"></div>
+        </div>
+        <p class="metrica-legenda" id="ultima-atualizacao">
+          Nenhuma captura ainda
+        </p>
+      </section>
+
+      <p class="estado-vazio" id="estado-vazio" hidden>
+        Ative o interruptor acima para começar a captar o código-fonte desta
+        página. A captura é atualizada automaticamente conforme a página
+        muda.
+      </p>
+
+      <footer class="acoes">
+        <button id="btn-baixar" class="botao botao-primario" disabled>
+          Baixar código captado
+        </button>
+        <button id="btn-limpar" class="botao botao-secundario" disabled>
+          Limpar
+        </button>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

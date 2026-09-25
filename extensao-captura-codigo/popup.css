@@ -1,0 +1,221 @@
+:root {
+  --azul: #2563eb;
+  --azul-escuro: #1d4ed8;
+  --verde: #16a34a;
+  --cinza-100: #f3f4f6;
+  --cinza-200: #e5e7eb;
+  --cinza-500: #6b7280;
+  --cinza-700: #374151;
+  --cinza-900: #111827;
+  --vermelho: #dc2626;
+  font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 300px;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  color: var(--cinza-900);
+  background: #fff;
+}
+
+.painel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.titulo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.titulo h1 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ponto {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--cinza-500);
+  flex-shrink: 0;
+  transition: background-color 0.2s ease;
+}
+
+.ponto.ligado {
+  background: var(--verde);
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.15);
+}
+
+.site-atual {
+  margin: -6px 0 0;
+  font-size: 12px;
+  color: var(--cinza-500);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Interruptor (toggle switch) */
+.interruptor {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.interruptor input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.trilho {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: var(--cinza-200);
+  border-radius: 999px;
+  transition: background-color 0.2s ease;
+}
+
+.trilho::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 2px;
+  top: 2px;
+  background-color: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.interruptor input:checked + .trilho {
+  background-color: var(--verde);
+}
+
+.interruptor input:checked + .trilho::before {
+  transform: translateX(18px);
+}
+
+.metrica {
+  background: var(--cinza-100);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.metrica-linha {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.metrica-rotulo {
+  font-size: 12px;
+  color: var(--cinza-500);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.metrica-valor {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.barra {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--cinza-200);
+  overflow: hidden;
+}
+
+.barra-preenchimento {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--azul), var(--azul-escuro));
+  transition:
+    width 0.3s ease,
+    background-color 0.3s ease;
+}
+
+.metrica-legenda {
+  margin: 0;
+  font-size: 11px;
+  color: var(--cinza-500);
+}
+
+.estado-vazio {
+  margin: 0;
+  font-size: 12px;
+  color: var(--cinza-500);
+  line-height: 1.5;
+}
+
+.acoes {
+  display: flex;
+  gap: 8px;
+}
+
+.botao {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    opacity 0.15s ease,
+    transform 0.1s ease;
+}
+
+.botao:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.botao:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.botao-primario {
+  background: var(--azul);
+  color: #fff;
+}
+
+.botao-primario:hover:not(:disabled) {
+  background: var(--azul-escuro);
+}
+
+.botao-secundario {
+  background: var(--cinza-100);
+  color: var(--cinza-700);
+}
+
+.botao-secundario:hover:not(:disabled) {
+  background: var(--cinza-200);
+}
