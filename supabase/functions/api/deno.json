@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "npm:@google/genai@2.8.0": "npm:@google/genai@2.8.0",
+    "npm:unpdf": "npm:unpdf@^1"
+  }
+}

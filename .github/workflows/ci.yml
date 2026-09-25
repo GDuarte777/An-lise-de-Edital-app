@@ -36,13 +36,21 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
-      - name: Verificar tipos
+      - name: Verificar tipos do frontend
         run: npm run lint
+
+      # O backend roda no Deno, no Supabase, e não há Deno neste runner. Os
+      # tipos em tipos/edge-shims.d.ts permitem conferi-lo com o mesmo tsc do
+      # resto do projeto — sem isso, o único lugar onde um erro de tipo no
+      # backend apareceria seria a produção.
+      - name: Verificar tipos do backend (Supabase)
+        run: npm run typecheck:edge
 
       - name: Rodar testes
         run: npm test
 
-      # O build cobre o que a checagem de tipos não pega: import quebrado,
-      # asset ausente e o empacotamento do servidor para a Vercel.
+      # O build cobre o que a checagem de tipos não pega: import quebrado e
+      # asset ausente. A Vercel publica só o resultado disto — o backend vai
+      # para o Supabase pelo workflow deploy-supabase.yml.
       - name: Build de produção
         run: npm run build

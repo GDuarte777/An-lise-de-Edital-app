@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "./supabaseClient";
+import { urlDaApi, cabecalhosDaApi } from "./apiBase";
 
 export function getActiveAiConfig() {
   const provider = localStorage.getItem("ai_active_provider") || "gemini";
@@ -150,6 +151,7 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      ...cabecalhosDaApi(),
       ...(options.headers || {}),
     };
 
@@ -170,7 +172,7 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
       fetchOptions.body = JSON.stringify({ ...bodyObj, aiConfig: finalAiConfig });
     }
 
-    const response = await fetch(url, fetchOptions);
+    const response = await fetch(urlDaApi(url), fetchOptions);
     return response;
   } catch (error: any) {
     if (error?.message?.includes("Failed to fetch") || error?.message?.includes("fetch")) {
