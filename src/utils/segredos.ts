@@ -1,4 +1,13 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
+// Buffer é importado explicitamente, e não usado como global.
+//
+// No Node ele existe sem import e o arquivo funcionava. No Deno — que é onde o
+// backend roda — Buffer NÃO é global, e a primeira linha a tocá-lo derrubava a
+// função inteira na carga do módulo com "Buffer is not defined". O defeito
+// ficou adormecido enquanto AI_KEYS_ENCRYPTION_KEY não estava configurada,
+// porque derivarChaveMestra retorna antes de chegar ao Buffer; configurar a
+// chave acordou ele e tirou todas as rotas do ar de uma vez.
+import { Buffer } from "node:buffer";
 
 // ═══════════════════════════════════════════════════════════════════════
 // CHAVES DE IA CRIPTOGRAFADAS EM REPOUSO
