@@ -1,8 +1,9 @@
 # Extensão — Captura de Código de Sites
 
 Extensão de navegador (Chrome / Edge / outros baseados em Chromium,
-Manifest V3) que capta o HTML da página que você está visitando, mostra em
-tempo real quanto já foi captado e deixa baixar o resultado num clique.
+Manifest V3) que capta o HTML das páginas que você visita, acumula tudo num
+**acervo único** (persiste entre abas, sites e até reinícios do navegador) e
+deixa baixar o resultado consolidado em JSON.
 
 ## O que ela faz
 
@@ -12,11 +13,20 @@ tempo real quanto já foi captado e deixa baixar o resultado num clique.
   e recaptura o HTML sempre que a página muda (conteúdo carregado
   dinamicamente, SPA navegando entre telas, etc.), com um pequeno atraso
   para não recapturar a cada micro-alteração.
-- O popup mostra o **tamanho já captado** (B / KB / MB), uma barra de
-  progresso visual e o horário da última atualização.
-- Botão **"Baixar código captado"**: salva o HTML captado como um arquivo
-  `.html` na pasta de downloads do navegador.
-- Botão **"Limpar"**: descarta a captura da aba atual.
+- **O acervo é acumulativo e global**: cada página captada vira uma entrada
+  (por URL) num único acervo compartilhado. Trocar de aba, fechar a aba ou
+  captar em várias abas ao mesmo tempo **não zera nada** — o total só cresce.
+  Recapturar a mesma URL atualiza o conteúdo daquela entrada (mantém a data
+  da primeira captura, atualiza a da última).
+- O popup mostra o **total acumulado** (B / KB / MB), quantas páginas estão
+  no acervo, a lista das páginas captadas (título, URL e tamanho de cada
+  uma) e o horário da última atualização.
+- Botão **"Baixar tudo (JSON)"**: baixa um único arquivo `.json` com todas as
+  páginas do acervo (`url`, `titulo`, `tamanhoBytes`, `capturadoEm`,
+  `atualizadoEm` e `html` de cada uma) — pronto para importar em outra
+  plataforma.
+- Botão **"Limpar tudo"**: apaga o acervo inteiro (pede confirmação, porque é
+  destrutivo).
 - Se você navegar para outra página na mesma aba com a captura ligada, ela
   religa automaticamente na página nova.
 
@@ -29,21 +39,47 @@ tempo real quanto já foi captado e deixa baixar o resultado num clique.
 5. O ícone da extensão aparece na barra de ferramentas — fixe-o para acesso
    rápido.
 
+Se já tinha instalado uma versão anterior, clique em **Recarregar** no card
+da extensão em `chrome://extensions` em vez de instalar de novo.
+
 ## Como usar
 
-1. Abra o site cujo código você quer captar.
+1. Abra o primeiro site cujo código você quer captar.
 2. Clique no ícone da extensão e ative o interruptor.
-3. Acompanhe o tamanho captado crescendo conforme a página carrega/atualiza.
-4. Clique em **Baixar código captado** para salvar o HTML atual.
+3. Navegue à vontade — dentro da mesma aba, em abas novas, em sites
+   diferentes. Ligue o interruptor em cada aba que quiser captar; o total no
+   popup vai somando tudo.
+4. Quando quiser, clique em **Baixar tudo (JSON)** para exportar o acervo
+   inteiro acumulado até aquele momento.
+
+## Formato do JSON exportado
+
+```json
+{
+  "geradoEm": "2026-09-25T12:00:00.000Z",
+  "totalPaginas": 2,
+  "totalBytes": 48213,
+  "paginas": [
+    {
+      "url": "https://exemplo.com/pagina-a",
+      "titulo": "Página A",
+      "tamanhoBytes": 21034,
+      "capturadoEm": "2026-09-25T11:58:10.000Z",
+      "atualizadoEm": "2026-09-25T11:59:40.000Z",
+      "html": "<html>...</html>"
+    }
+  ]
+}
+```
 
 ## Estrutura
 
 | Arquivo | Papel |
 | --- | --- |
 | `manifest.json` | Configuração da extensão (MV3) |
-| `content.js` | Roda dentro da página; captura `document.documentElement.outerHTML` e observa mudanças no DOM |
-| `background.js` | Service worker; guarda quais abas estão com captura ativa e religa a captura após navegações |
-| `popup.html` / `popup.css` / `popup.js` | Interface do popup (interruptor, métrica, botões) |
+| `content.js` | Roda dentro da página; captura `document.documentElement.outerHTML`, observa mudanças no DOM e manda cada captura para o background |
+| `background.js` | Service worker; mantém o acervo acumulado (`paginas_captadas`) e quais abas estão com captura ativa (`abas_ativas`), religando a captura após navegações |
+| `popup.html` / `popup.css` / `popup.js` | Interface do popup (interruptor, métrica do acervo, lista de páginas, botões) |
 | `icons/` | Ícones da extensão |
 
 ## Limitações conhecidas
@@ -53,5 +89,8 @@ tempo real quanto já foi captado e deixa baixar o resultado num clique.
 - O que é captado é o HTML renderizado no momento (DOM atual), não o
   "view-source" original do servidor — isso é intencional, já que inclui o
   conteúdo montado por JavaScript.
-- A captura vive em `chrome.storage.local` por aba; fechar a aba descarta a
-  captura correspondente.
+- O acervo vive em `chrome.storage.local` da extensão — some se você
+  desinstalar a extensão ou limpar os dados dela manualmente, mas
+  **sobrevive** a fechar abas, fechar o navegador e reiniciar o computador.
+- Cada URL distinta é uma entrada; recapturar a mesma URL substitui o
+  conteúdo daquela entrada (não duplica).

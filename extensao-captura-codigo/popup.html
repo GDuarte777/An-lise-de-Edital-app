@@ -12,7 +12,7 @@
           <span class="ponto" id="ponto-status"></span>
           <h1>Captura de Código</h1>
         </div>
-        <label class="interruptor" title="Ativar ou desativar a captura">
+        <label class="interruptor" title="Ativar ou desativar a captura nesta aba">
           <input type="checkbox" id="alternar" />
           <span class="trilho"></span>
         </label>
@@ -22,7 +22,7 @@
 
       <section class="metrica">
         <div class="metrica-linha">
-          <span class="metrica-rotulo">Capturado</span>
+          <span class="metrica-rotulo">Total acumulado</span>
           <span class="metrica-valor" id="tamanho-captado">0 B</span>
         </div>
         <div class="barra">
@@ -31,20 +31,23 @@
         <p class="metrica-legenda" id="ultima-atualizacao">
           Nenhuma captura ainda
         </p>
+        <p class="metrica-legenda" id="contagem-paginas">0 páginas no acervo</p>
       </section>
+
+      <ul class="lista-paginas" id="lista-paginas" hidden></ul>
 
       <p class="estado-vazio" id="estado-vazio" hidden>
         Ative o interruptor acima para começar a captar o código-fonte desta
-        página. A captura é atualizada automaticamente conforme a página
-        muda.
+        página. Tudo o que for captado fica acumulado no acervo — trocar ou
+        fechar a aba não apaga nada.
       </p>
 
       <footer class="acoes">
         <button id="btn-baixar" class="botao botao-primario" disabled>
-          Baixar código captado
+          Baixar tudo (JSON)
         </button>
         <button id="btn-limpar" class="botao botao-secundario" disabled>
-          Limpar
+          Limpar tudo
         </button>
       </footer>
     </main>

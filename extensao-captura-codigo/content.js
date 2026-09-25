@@ -1,6 +1,7 @@
 // content.js — roda dentro da página e é responsável por capturar o HTML
-// atual sempre que a captura estiver ativa, guardando o resultado no
-// chrome.storage.local para que o popup possa ler o tamanho e baixar.
+// atual sempre que a captura estiver ativa. Não grava nada localmente: só
+// manda o resultado para o background, que é quem mantém o acervo
+// acumulado (global, entre todas as abas e sites) em chrome.storage.local.
 
 (() => {
   // Evita registrar tudo de novo se o background injetar este script mais
@@ -9,29 +10,22 @@
   if (window.__capturaCodigoInjetado) return;
   window.__capturaCodigoInjetado = true;
 
-  const CHAVE_PREFIXO = "captura_";
   let ativo = false;
   let observer = null;
   let temporizador = null;
-
-  function chaveEstado(tabId) {
-    return `${CHAVE_PREFIXO}${tabId}`;
-  }
 
   function capturarAgora(tabId) {
     const html = document.documentElement.outerHTML;
     const tamanhoBytes = new Blob([html]).size;
 
-    const estado = {
-      ativo: true,
-      html,
-      tamanhoBytes,
+    chrome.runtime.sendMessage({
+      tipo: "atualizar-captura",
+      tabId,
       url: location.href,
       titulo: document.title || location.hostname,
-      atualizadoEm: Date.now(),
-    };
-
-    chrome.storage.local.set({ [chaveEstado(tabId)]: estado });
+      html,
+      tamanhoBytes,
+    });
   }
 
   function agendarCaptura(tabId) {
@@ -60,34 +54,16 @@
     clearTimeout(temporizador);
   }
 
-  async function marcarInativo(tabId) {
-    const chave = chaveEstado(tabId);
-    const resultado = await chrome.storage.local.get(chave);
-    const estadoAtual = resultado[chave];
-    if (estadoAtual) {
-      await chrome.storage.local.set({
-        [chave]: { ...estadoAtual, ativo: false },
-      });
-    }
-  }
-
   chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
     if (!mensagem || typeof mensagem.tipo !== "string") return;
 
     if (mensagem.tipo === "definir-ativo") {
-      const tabId = mensagem.tabId;
       ativo = mensagem.ativo;
       if (ativo) {
-        iniciarObservacao(tabId);
+        iniciarObservacao(mensagem.tabId);
       } else {
         pararObservacao();
-        marcarInativo(tabId);
       }
-      responder({ ok: true });
-    }
-
-    if (mensagem.tipo === "recapturar-agora") {
-      if (ativo) capturarAgora(mensagem.tabId);
       responder({ ok: true });
     }
 

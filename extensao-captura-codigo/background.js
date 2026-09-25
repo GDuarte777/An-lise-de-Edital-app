@@ -1,8 +1,13 @@
-// background.js — service worker (MV3). Mantém a lista de abas com captura
-// ativa e reenvia o comando de "ligar" toda vez que a aba navega para uma
-// nova página (o content script é reinjetado do zero a cada navegação).
+// background.js — service worker (MV3).
+//
+// Mantém dois pedaços de estado em chrome.storage.local:
+//   - "abas_ativas": quais abas têm o interruptor ligado agora.
+//   - "paginas_captadas": o ACERVO ACUMULADO, global — uma entrada por URL
+//     distinta, que só é atualizada (nunca zerada) enquanto novas capturas
+//     chegam, não importa em qual aba ou quantas vezes você troque de aba.
 
 const CHAVE_ABAS_ATIVAS = "abas_ativas";
+const CHAVE_PAGINAS = "paginas_captadas";
 
 async function obterAbasAtivas() {
   const resultado = await chrome.storage.local.get(CHAVE_ABAS_ATIVAS);
@@ -12,6 +17,36 @@ async function obterAbasAtivas() {
 async function salvarAbasAtivas(conjunto) {
   await chrome.storage.local.set({
     [CHAVE_ABAS_ATIVAS]: Array.from(conjunto),
+  });
+}
+
+// O service worker é single-thread, mas as chamadas a chrome.storage são
+// assíncronas (get → modifica → set). Se duas abas capturarem quase ao
+// mesmo tempo, um "get" pode ler um valor desatualizado antes do "set" da
+// outra. Serializamos todas as escritas no acervo numa fila simples para
+// que cada atualização parta sempre do estado mais recente.
+let filaDeEscrita = Promise.resolve();
+function enfileirarEscrita(tarefa) {
+  filaDeEscrita = filaDeEscrita.then(tarefa, tarefa);
+  return filaDeEscrita;
+}
+
+async function atualizarPagina({ url, titulo, html, tamanhoBytes }) {
+  return enfileirarEscrita(async () => {
+    const resultado = await chrome.storage.local.get(CHAVE_PAGINAS);
+    const paginas = resultado[CHAVE_PAGINAS] || {};
+
+    const existente = paginas[url];
+    paginas[url] = {
+      url,
+      titulo,
+      html,
+      tamanhoBytes,
+      capturadoEm: existente?.capturadoEm || Date.now(),
+      atualizadoEm: Date.now(),
+    };
+
+    await chrome.storage.local.set({ [CHAVE_PAGINAS]: paginas });
   });
 }
 
@@ -50,6 +85,13 @@ async function enviarParaConteudo(tabId, mensagem) {
 
 chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
   if (!mensagem || typeof mensagem.tipo !== "string") return;
+
+  if (mensagem.tipo === "atualizar-captura") {
+    // Vem do content script: soma/atualiza a entrada dessa URL no acervo
+    // global. Não precisa responder nada de volta.
+    atualizarPagina(mensagem);
+    return false;
+  }
 
   if (mensagem.tipo === "alternar-captura") {
     (async () => {
@@ -95,12 +137,11 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
     return true;
   }
 
-  if (mensagem.tipo === "limpar-captura") {
+  if (mensagem.tipo === "limpar-tudo") {
     (async () => {
-      await chrome.storage.local.remove(`captura_${mensagem.tabId}`);
-      const abas = await obterAbasAtivas();
-      abas.delete(mensagem.tabId);
-      await salvarAbasAtivas(abas);
+      await enfileirarEscrita(async () => {
+        await chrome.storage.local.remove(CHAVE_PAGINAS);
+      });
       responder({ ok: true });
     })();
     return true;
@@ -109,7 +150,8 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
 
 // Quando uma aba termina de carregar uma nova página, se ela estava marcada
 // como "ativa", religa a captura automaticamente (o content script antigo
-// morreu junto com a navegação).
+// morreu junto com a navegação). O acervo acumulado não é afetado — a nova
+// página só entra como mais uma entrada.
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== "complete") return;
   const abas = await obterAbasAtivas();
@@ -122,11 +164,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   }
 });
 
-// Limpeza ao fechar a aba.
+// Fechar a aba só tira ela da lista de "ativas" — o que já foi captado
+// permanece no acervo acumulado.
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const abas = await obterAbasAtivas();
   if (abas.delete(tabId)) {
     await salvarAbasAtivas(abas);
   }
-  await chrome.storage.local.remove(`captura_${tabId}`);
 });

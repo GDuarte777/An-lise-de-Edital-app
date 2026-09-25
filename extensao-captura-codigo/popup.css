@@ -168,6 +168,58 @@ body {
   color: var(--cinza-500);
 }
 
+.lista-paginas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--cinza-200);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.lista-paginas li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cinza-200);
+}
+
+.lista-paginas li:last-child {
+  border-bottom: none;
+}
+
+.lista-paginas .item-titulo {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cinza-900);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lista-paginas .item-info {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--cinza-500);
+}
+
+.lista-paginas .item-info span:first-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lista-paginas .item-info span:last-child {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .estado-vazio {
   margin: 0;
   font-size: 12px;
