@@ -1,0 +1,91 @@
+{
+  "manifest_version": 3,
+  "name": "HORASIS — Robô de Lances",
+  "version": "1.0.0",
+  "description": "Motor de disputa com seleção de itens, piso de margem e bloqueio de lances fora da configuração. Comprasnet e Licitanet.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.supabase.co/*",
+    "https://*.gov.br/*",
+    "https://*.serpro.gov.br/*",
+    "https://serpro.gov.br/*",
+    "https://*.licitanet.com.br/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.gov.br/*",
+        "https://*.serpro.gov.br/*",
+        "https://serpro.gov.br/*"
+      ],
+      "js": [
+        "netprobe.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://cnetmobile.estaleiro.serpro.gov.br/*"
+      ],
+      "js": [
+        "dispute.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://portal.licitanet.com.br/*"
+      ],
+      "js": [
+        "licitanet-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://portal.licitanet.com.br/*"
+      ],
+      "js": [
+        "licitanet-dispute.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icone.png",
+        "icone-128.png"
+      ],
+      "matches": [
+        "https://*.gov.br/*",
+        "https://*.serpro.gov.br/*",
+        "https://*.licitanet.com.br/*"
+      ]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "HORASIS — Robô de Lances",
+    "default_icon": {
+      "16": "icone-16.png",
+      "48": "icone-48.png",
+      "128": "icone-128.png"
+    }
+  },
+  "icons": {
+    "16": "icone-16.png",
+    "48": "icone-48.png",
+    "128": "icone-128.png"
+  }
+}

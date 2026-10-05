@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>HORASIS — Robô de Lances</title>
+  <style>
+    /* ───────────────────────────────────────────────────────────────
+       Identidade HORASIS: navy #182548 e dourado #C09A52, as duas cores
+       do símbolo. O popup é escuro porque ele convive com a sala de
+       disputa — uma tela clara piscando sobre o portal a cada clique
+       cansa em um pregão de três horas.
+       ─────────────────────────────────────────────────────────────── */
+    :root {
+      --navy-900: #0C1428;
+      --navy-800: #121D38;
+      --navy-700: #182548;
+      --navy-600: #22325C;
+      --linha:    #2A3A63;
+      --gold:     #C09A52;
+      --gold-sw:  #E0C489;
+      --texto:    #EEF1F7;
+      --suave:    #96A3BE;
+      --ok:       #3DD598;
+      --erro:     #FF8A8A;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      width: 352px;
+      margin: 0;
+      padding: 0;
+      background: var(--navy-900);
+      color: var(--texto);
+      font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+      font-size: 13px;
+    }
+
+    /* Cabeçalho ─ faixa navy com o fio dourado embaixo, que é a assinatura
+       visual da marca e reaparece no painel da disputa. */
+    header {
+      background: linear-gradient(180deg, var(--navy-700), var(--navy-800));
+      border-bottom: 1px solid var(--linha);
+      box-shadow: inset 0 -2px 0 var(--gold);
+      padding: 14px 16px 13px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    header img {
+      width: 28px; height: 28px;
+      background: #fff;
+      border-radius: 50%;
+      padding: 3px;
+      box-sizing: border-box;
+    }
+    .marca { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+    .marca b {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: #fff;
+    }
+    .marca span { font-size: 10px; color: var(--gold-sw); letter-spacing: .05em; }
+    .versao {
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--suave);
+      border: 1px solid var(--linha);
+      border-radius: 999px;
+      padding: 2px 7px;
+      white-space: nowrap;
+    }
+
+    main { padding: 15px 16px 16px; }
+
+    label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+      color: var(--suave);
+      margin: 0 0 5px;
+    }
+    label + input { margin-bottom: 12px; }
+
+    input {
+      width: 100%;
+      padding: 9px 11px;
+      background: var(--navy-800);
+      border: 1px solid var(--linha);
+      border-radius: 8px;
+      color: var(--texto);
+      font-size: 12px;
+      font-family: inherit;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input::placeholder { color: #5E6E8E; }
+    input:focus {
+      outline: none;
+      border-color: var(--gold);
+      box-shadow: 0 0 0 3px rgba(192, 154, 82, 0.16);
+    }
+
+    button {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: filter .15s, background .15s;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:active { filter: brightness(0.94); }
+
+    /* O botão primário é dourado sobre navy: no painel da disputa o mesmo par
+       marca a ação que envia lance, então a cor significa a mesma coisa nos
+       dois lugares. */
+    .primario { background: var(--gold); color: var(--navy-900); }
+    .secundario {
+      margin-top: 8px;
+      background: transparent;
+      border: 1px solid var(--linha);
+      color: var(--texto);
+    }
+    .secundario:hover { background: var(--navy-800); }
+
+    .status {
+      margin-top: 11px;
+      padding: 9px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      line-height: 1.45;
+      text-align: center;
+      border: 1px solid transparent;
+    }
+    .status.ok  { background: rgba(61, 213, 152, 0.10); border-color: rgba(61, 213, 152, 0.35); color: var(--ok); }
+    .status.err { background: rgba(255, 138, 138, 0.10); border-color: rgba(255, 138, 138, 0.35); color: var(--erro); }
+
+    details {
+      margin-top: 14px;
+      border-top: 1px solid var(--linha);
+      padding-top: 11px;
+    }
+    summary {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--suave);
+      cursor: pointer;
+      list-style: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: '▸ '; color: var(--gold); }
+    details[open] summary::before { content: '▾ '; }
+    .ajuda {
+      font-size: 11px;
+      color: var(--suave);
+      line-height: 1.6;
+      margin: 10px 0 0;
+    }
+    .ajuda b { color: var(--texto); font-weight: 600; }
+    .ajuda p { margin: 0 0 8px; }
+    .ajuda p:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="icone-48.png" alt="HORASIS" />
+    <span class="marca">
+      <b>Horasis</b>
+      <span>Robô de Lances</span>
+    </span>
+    <span class="versao">v1.0.0</span>
+  </header>
+
+  <main>
+    <label for="appId">App ID</label>
+    <input id="appId" placeholder="Cole aqui o App ID" autocomplete="off" spellcheck="false" />
+
+    <label for="token">Token de acesso</label>
+    <input id="token" type="password" placeholder="Cole aqui o Token" autocomplete="off" />
+
+    <label for="botId" id="botLabel">ID do robô (opcional)</label>
+    <input id="botId" placeholder="Para apenas monitorar, deixe vazio" autocomplete="off" spellcheck="false" />
+
+    <button class="primario" id="save">Salvar configuração</button>
+    <button class="secundario" id="openDispute">Abrir painel da disputa</button>
+
+    <div class="status" id="status" style="display:none;"></div>
+
+    <details>
+      <summary>Como usar</summary>
+      <div class="ajuda">
+        <p>Copie o <b>App ID</b> e o <b>Token</b> na página <b>Conectar Robô</b> do HORASIS e cole nos campos acima.</p>
+        <p><b>Duas disputas ao mesmo tempo:</b> abra cada compra em uma aba do Comprasnet, cole o ID do robô correspondente no popup <i>daquela aba</i> e salve. Mantenha as duas abas abertas e confira "compra e robô conferidos" antes de iniciar cada motor.</p>
+        <p>Na sala de disputa do <b>Licitanet</b> o motor abre sozinho — basta estar logado como fornecedor.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Avançado</summary>
+      <div class="ajuda">
+        <p>Endereço do backend. Em branco, usa o ambiente de produção do HORASIS.</p>
+        <input id="apiBase" placeholder="https://…/functions/v1" autocomplete="off" spellcheck="false" style="margin-top:6px" />
+      </div>
+    </details>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>
