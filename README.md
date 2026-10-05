@@ -97,7 +97,7 @@ que para sozinho justamente quando mais importa.
 ```bash
 npm run lint            # tipos do frontend
 npm run typecheck:edge  # tipos do backend (Deno) com o tsc do projeto
-npm test                # 173 testes
+npm test                # 176 testes
 npm run build           # build de produção do frontend
 ```
 
