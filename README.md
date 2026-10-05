@@ -67,15 +67,37 @@ Configure em **Supabase → Edge Functions → api → Secrets**:
 | `SUPABASE_PROJECT_REF` | idem | opcional |
 | `GEMINI_API_KEY` + `ALLOW_SERVER_AI_KEY_FALLBACK=true` | Chave da plataforma, cobrada de quem publicou. Desligada por padrão: o modelo do produto é cada usuário trazer a sua. | opcional |
 | `DIAGNOSTICO_ATIVO=false` | Desliga a telemetria de diagnóstico na tabela `logs_diagnostico` | opcional |
+| `SUPABASE_SERVICE_ROLE_KEY` | Exigida pelo assistente de lances. O token da extensão não é um JWT do Supabase, então não há sessão para o Postgres aplicar RLS: o isolamento por conta é feito no código. Em muitos projetos a plataforma já injeta. | para o robô |
+| `HORASIS_APP_ID` | Restringe o assistente de lances a um App ID. Em branco, aceita qualquer um. | opcional |
 
 `SUPABASE_URL` e `SUPABASE_ANON_KEY` são injetados pela própria plataforma.
+
+## Robô de lances
+
+A disputa é operada por uma extensão do Chrome (`extensao/`), que lê o portal e
+executa — mas não decide. Quanto baixar e quando parar é decidido aqui, em
+`estrategiaLance.ts`, e entregue à extensão pela rota
+`POST /api/apps/<appId>/functions/bidAssistant`.
+
+A divisão é o ponto, não um detalhe de arquitetura: o que roda no navegador do
+operador pode ser lido e alterado por qualquer um com acesso àquela máquina, e
+o piso de margem — o valor abaixo do qual um lance vira prejuízo — não pode
+morar lá. Por isso o modelo de lance é a parte mais testada do backend
+(`tests/estrategiaLance.test.ts`) e falha fechada: sem piso configurado, sem
+redução configurada ou com número ilegível vindo do portal, a resposta é
+"não envie", nunca um valor aproximado.
+
+A extensão autentica com um token próprio, de vida longa, gerado em
+`POST /api/robos/tokens`. Não é o JWT da sessão do app porque ele expira em uma
+hora e um pregão passa de três: um token que morre no meio da disputa é um robô
+que para sozinho justamente quando mais importa.
 
 ## Verificações
 
 ```bash
 npm run lint            # tipos do frontend
 npm run typecheck:edge  # tipos do backend (Deno) com o tsc do projeto
-npm test                # 140 testes
+npm test                # 173 testes
 npm run build           # build de produção do frontend
 ```
 
@@ -93,6 +115,8 @@ apareça aqui, e não em produção.
 | `supabase/functions/api/nucleo.ts` | IA, extração de documentos, geradores locais, limitador de requisições |
 | `supabase/functions/api/segredos.ts` | Cópia de `src/utils/segredos.ts` (guardada por teste) |
 | `supabase/functions/api/pncpQuery.ts` | Cópia de `src/utils/pncpQuery.ts` (guardada por teste) |
+| `supabase/functions/api/roboLances.ts` | Assistente de lances: a rota que a extensão do navegador chama |
+| `supabase/functions/api/estrategiaLance.ts` | O modelo de lance — quanto baixar e quando parar |
 
 As duas cópias existem porque o Deno só enxerga os arquivos publicados junto da
 função. `tests/copiasDaBorda.test.ts` falha se elas divergirem do original.

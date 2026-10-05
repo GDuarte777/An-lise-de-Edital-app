@@ -13,6 +13,7 @@ function requisicao(parcial: Partial<Requisicao> = {}): Requisicao {
     originalUrl: "/api/health",
     headers: {},
     query: {},
+    params: {},
     body: {},
     socket: { remoteAddress: "" },
     ip: "",
@@ -38,6 +39,74 @@ describe("roteamento", () => {
     const saida = await app.despachar(requisicao({ path: "/api/chat" }));
 
     expect(saida.status).toBe(404);
+  });
+
+  it("extrai parâmetros do caminho e os entrega em req.params", async () => {
+    // O assistente de lances atende /api/apps/<appId>/functions/bidAssistant,
+    // formato herdado da extensão já instalada nas máquinas dos operadores.
+    const app = criarAplicativo();
+    let visto: Record<string, string> | null = null;
+    app.post("/api/apps/:appId/functions/bidAssistant", (req, res) => {
+      visto = req.params;
+      return res.json({ ok: true });
+    });
+
+    const saida = await app.despachar(
+      requisicao({ method: "POST", path: "/api/apps/6a28b2ee/functions/bidAssistant" }),
+    );
+
+    expect(saida.status).toBe(200);
+    expect(visto).toEqual({ appId: "6a28b2ee" });
+  });
+
+  it("não casa caminho com número de segmentos diferente", async () => {
+    const app = criarAplicativo();
+    app.post("/api/apps/:appId/functions/bidAssistant", (_req, res) => res.json({ nunca: true }));
+
+    const saida = await app.despachar(
+      requisicao({ method: "POST", path: "/api/apps/6a28b2ee/functions/bidAssistant/extra" }),
+    );
+
+    expect(saida.status).toBe(404);
+  });
+
+  it("não casa parâmetro vazio", async () => {
+    // Casar aqui deixaria a rota rodar sem o identificador, que é pior do que
+    // não casar: ela seguiria com appId indefinido.
+    const app = criarAplicativo();
+    app.post("/api/apps/:appId/functions/bidAssistant", (_req, res) => res.json({ nunca: true }));
+
+    const saida = await app.despachar(
+      requisicao({ method: "POST", path: "/api/apps//functions/bidAssistant" }),
+    );
+
+    expect(saida.status).toBe(404);
+  });
+
+  it("decodifica o parâmetro recebido", async () => {
+    const app = criarAplicativo();
+    let visto: Record<string, string> | null = null;
+    app.get("/api/robos/:id", (req, res) => {
+      visto = req.params;
+      return res.json({ ok: true });
+    });
+
+    await app.despachar(requisicao({ path: "/api/robos/pregao%2090012" }));
+
+    expect(visto).toEqual({ id: "pregao 90012" });
+  });
+
+  it("deixa req.params vazio em rota sem parâmetro", async () => {
+    const app = criarAplicativo();
+    let visto: Record<string, string> | null = null;
+    app.get("/api/health", (req, res) => {
+      visto = req.params;
+      return res.json({ status: "ok" });
+    });
+
+    await app.despachar(requisicao());
+
+    expect(visto).toEqual({});
   });
 
   it("devolve 404 em JSON para rota desconhecida", async () => {

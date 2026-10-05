@@ -48,8 +48,14 @@ import {
   temProximaPagina
 } from "./pncpQuery.ts";
 import type { EndpointContratacao } from "./pncpQuery.ts";
+import { registrarRotasRoboLances } from "./roboLances.ts";
 
 export function registrarRotas(app: AplicativoExpresso): void {
+  // O assistente de lances vive em módulo próprio: ele é o único caminho deste
+  // backend que decide dinheiro, e misturá-lo com as rotas de IA tornaria mais
+  // difícil enxergar quem pode mexer nele.
+  registrarRotasRoboLances(app);
+
   app.get("/api/health", (req, res) => {
     res.json({
       status: "ok",

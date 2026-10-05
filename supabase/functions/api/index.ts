@@ -143,6 +143,8 @@ Deno.serve(async (requisicao: Request) => {
     originalUrl: caminho + (url.search || ""),
     headers: cabecalhos,
     query,
+    // Preenchido pelo despachante quando a rota que casar tiver `:parametro`.
+    params: {},
     body: corpo,
     socket: { remoteAddress: cabecalhos["x-forwarded-for"] || "" },
     ip: (cabecalhos["x-forwarded-for"] || "").split(",")[0].trim(),

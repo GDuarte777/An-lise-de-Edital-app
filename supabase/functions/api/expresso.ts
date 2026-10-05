@@ -13,9 +13,14 @@
 // servidor Node praticamente sem alteração, e o que roda no Supabase é o mesmo
 // código que já rodava.
 //
-// O que esta camada NÃO faz, de propósito: parâmetros de rota (`/x/:id`),
-// roteadores aninhados e streaming. Nenhuma rota deste projeto usa nada disso;
-// implementar por precaução seria superfície sem cliente.
+// O que esta camada NÃO faz, de propósito: roteadores aninhados e streaming.
+// Nenhuma rota deste projeto usa; implementar por precaução seria superfície
+// sem cliente.
+//
+// Parâmetros de rota (`/x/:id`) entraram quando o assistente de lances passou
+// a atender `/api/apps/:appId/functions/bidAssistant`. O formato do caminho não
+// é escolha nossa: é o que a extensão já chama, e mantê-lo é o que permite
+// trocar de backend sem reempacotar a extensão instalada em cada máquina.
 // ═══════════════════════════════════════════════════════════════════════
 
 export interface Requisicao {
@@ -25,6 +30,8 @@ export interface Requisicao {
   originalUrl: string;
   headers: Record<string, string>;
   query: Record<string, string>;
+  /** Segmentos `:nome` do caminho registrado. Vazio para rotas sem parâmetro. */
+  params: Record<string, string>;
   body: any;
   socket: { remoteAddress: string };
   ip: string;
@@ -141,12 +148,23 @@ export class AplicativoExpresso {
   all(...args: any[]) { this.registrar(null, args); }
   use(...args: any[]) { this.registrar(null, args); }
 
-  private combina(registro: Registro, req: Requisicao): boolean {
-    if (registro.metodo && registro.metodo !== req.method) return false;
-    if (!registro.caminho) return true;
-    if (registro.metodo) return registro.caminho === req.path;
+  /**
+   * Diz se o registro atende esta requisição e, em caso afirmativo, devolve os
+   * parâmetros extraídos do caminho.
+   *
+   * Devolver `null` em vez de `false` é o que separa "não casou" de "casou sem
+   * parâmetro nenhum": um objeto vazio é um casamento válido.
+   */
+  private combina(registro: Registro, req: Requisicao): Record<string, string> | null {
+    if (registro.metodo && registro.metodo !== req.method) return null;
+    if (!registro.caminho) return {};
+    if (registro.metodo) {
+      if (registro.caminho === req.path) return {};
+      if (!registro.caminho.includes(":")) return null;
+      return casarParametros(registro.caminho, req.path);
+    }
     // `use("/api", fn)` casa com o prefixo, como no Express.
-    return req.path === registro.caminho || req.path.startsWith(registro.caminho + "/");
+    return req.path === registro.caminho || req.path.startsWith(registro.caminho + "/") ? {} : null;
   }
 
   /**
@@ -166,7 +184,9 @@ export class AplicativoExpresso {
       if (saida()) break;
       // Enquanto há erro em voo só rodam tratadores de erro; sem erro, só os comuns.
       if (Boolean(erroAtual) !== registro.ehErro) continue;
-      if (!this.combina(registro, req)) continue;
+      const parametros = this.combina(registro, req);
+      if (!parametros) continue;
+      req.params = parametros;
 
       let seguir = false;
       let proximoErro: any = null;
@@ -209,6 +229,35 @@ export class AplicativoExpresso {
       corpo: JSON.stringify({ error: `Rota não encontrada: ${req.method} ${req.originalUrl}` }),
     };
   }
+}
+
+/**
+ * Casa um caminho com `:nome` contra o caminho recebido.
+ *
+ * A comparação é segmento a segmento, sem expressão regular: um caminho de
+ * rota é dado nosso, mas o caminho recebido vem de fora, e montar uma regex
+ * com pedaço de entrada externa é como se constrói uma negação de serviço por
+ * backtracking sem perceber.
+ */
+function casarParametros(molde: string, caminho: string): Record<string, string> | null {
+  const segmentosMolde = molde.split("/");
+  const segmentosCaminho = caminho.split("/");
+  if (segmentosMolde.length !== segmentosCaminho.length) return null;
+
+  const params: Record<string, string> = {};
+  for (let i = 0; i < segmentosMolde.length; i++) {
+    const esperado = segmentosMolde[i];
+    const recebido = segmentosCaminho[i];
+    if (esperado.startsWith(":")) {
+      // Um segmento vazio casaria com `:appId` e deixaria a rota rodar sem o
+      // identificador, que é pior do que não casar.
+      if (!recebido) return null;
+      params[esperado.slice(1)] = decodeURIComponent(recebido);
+      continue;
+    }
+    if (esperado !== recebido) return null;
+  }
+  return params;
 }
 
 export function criarAplicativo(): AplicativoExpresso {
