@@ -2,10 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-// A aba só existe para configurar o piso de margem, e o piso de margem é a
-// única coisa entre o robô e um prejuízo real. O que está sob verificação aqui
-// é que a tela monta, que o aviso de item sem piso aparece e que o token
-// gerado chega à tela — não a camada de rede, que fica dublada.
+// Nenhum robô se cadastra aqui: ele nasce quando a extensão abre a sala de
+// disputa. A aba mostra o que cada disputa produziu e deixa ajustar o piso de
+// margem, que é a única coisa entre o robô e um prejuízo real. O que está sob
+// verificação é que a tela monta, que o aviso de item sem piso aparece e que o
+// token gerado chega à tela — não a camada de rede, que fica dublada.
 
 const robo = {
   id: "pregao-90012-2026",
@@ -78,11 +79,10 @@ vi.mock("../utils/roboLances", async () => {
     listarRobos: vi.fn(async () => [robo]),
     listarItens: vi.fn(async () => itens),
     listarTokens: vi.fn(async () => []),
+    lerPerfil: vi.fn(async () => real.PERFIL_PADRAO),
+    salvarPerfil: vi.fn(async (p: any) => p),
     gerarToken: (...args: any[]) => gerarToken(...(args as [])),
-    salvarRobo: vi.fn(async () => ({ sucesso: true, mensagem: "Robô salvo." })),
     salvarItens: vi.fn(async () => ({ sucesso: true, mensagem: "2 item(ns) salvo(s)." })),
-    excluirRobo: vi.fn(async () => true),
-    excluirItem: vi.fn(async () => true),
     revogarToken: vi.fn(async () => {}),
   };
 });
@@ -104,13 +104,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("aba do robô de lances", () => {
-  it("monta e lista os robôs da conta", async () => {
+  it("monta e lista as disputas que a extensão abriu", async () => {
     render(<LanceBotTab />);
     expect(await screen.findByText("Pregão 90012/2026")).toBeTruthy();
     expect(screen.getByDisplayValue("6a28b2eedb287c0541e5e303")).toBeTruthy();
   });
 
-  it("avisa quando um item marcado para participar não tem piso de margem", async () => {
+  it("não oferece cadastro de robô", async () => {
+    // O robô nasce na sala de disputa. Um botão de "novo robô" aqui traria de
+    // volta exatamente o passo prévio que se quis eliminar.
+    render(<LanceBotTab />);
+    await screen.findByText("Pregão 90012/2026");
+    expect(screen.queryByRole("button", { name: /novo rob/i })).toBeNull();
+  });
+
+  it("avisa quando um item da disputa não tem piso de margem", async () => {
     render(<LanceBotTab />);
     fireEvent.click(await screen.findByText("Pregão 90012/2026"));
 

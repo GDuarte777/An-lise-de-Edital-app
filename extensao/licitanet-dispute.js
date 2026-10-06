@@ -413,15 +413,14 @@
   // ===== Init =====
   pregao = detectPregao();
   if (!pregao) return;
-  chrome.storage.local.get(['hz_app_id', 'hz_token', 'hz_bot_id'], function (data) {
+  chrome.storage.local.get(['hz_app_id', 'hz_token'], function (data) {
     settings.token = data.hz_token || '';
     settings.appId = data.hz_app_id || '';
-    settings.botId = data.hz_bot_id || '';
     buildPanel();
     dirty = true;
-    if (!settings.token || !settings.appId || !settings.botId) {
+    if (!settings.token || !settings.appId) {
       setStatus('Configuração incompleta');
-      pushLog('error', 'Preencha App ID, Token e ID do Robô no popup da extensão.');
+      pushLog('error', 'Abra o popup do HORASIS e cole o App ID e o Token da página Conectar Robô.');
       return;
     }
     pingBridge();
@@ -433,10 +432,20 @@
   });
 
   function loadBot() {
-    callBackend({ bot_id: settings.botId, fetch_details: true, portal_url: window.location.href, purchase_id: pregao }, function (resp) {
-      if (!resp || !resp.ok) { setStatus('Erro ao carregar robô'); pushLog('error', 'Erro ao carregar robô: ' + (resp && resp.error)); return; }
+    callBackend({
+      fetch_details: true,
+      portal_url: window.location.href,
+      purchase_id: pregao,
+      // Sem cadastro prévio: é daqui que o backend sabe de que sala se trata
+      // na primeira vez que esta compra aparece.
+      portal: { numero: String(pregao), titulo: 'Licitanet — pregão ' + pregao },
+      portal_name: 'Licitanet'
+    }, function (resp) {
+      if (!resp || !resp.ok) { setStatus('Erro ao preparar o robô'); pushLog('error', 'Erro ao preparar o robô desta sala: ' + (resp && resp.error)); return; }
       botConfig = (resp.data && resp.data.bot_config) || null;
       botItems = (resp.data && resp.data.items) || [];
+      // Todas as chamadas seguintes já viajam com o id devolvido pelo backend.
+      if (botConfig && botConfig.id) settings.botId = String(botConfig.id);
       dirty = true;
       pushLog('success', 'Robô carregado: modo ' + (botConfig && botConfig.mode) + ' · ' + botItems.length + ' item(ns) configurado(s) · sala ' + pregao + '.');
       setStatus('Pronto');

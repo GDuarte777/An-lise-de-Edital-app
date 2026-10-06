@@ -1,7 +1,7 @@
 # HORASIS — Robô de Lances (extensão do Chrome)
 
 Extensão Manifest V3 que opera a sala de disputa do **Comprasnet** e do
-**Licitanet** a partir da configuração de um robô guardada na plataforma.
+**Licitanet**.
 
 ## Como instalar para testar
 
@@ -11,12 +11,18 @@ Extensão Manifest V3 que opera a sala de disputa do **Comprasnet** e do
    *Conectar Robô*
 4. Abrir a sala de disputa. O painel sobe sozinho.
 
+Não há robô a cadastrar antes. O motor lê o código da compra da própria URL da
+sala e o backend cria (ou recupera) o robô daquela licitação na primeira
+chamada. O que o operador configura é o **piso de margem**, item a item, na
+tabela do painel — e enquanto um item estiver sem piso ele é monitorado mas não
+recebe lance automático.
+
 ## Os arquivos
 
 | Arquivo | Onde roda | Papel |
 | --- | --- | --- |
 | `background.js` | Service Worker | **Único lugar que conhece o backend.** Guarda credenciais e faz a chamada ao assistente de lances. |
-| `popup.html` / `popup.js` | Popup da barra | App ID, Token, ID do robô e o botão que ativa o motor na aba. |
+| `popup.html` / `popup.js` | Popup da barra | App ID, Token e o botão que ativa o motor na aba. |
 | `netprobe.js` | Mundo da página, `*.gov.br` | Sonda passiva: lê (nunca altera) o tráfego do portal e repassa ao motor. |
 | `dispute.js` | Mundo isolado, Comprasnet | Motor da disputa: painel, leitura de itens, envio de lance, chat. |
 | `licitanet-bridge.js` | Mundo da página, Licitanet | Alcança o estado interno da sala, que o mundo isolado não enxerga. |
@@ -41,6 +47,13 @@ POST <API_BASE>/api/apps/<appId>/functions/bidAssistant
 Authorization: Bearer <token>
 apikey: <chave publicável do Supabase>
 ```
+
+A primeira chamada de cada sala leva `purchase_id` (o código lido da URL) e um
+objeto `portal` com a identificação que o portal já tiver publicado. É só dali
+que o backend sabe de que licitação se trata. A resposta traz `bot_config.id`,
+e o motor passa a enviá-lo nas chamadas seguintes — o caminho rápido, que evita
+uma busca por compra em cada uma das dezenas de chamadas por minuto durante a
+disputa.
 
 `API_BASE` padrão está em `background.js` (`API_BASE_PADRAO`) e pode ser
 sobrescrito em **Avançado** no popup — é por ali que se aponta a extensão para

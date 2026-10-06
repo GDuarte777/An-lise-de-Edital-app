@@ -95,9 +95,9 @@ async function consultar(tabela: string, filtros: Record<string, string>, extras
   return await resp.json();
 }
 
-async function gravar(tabela: string, linhas: any[], prefer = "return=minimal"): Promise<void> {
+async function gravar(tabela: string, linhas: any[], prefer = "return=minimal", conflito = ""): Promise<void> {
   if (!linhas.length) return;
-  const resp = await fetch(`${urlSupabase()}/rest/v1/${tabela}`, {
+  const resp = await fetch(`${urlSupabase()}/rest/v1/${tabela}${conflito ? `?on_conflict=${conflito}` : ""}`, {
     method: "POST",
     headers: cabecalhos({ Prefer: prefer }),
     body: JSON.stringify(linhas),
@@ -192,6 +192,131 @@ async function carregarRobo(userId: string, botId: string): Promise<any | null> 
   return linhas[0] || null;
 }
 
+async function carregarRoboDaCompra(userId: string, purchaseId: string): Promise<any | null> {
+  const linhas = await consultar("robos_lance", {
+    select: COLUNAS_ROBO,
+    purchase_id: `eq.${purchaseId}`,
+    user_id: `eq.${userId}`,
+    limit: "1",
+  });
+  return linhas[0] || null;
+}
+
+/** Perfil padrão da conta, ou os valores de fábrica se ainda não houver um. */
+async function carregarPerfil(userId: string): Promise<any> {
+  const linhas = await consultar("perfil_robo_usuario", {
+    select: "mode,dispute_type,item_selection_enabled,min_reduction,max_reduction,response_time,fornecedor_cnpj,termos_alerta",
+    user_id: `eq.${userId}`,
+    limit: "1",
+  });
+  return linhas[0] || {
+    mode: "Manual Assistido",
+    dispute_type: "global",
+    item_selection_enabled: false,
+    min_reduction: 1,
+    max_reduction: 5,
+    response_time: 3,
+    fornecedor_cnpj: null,
+    termos_alerta: [],
+  };
+}
+
+function textoCurto(valor: unknown, limite = 200): string | null {
+  const texto = String(valor ?? "").trim();
+  return texto ? texto.slice(0, limite) : null;
+}
+
+/**
+ * Cria o robô desta compra, ou devolve o que já existe.
+ *
+ * A corrida é real: duas abas da mesma compra, ou o motor repetindo a chamada
+ * depois de o Service Worker ser reciclado, chegam aqui ao mesmo tempo. Quem
+ * resolve é a restrição única (user_id, purchase_id) no banco — o segundo
+ * INSERT é ignorado e a leitura seguinte devolve a mesma linha. Decidir no
+ * código, com um "existe? então insere", deixaria a janela aberta.
+ */
+async function criarRoboDaCompra(userId: string, purchaseId: string, portal: any, portalName: string): Promise<any | null> {
+  const perfil = await carregarPerfil(userId);
+  const p = portal && typeof portal === "object" ? portal : {};
+
+  const numero = textoCurto(p.numero, 40);
+  const ano = textoCurto(p.ano, 8);
+  const titulo = textoCurto(p.titulo, 200)
+    || (numero ? `${textoCurto(p.modalidade, 60) || "Compra"} nº ${numero}${ano ? `/${ano}` : ""}` : `Compra ${purchaseId}`);
+
+  await gravar(
+    "robos_lance",
+    [{
+      user_id: userId,
+      purchase_id: purchaseId,
+      title: titulo,
+      portal_name: textoCurto(portalName, 60) || "Comprasnet",
+      uasg: textoCurto(p.uasg, 40),
+      numero_compra: numero,
+      orgao: textoCurto(p.orgao, 300),
+      modalidade: textoCurto(p.modalidade, 80),
+      situacao: textoCurto(p.situacao, 80),
+      uf: textoCurto(p.uf, 4),
+      link_sistema_origem: textoCurto(p.link_pncp, 500),
+      mode: perfil.mode,
+      dispute_type: perfil.dispute_type,
+      item_selection_enabled: perfil.item_selection_enabled,
+      min_reduction: perfil.min_reduction,
+      max_reduction: perfil.max_reduction,
+      response_time: perfil.response_time,
+      fornecedor_cnpj: perfil.fornecedor_cnpj,
+      termos_alerta: perfil.termos_alerta,
+      status: "ativo",
+    }],
+    "resolution=ignore-duplicates,return=minimal",
+    "user_id,purchase_id",
+  );
+
+  return await carregarRoboDaCompra(userId, purchaseId);
+}
+
+/**
+ * Preenche a identificação que faltava.
+ *
+ * Na primeira chamada o portal ainda não publicou UASG, órgão nem número — o
+ * robô nasce só com o código da compra. Esses campos aparecem segundos depois,
+ * e sem este complemento o painel e o histórico ficariam para sempre com o
+ * robô chamado "Compra 153031059001220260".
+ *
+ * Só escreve em coluna vazia: o que o operador editou no app não é
+ * sobrescrito pelo que o portal diz.
+ */
+async function completarIdentificacao(userId: string, robo: any, portal: any, portalName: string): Promise<any> {
+  const p = portal && typeof portal === "object" ? portal : {};
+  const mapa: [string, unknown, number][] = [
+    ["uasg", p.uasg, 40],
+    ["numero_compra", p.numero, 40],
+    ["orgao", p.orgao, 300],
+    ["modalidade", p.modalidade, 80],
+    ["situacao", p.situacao, 80],
+    ["uf", p.uf, 4],
+    ["link_sistema_origem", p.link_pncp, 500],
+    ["portal_name", portalName, 60],
+  ];
+
+  const valores: Record<string, any> = {};
+  for (const [coluna, valor, limite] of mapa) {
+    const novo = textoCurto(valor, limite);
+    if (novo && !robo[coluna]) valores[coluna] = novo;
+  }
+
+  // O título gerado a partir do código da compra é provisório: assim que o
+  // portal informa modalidade e número, ele vira o nome de verdade.
+  const tituloPortal = textoCurto(p.titulo, 200);
+  if (tituloPortal && robo.title === `Compra ${robo.purchase_id}`) valores.title = tituloPortal;
+
+  if (!Object.keys(valores).length) return robo;
+
+  valores.updated_at = new Date().toISOString();
+  await atualizar("robos_lance", { id: `eq.${robo.id}`, user_id: `eq.${userId}` }, valores);
+  return { ...robo, ...valores };
+}
+
 async function carregarItens(userId: string, botId: string): Promise<any[]> {
   return await consultar(
     "itens_robo_lance",
@@ -275,38 +400,55 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
 
       const corpo = req.body || {};
       const botId = String(corpo.bot_id || "").trim();
-      if (!botId) return res.status(400).json({ error: "bot_id é obrigatório." });
+      const purchaseId = String(corpo.purchase_id || "").trim();
+      const portalName = String(corpo.portal_name || "Comprasnet");
 
-      const robo = await carregarRobo(userId, botId);
+      // O robô é identificado pela COMPRA, não por um id que alguém cadastrou
+      // antes. O id ainda é aceito porque o motor o reenvia depois da primeira
+      // resposta — é o caminho rápido, que evita uma busca por compra a cada
+      // uma das dezenas de chamadas por minuto durante a disputa.
+      let robo = botId ? await carregarRobo(userId, botId) : null;
+      if (!robo && purchaseId) robo = await carregarRoboDaCompra(userId, purchaseId);
+
       if (!robo) {
-        // 404 e não 403: dizer "existe, mas não é seu" já conta algo sobre a
-        // conta alheia a quem tentou um ID qualquer.
-        return res.status(404).json({ error: "Robô não encontrado nesta conta — confira o ID do robô na página Conectar Robô." });
+        if (!purchaseId) {
+          return res.status(400).json({ error: "Informe purchase_id (o código da compra lido do portal)." });
+        }
+        robo = await criarRoboDaCompra(userId, purchaseId, corpo.portal, portalName);
+        if (!robo) {
+          return res.status(500).json({ error: "Não foi possível preparar o robô desta compra." });
+        }
       }
 
+      // O portal publica UASG, órgão e número alguns segundos depois de a sala
+      // abrir; a primeira chamada chega antes disso.
+      if (corpo.portal) robo = await completarIdentificacao(userId, robo, corpo.portal, portalName);
+
+      const roboId = String(robo.id);
       const config: ConfiguracaoRobo = robo;
 
       // ── 1. Autorização de um valor já escolhido, no instante do envio ──
       if (corpo.authorize_item_bid === true) {
-        const itens = await carregarItens(userId, botId);
+        const itens = await carregarItens(userId, roboId);
         const veredito = autorizarLance(config, acharItem(itens, corpo.item_id), corpo.bid_value);
         if (!veredito.allowed) {
-          await registrarLog(userId, botId, "warn", `Lance bloqueado no item ${corpo.item_id}: ${veredito.message}`);
+          await registrarLog(userId, roboId, "warn", `Lance bloqueado no item ${corpo.item_id}: ${veredito.message}`);
         }
         return res.json({ allowed: veredito.allowed, message: veredito.message });
       }
 
       // ── 2. Configuração completa do robô ──
       if (corpo.fetch_details === true) {
-        const itens = await carregarItens(userId, botId);
+        const itens = await carregarItens(userId, roboId);
         return res.json({
           bot_config: robo,
           items: itens,
-          // A identificação da licitação sai do próprio robô: é o que o
-          // operador conferiu ao cadastrá-lo. A importação automática dos
-          // itens do edital ainda não existe aqui — por isso `items` vem
-          // vazio e o motor bloqueia o lance automático, em vez de disputar
-          // um item que ninguém configurou.
+          // Os itens aqui ficam vazios de propósito. Quem lista os itens da
+          // disputa é o portal, lido pelo motor em tempo real — e é a lista
+          // dele que vale, porque é nela que o pregoeiro abre e fecha item.
+          // O que o backend guarda de cada item é só a configuração (o piso,
+          // o desconto), criada quando o operador digita o primeiro valor na
+          // tabela do painel.
           licitation_details: {
             organ: robo.orgao,
             unidade_compradora: robo.unidade_compradora,
@@ -329,7 +471,7 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
         if (!Number.isFinite(numeroItem)) return res.status(400).json({ error: "item_id inválido." });
 
         // Lista fechada: um campo inesperado no corpo não vira coluna gravada.
-        const permitidos = ["participar", "valor_minimo", "lance_manual", "desconto", "variacao"];
+        const permitidos = ["participar", "descricao", "valor_minimo", "lance_manual", "desconto", "variacao"];
         const valores: Record<string, any> = { updated_at: new Date().toISOString() };
         for (const campo of permitidos) {
           if (corpo.item_update[campo] !== undefined) valores[campo] = corpo.item_update[campo];
@@ -340,7 +482,7 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
 
         await gravar(
           "itens_robo_lance",
-          [{ robo_id: botId, user_id: userId, numero_item: numeroItem, ...valores }],
+          [{ robo_id: roboId, user_id: userId, numero_item: numeroItem, ...valores }],
           "resolution=merge-duplicates,return=minimal",
         );
         return res.json({ ok: true });
@@ -348,7 +490,7 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
 
       // ── 4. Linha de log vinda do motor ──
       if (corpo.log_message && typeof corpo.log_message === "object") {
-        await registrarLog(userId, botId, corpo.log_message.level, corpo.log_message.message);
+        await registrarLog(userId, roboId, corpo.log_message.level, corpo.log_message.message);
         return res.json({ ok: true });
       }
 
@@ -364,7 +506,7 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
             const termo = procurarMencao(mensagem, termos);
             if (termo) mentions.push({ mensagem, termo_encontrado: termo, quem: m.quem, data_hora: m.data_hora });
             return {
-              robo_id: botId,
+              robo_id: roboId,
               user_id: userId,
               id_origem: String(m.id || "").slice(0, 120) || `s${Date.now()}${mentions.length}`,
               quem: String(m.quem || "").slice(0, 200),
@@ -386,11 +528,11 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
       if (corpo.action) {
         const acao = String(corpo.action);
         if (acao === "start" || acao === "pause") {
-          await atualizar("robos_lance", { id: `eq.${botId}`, user_id: `eq.${userId}` }, {
+          await atualizar("robos_lance", { id: `eq.${roboId}`, user_id: `eq.${userId}` }, {
             status: acao === "start" ? "em_disputa" : "pausado",
             updated_at: new Date().toISOString(),
           });
-          await registrarLog(userId, botId, "info", acao === "start" ? "Motor iniciado pelo operador." : "Motor pausado.");
+          await registrarLog(userId, roboId, "info", acao === "start" ? "Motor iniciado pelo operador." : "Motor pausado.");
           return res.json({ ok: true, status: acao === "start" ? "em_disputa" : "pausado" });
         }
 
@@ -399,7 +541,7 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
           if (Number.isFinite(valor) && valor > 0) {
             const numeroItem = Number(corpo.item_id);
             await gravar("lances_robo", [{
-              robo_id: botId,
+              robo_id: roboId,
               user_id: userId,
               numero_item: Number.isFinite(numeroItem) ? numeroItem : null,
               valor,
@@ -414,7 +556,7 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
       }
 
       // ── 7. A pergunta central: qual é o próximo lance? ──
-      const itens = await carregarItens(userId, botId);
+      const itens = await carregarItens(userId, roboId);
       const item = acharItem(itens, corpo.item_id);
       const decisao = decidirLance({
         config,
@@ -451,6 +593,50 @@ async function usuarioDaSessao(req: Requisicao, res: Resposta): Promise<string |
 }
 
 function registrarRotasTokens(app: AplicativoExpresso): void {
+  app.get("/api/robos/perfil", async (req, res): Promise<any> => {
+    const indisponivel = configurado();
+    if (indisponivel) return res.status(indisponivel.status).json({ error: indisponivel.erro });
+    const userId = await usuarioDaSessao(req, res);
+    if (!userId) return;
+
+    try {
+      return res.json({ perfil: await carregarPerfil(userId) });
+    } catch (erro: any) {
+      console.error("[perfil-robo] Falha ao ler:", erro?.message || erro);
+      return res.status(500).json({ error: "Não foi possível ler o perfil do robô." });
+    }
+  });
+
+  app.post("/api/robos/perfil", async (req, res): Promise<any> => {
+    const indisponivel = configurado();
+    if (indisponivel) return res.status(indisponivel.status).json({ error: indisponivel.erro });
+    const userId = await usuarioDaSessao(req, res);
+    if (!userId) return;
+
+    // Lista fechada: um campo inesperado no corpo não vira coluna gravada.
+    const permitidos = [
+      "mode", "dispute_type", "item_selection_enabled",
+      "min_reduction", "max_reduction", "response_time",
+      "fornecedor_cnpj", "termos_alerta",
+    ];
+    const linha: Record<string, any> = { user_id: userId, updated_at: new Date().toISOString() };
+    for (const campo of permitidos) {
+      if (req.body?.[campo] !== undefined) linha[campo] = req.body[campo];
+    }
+
+    try {
+      await gravar("perfil_robo_usuario", [linha], "resolution=merge-duplicates,return=minimal", "user_id");
+      // O perfil vale para os robôs que ainda vão nascer. Mudá-lo no meio de
+      // um pregão não altera o robô que já está em disputa — mexer na
+      // estratégia de uma disputa em andamento, de outra tela, seria a pior
+      // hora possível para uma surpresa.
+      return res.json({ ok: true, perfil: await carregarPerfil(userId) });
+    } catch (erro: any) {
+      console.error("[perfil-robo] Falha ao salvar:", erro?.message || erro);
+      return res.status(500).json({ error: "Não foi possível salvar o perfil do robô." });
+    }
+  });
+
   app.get("/api/robos/tokens", async (req, res): Promise<any> => {
     const indisponivel = configurado();
     if (indisponivel) return res.status(indisponivel.status).json({ error: indisponivel.erro });

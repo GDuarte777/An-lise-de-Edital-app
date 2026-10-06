@@ -1,11 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════
 // ROBÔ DE LANCES — acesso aos dados
 //
-// A configuração que a extensão do navegador lê durante a disputa é editada
-// aqui. Robô e itens vão direto ao Postgres pelo cliente do Supabase, sob RLS,
-// como o resto do app; os tokens da extensão passam pela Edge Function, porque
-// o valor em claro só existe no instante em que é gerado e quem o gera é o
-// servidor.
+// Nenhum robô é criado aqui. Ele nasce quando a extensão abre a sala de
+// disputa: o backend o cria a partir do código da compra lido do portal. O que
+// esta tela faz é o antes e o depois — o perfil padrão que todo robô novo
+// herda, e a leitura do que cada disputa produziu.
+//
+// Robô e itens vão direto ao Postgres pelo cliente do Supabase, sob RLS, como
+// o resto do app. Perfil e tokens passam pela Edge Function: o token em claro
+// só existe no instante em que é gerado, e quem o gera é o servidor.
 // ═══════════════════════════════════════════════════════════════════════
 import { apiFetch, readJsonResponseSafe } from "./aiClientHelper";
 import { getActiveUser, getSupabaseClient } from "./supabaseClient";
@@ -92,37 +95,28 @@ export interface TokenRobo {
   revogado: boolean;
 }
 
-export function roboVazio(): RoboLance {
-  return {
-    id: "",
-    title: "",
-    mode: "Manual Assistido",
-    dispute_type: "global",
-    item_selection_enabled: false,
-    status: "ativo",
-    purchase_id: null,
-    uasg: null,
-    numero_compra: null,
-    numero_interno: null,
-    portal_name: "Comprasnet",
-    orgao: null,
-    unidade_compradora: null,
-    municipio: null,
-    uf: null,
-    modalidade: null,
-    situacao: null,
-    data_abertura: null,
-    data_encerramento: null,
-    link_sistema_origem: null,
-    fornecedor_cnpj: null,
-    initial_value: null,
-    minimum_value: null,
-    min_reduction: 1,
-    max_reduction: 5,
-    response_time: 3,
-    termos_alerta: [],
-  };
+/** Configuração que todo robô recém-criado herda. O piso NÃO mora aqui. */
+export interface PerfilRobo {
+  mode: ModoRobo;
+  dispute_type: TipoDisputa;
+  item_selection_enabled: boolean;
+  min_reduction: number | null;
+  max_reduction: number | null;
+  response_time: number;
+  fornecedor_cnpj: string | null;
+  termos_alerta: string[];
 }
+
+export const PERFIL_PADRAO: PerfilRobo = {
+  mode: "Manual Assistido",
+  dispute_type: "global",
+  item_selection_enabled: false,
+  min_reduction: 1,
+  max_reduction: 5,
+  response_time: 3,
+  fornecedor_cnpj: null,
+  termos_alerta: [],
+};
 
 /**
  * Converte o que o operador digitou em número, ou em `null`.
@@ -247,6 +241,20 @@ export async function excluirItem(roboId: string, numeroItem: number): Promise<b
     .eq("numero_item", numeroItem)
     .eq("user_id", userId);
   return !error;
+}
+
+export async function lerPerfil(): Promise<PerfilRobo> {
+  const resposta = await apiFetch("/api/robos/perfil");
+  const dados = await readJsonResponseSafe(resposta);
+  if (!resposta.ok) throw new Error(dados?.error || "Não foi possível ler o perfil do robô.");
+  return { ...PERFIL_PADRAO, ...(dados?.perfil || {}) };
+}
+
+export async function salvarPerfil(perfil: PerfilRobo): Promise<PerfilRobo> {
+  const resposta = await apiFetch("/api/robos/perfil", { method: "POST", body: perfil as any });
+  const dados = await readJsonResponseSafe(resposta);
+  if (!resposta.ok) throw new Error(dados?.error || "Não foi possível salvar o perfil do robô.");
+  return { ...PERFIL_PADRAO, ...(dados?.perfil || {}) };
 }
 
 // ─── Tokens da extensão ────────────────────────────────────────────────

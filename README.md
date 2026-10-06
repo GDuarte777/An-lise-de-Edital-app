@@ -87,6 +87,19 @@ morar lá. Por isso o modelo de lance é a parte mais testada do backend
 redução configurada ou com número ilegível vindo do portal, a resposta é
 "não envie", nunca um valor aproximado.
 
+**O robô não se cadastra: ele nasce da sala de disputa.** A extensão lê o
+código da compra da URL, o backend cria (ou recupera) o robô daquela licitação
+e devolve a configuração. Antes era preciso cadastrar o robô antes do pregão,
+amarrado a uma licitação escolhida na plataforma — um passo que só podia ser
+feito com antecedência, e um pregão que aparece de manhã para disputar à tarde
+não tem essa antecedência. Quem esquecia chegava na sala sem robô.
+
+O que a tela do app guarda é o antes e o depois: o **perfil padrão** que todo
+robô novo herda (modo, faixa de redução, tempo de resposta) e o histórico do
+que cada disputa produziu. O piso de margem não mora no perfil de propósito —
+piso é por item, e um piso global herdado sem querer é a forma mais silenciosa
+de dar lance abaixo do custo.
+
 A extensão autentica com um token próprio, de vida longa, gerado em
 `POST /api/robos/tokens`. Não é o JWT da sessão do app porque ele expira em uma
 hora e um pregão passa de três: um token que morre no meio da disputa é um robô
@@ -97,7 +110,7 @@ que para sozinho justamente quando mais importa.
 ```bash
 npm run lint            # tipos do frontend
 npm run typecheck:edge  # tipos do backend (Deno) com o tsc do projeto
-npm test                # 176 testes
+npm test                # 181 testes
 npm run build           # build de produção do frontend
 ```
 

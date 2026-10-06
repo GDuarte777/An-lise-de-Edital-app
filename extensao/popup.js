@@ -17,27 +17,6 @@ function mostrarStatus(tipo, texto) {
   alvo.textContent = texto;
 }
 
-/**
- * Código da compra desta aba.
- *
- * O vínculo robô↔compra é por aba, e não global: com duas disputas abertas ao
- * mesmo tempo, um vínculo global faria o robô da segunda compra sobrescrever o
- * da primeira e os lances sairiam na licitação errada.
- */
-function compraDaUrl(url) {
-  if (!url) return null;
-  let endereco;
-  try {
-    endereco = new URL(url);
-  } catch {
-    return null;
-  }
-  if (endereco.hostname !== HOST_COMPRASNET) return null;
-  return endereco.searchParams.get('compra')
-    || endereco.searchParams.get('chaveCompra')
-    || endereco.searchParams.get('idCompra');
-}
-
 function abaAtiva() {
   return new Promise((resolve) => {
     chrome.tabs.query({ active: true, currentWindow: true }, (abas) => resolve(abas && abas[0] ? abas[0] : null));
@@ -70,7 +49,6 @@ function motorDoPortal(url) {
 elemento('save').addEventListener('click', async () => {
   const appId = elemento('appId').value.trim();
   const token = elemento('token').value.trim();
-  const botId = elemento('botId').value.trim();
   const apiBase = elemento('apiBase').value.trim();
 
   if (!appId || !token) {
@@ -79,12 +57,11 @@ elemento('save').addEventListener('click', async () => {
   }
 
   const aba = await abaAtiva();
-  const purchaseId = compraDaUrl(aba && aba.url);
 
   mostrarStatus('ok', 'Salvando…');
 
   chrome.runtime.sendMessage(
-    { action: 'horasis_save_config', appId, token, botId, purchaseId, apiBase },
+    { action: 'horasis_save_config', appId, token, apiBase },
     (resposta) => {
       if (chrome.runtime.lastError) {
         mostrarStatus('err', 'Erro: ' + chrome.runtime.lastError.message);
@@ -148,25 +125,11 @@ async function ativarMotor(tabId, arquivo, fecharAoFim) {
 }
 
 // ─── Carregar o que já está salvo ──────────────────────────────────────
-// O ID do robô é lido pela compra desta aba, nunca pelo último robô usado:
-// herdar o robô de outra aba é exatamente como um lance sai na compra errada.
+// Só credenciais: o robô de cada compra é criado pelo backend a partir do
+// código da compra que o motor lê da própria URL da sala de disputa.
 (async () => {
-  const aba = await abaAtiva();
-  const compra = compraDaUrl(aba && aba.url);
-  const chaves = ['hz_app_id', 'hz_token', 'hz_bot_id', 'hz_bot_by_compra', 'hz_api_base'];
-  if (compra) chaves.push('hz_bot_compra_' + compra);
-
-  const dados = await chrome.storage.local.get(chaves);
+  const dados = await chrome.storage.local.get(['hz_app_id', 'hz_token', 'hz_api_base']);
   if (dados.hz_app_id) elemento('appId').value = dados.hz_app_id;
   if (dados.hz_token) elemento('token').value = dados.hz_token;
   if (dados.hz_api_base) elemento('apiBase').value = dados.hz_api_base;
-
-  if (compra) {
-    elemento('botLabel').textContent = 'ID do robô desta compra (' + compra + ')';
-    elemento('botId').value = dados['hz_bot_compra_' + compra]
-      || (dados.hz_bot_by_compra || {})[compra]
-      || '';
-  } else if (dados.hz_bot_id) {
-    elemento('botId').value = dados.hz_bot_id;
-  }
 })();

@@ -111,6 +111,43 @@ describe("decisão de lance", () => {
   });
 });
 
+describe("robô recém-criado na sala de disputa", () => {
+  // O robô nasce sozinho quando a extensão abre a sala, com o perfil padrão da
+  // conta e nenhum item configurado. Este é o estado em que ele passa a maior
+  // parte do tempo, e é o estado em que um lance indevido custaria caro.
+  const recemCriado = {
+    mode: "Manual Assistido",
+    dispute_type: "global",
+    item_selection_enabled: false,
+    minimum_value: null,
+    min_reduction: 1,
+    max_reduction: 5,
+  };
+
+  it("não dá lance em item nenhum enquanto não houver piso", () => {
+    const d = decidirLance({ config: recemCriado, item: null, melhorLance: 10000 });
+    expect(d.should_bid).toBe(false);
+    expect(d.message).toMatch(/valor mínimo/i);
+  });
+
+  it("não autoriza envio de valor algum enquanto não houver piso", () => {
+    expect(autorizarLance(recemCriado, null, 9000).allowed).toBe(false);
+  });
+
+  it("passa a disputar assim que o piso daquele item é digitado", () => {
+    // É o que acontece quando o operador preenche "Mínimo R$" na tabela do
+    // painel: a linha do item passa a existir e o item entra em disputa.
+    const d = decidirLance({ config: recemCriado, item: { participar: true, valor_minimo: 9000 }, melhorLance: 10000 });
+    expect(d.should_bid).toBe(true);
+    expect(d.suggested_bid).toBe(9900);
+  });
+
+  it("o piso de um item não libera os outros", () => {
+    const d = decidirLance({ config: recemCriado, item: null, melhorLance: 4000 });
+    expect(d.should_bid).toBe(false);
+  });
+});
+
 describe("lance manual", () => {
   it("envia exatamente o valor que o operador digitou", () => {
     const d = decidirLance({ config: robo, item: { lance_manual: 9500, valor_minimo: 9000 }, melhorLance: 10000 });

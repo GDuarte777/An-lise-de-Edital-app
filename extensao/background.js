@@ -54,41 +54,25 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   try {
-    // ─── Salvar configuração (App ID, Token, ID do robô) ────────────────
+    // ─── Salvar credenciais (App ID e Token) ────────────────────────────
+    // Não há mais nada a guardar por compra: o robô de cada licitação é criado
+    // pelo backend a partir do código que o motor lê da URL da sala de
+    // disputa. Uma credencial vale para todas as abas, e abrir o popup para
+    // trocar o token não mexe em disputa nenhuma em andamento.
     if (request.action === 'horasis_save_config') {
-      const { appId, token, botId, purchaseId, apiBase } = request;
+      const { appId, token, apiBase } = request;
       if (!appId || !token) {
         sendResponse({ success: false, error: 'App ID e Token são obrigatórios.' });
         return false;
       }
-      // O código da compra vem da URL da sala de disputa. Um valor fora do
-      // formato significa que o popup foi usado na aba errada: gravar esse
-      // vínculo faria o robô de uma compra responder por outra.
-      if (purchaseId && !/^[0-9]{10,}$/.test(String(purchaseId))) {
-        sendResponse({ success: false, error: 'Código da compra inválido. Abra a sala da disputa e tente novamente.' });
-        return false;
-      }
-      chrome.storage.local.get(['hz_bot_by_compra'], (stored) => {
-        const mapa = { ...(stored.hz_bot_by_compra || {}) };
-        const update = { hz_app_id: appId, hz_token: token };
-        if (apiBase) update.hz_api_base = String(apiBase).replace(/\/+$/, '');
-        // Salvar só as credenciais não pode apagar o vínculo robô↔compra já
-        // gravado: quem abre o popup para atualizar o token continua com os
-        // robôs das outras abas intactos.
-        if (purchaseId && botId) {
-          mapa[String(purchaseId)] = String(botId).trim();
-          update['hz_bot_compra_' + purchaseId] = String(botId).trim();
-          update.hz_bot_by_compra = mapa;
-        } else if (!purchaseId && botId) {
-          update.hz_bot_id = botId;
+      const update = { hz_app_id: appId, hz_token: token };
+      if (apiBase) update.hz_api_base = String(apiBase).replace(/\/+$/, '');
+      chrome.storage.local.set(update, () => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          return;
         }
-        chrome.storage.local.set(update, () => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ success: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          sendResponse({ success: true, message: 'Configuração salva com sucesso.' });
-        });
+        sendResponse({ success: true, message: 'Configuração salva com sucesso.' });
       });
       return true; // canal aberto para a resposta assíncrona do storage
     }

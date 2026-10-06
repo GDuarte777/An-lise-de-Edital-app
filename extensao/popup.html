@@ -187,9 +187,6 @@
     <label for="token">Token de acesso</label>
     <input id="token" type="password" placeholder="Cole aqui o Token" autocomplete="off" />
 
-    <label for="botId" id="botLabel">ID do robô (opcional)</label>
-    <input id="botId" placeholder="Para apenas monitorar, deixe vazio" autocomplete="off" spellcheck="false" />
-
     <button class="primario" id="save">Salvar configuração</button>
     <button class="secundario" id="openDispute">Abrir painel da disputa</button>
 
@@ -198,8 +195,9 @@
     <details>
       <summary>Como usar</summary>
       <div class="ajuda">
-        <p>Copie o <b>App ID</b> e o <b>Token</b> na página <b>Conectar Robô</b> do HORASIS e cole nos campos acima.</p>
-        <p><b>Duas disputas ao mesmo tempo:</b> abra cada compra em uma aba do Comprasnet, cole o ID do robô correspondente no popup <i>daquela aba</i> e salve. Mantenha as duas abas abertas e confira "compra e robô conferidos" antes de iniciar cada motor.</p>
+        <p>Copie o <b>App ID</b> e o <b>Token</b> na página <b>Conectar Robô</b> do HORASIS e cole nos campos acima. É tudo: não há robô para cadastrar.</p>
+        <p>Abra a sala de disputa e o painel sobe sozinho, já com os itens lidos do portal. O <b>piso de margem</b> de cada item você digita na própria tabela do painel — enquanto um item estiver sem piso, ele é monitorado mas não recebe lance automático.</p>
+        <p><b>Duas disputas ao mesmo tempo:</b> abra cada compra em uma aba. Cada aba cuida da sua, sem configuração nenhuma.</p>
         <p>Na sala de disputa do <b>Licitanet</b> o motor abre sozinho — basta estar logado como fornecedor.</p>
       </div>
     </details>

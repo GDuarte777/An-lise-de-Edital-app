@@ -58,6 +58,7 @@
   var lastSent = {};     // numero -> {value, at}
   var cooldown = {};     // numero -> timestamp de liberação pós-erro
   var lastSuggest = {};  // numero -> timestamp da última consulta de sugestão
+  var avisouSemPiso = {}; // numero -> já avisamos que falta piso neste item
   var log = [];
   var alerts = [];       // aba Alertas: menções, itens fechados, recusas
   var chatLog = [];      // aba Chat
@@ -124,7 +125,7 @@
     saveTimer = setTimeout(function () { saveTimer = null; saveState(); }, 500);
   }
   function restoreState(done) {
-    stateKey = 'hz_dispute_v1_' + compra + '_' + (settings.botId || 'sem_robo');
+    stateKey = 'hz_dispute_v1_' + compra;
     var runningKey = 'hz_running_compra_' + compra;
     chrome.storage.local.get([stateKey, runningKey], function (data) {
       var s = data && data[stateKey];
@@ -577,7 +578,13 @@
       lastSuggest[num] = Date.now();
       var observedBest = it.melhor;
       var bItem = findBotItem(num);
-      if (!bItem) { pushLog('warn', 'Item ' + num + ' não configurado no robô — lance automático bloqueado.'); return; }
+      if (!bItem) {
+        if (!avisouSemPiso[num]) {
+          avisouSemPiso[num] = true;
+          pushLog('warn', 'Item ' + num + ' sem piso de margem — digite o valor em "Mínimo R$" na tabela para liberar o lance automático. O item segue monitorado.');
+        }
+        return;
+      }
       if (!canBidOnItem(botConfig, bItem)) return;
       var botIdAtRequest = settings.botId;
       var payload = { bot_id: botIdAtRequest, item_id: Number(num), current_lowest_bid: it.melhor, meu_lance: it.meu, portal_url: window.location.href, purchase_id: compra };
@@ -1296,8 +1303,26 @@
       var val = parseFloat(String(inp.value).replace(',', '.'));
       if (isNaN(val)) return;
       var bi = findBotItem(num);
-      if (bi) bi[field] = val;
-      var upd = {}; upd[field] = val;
+      if (bi) {
+        bi[field] = val;
+      } else {
+        // Sem cadastro prévio, a primeira configuração de um item acontece
+        // aqui. Criar a linha local na hora é o que faz o valor digitado
+        // sobreviver ao próximo redesenho e o que libera o lance automático
+        // neste item — o motor exige que o item exista para dar lance sozinho.
+        bi = {
+          numero_item: Number(num),
+          descricao: String((items[num] || {}).descricao || ''),
+          participar: true,
+          valor_minimo: null, lance_manual: null, desconto: null, variacao: null
+        };
+        bi[field] = val;
+        botItems.push(bi);
+        lastRowsKey = '';
+        delete avisouSemPiso[num];
+      }
+      var upd = { participar: bi.participar === true, descricao: bi.descricao };
+      upd[field] = val;
       callBackend({ bot_id: settings.botId, item_id: Number(num), item_update: upd }, function (resp) {
         pushLog(resp && resp.ok ? 'success' : 'error', resp && resp.ok ? 'Config do item ' + num + ' atualizada (' + field + ' = ' + val + ').' : 'Falha ao salvar config do item ' + num + '.');
       });
@@ -1337,8 +1362,8 @@
             + (portalInfo.link_pncp ? idCell('Edital PNCP', portalInfo.link_pncp) : '')
             + (myCnpj ? idCell('Fornecedor (CNPJ)', myCnpj) : '')
             + '<div style="grid-column:1/-1;font-size:10px;line-height:1.5;padding-top:4px;color:' + (noCreds ? '#B45309' : '#64748B') + '">' + (noCreds
-              ? 'Nenhum robô vinculado a esta compra — abra o popup da extensão nesta aba, cole o ID do robô correspondente e salve. Lances automáticos bloqueados até confirmar a UASG e o número da compra.'
-              : 'Carregando configuração do robô...') + '</div>'
+              ? 'Extensão sem credenciais — abra o popup do HORASIS e cole o App ID e o Token da página Conectar Robô. O portal continua sendo monitorado; os lances ficam bloqueados até lá.'
+              : 'Preparando o robô desta compra...') + '</div>'
           : '<div class="hzd-empty">Identificando a compra pelo portal...</div>';
       }
     } else if (botConfig && !idsRendered) {
@@ -1514,10 +1539,13 @@
   function applySettings(data) {
     settings.token = data.hz_token || '';
     settings.appId = data.hz_app_id || '';
-    // Chave própria por compra evita que a última configuração de outra aba substitua este robô.
-    settings.botId = data['hz_bot_compra_' + compra] || ((data.hz_bot_by_compra || {})[String(compra)]) || '';
   }
-  function haveCreds() { return !!(settings.token && settings.appId && settings.botId); }
+  // O robô desta compra não é escolhido a mão: o backend o cria (ou recupera)
+  // a partir do código da compra lido da URL desta aba, e devolve o id em
+  // bot_config.id. settings.botId só existe depois da primeira resposta, e por
+  // isso não entra aqui — exigir o id antes de pedi-lo travaria o motor para
+  // sempre.
+  function haveCreds() { return !!(settings.token && settings.appId); }
   function startEngine() {
     if (engineStarted) return;
     engineStarted = true;
@@ -1543,10 +1571,10 @@
     } else {
       noCreds = true;
       setStatus('Monitorando sessão do portal');
-      pushLog('warn', 'Nenhum robô vinculado a esta compra. Abra o popup da extensão nesta aba, informe o ID do robô correspondente e salve. Lances automáticos ficam bloqueados até confirmar o vínculo.');
+      pushLog('warn', 'Extensão sem credenciais. Abra o popup do HORASIS, cole o App ID e o Token da página Conectar Robô e salve. O portal continua sendo monitorado; os lances ficam bloqueados até lá.');
     }
   }
-  chrome.storage.local.get(['hz_app_id', 'hz_token', 'hz_bot_by_compra', 'hz_bot_compra_' + compra], function (data) {
+  chrome.storage.local.get(['hz_app_id', 'hz_token'], function (data) {
     applySettings(data);
     // Só retoma após validar sessão, configuração e itens atuais do portal.
     running = false;
@@ -1561,35 +1589,20 @@
   // Recarrega automaticamente quando o usuário salvar as credenciais no popup
   chrome.storage.onChanged.addListener(function (changes, area) {
     if (area !== 'local') return;
-    if (!changes.hz_app_id && !changes.hz_token && !changes.hz_bot_by_compra && !changes['hz_bot_compra_' + compra]) return;
-    chrome.storage.local.get(['hz_app_id', 'hz_token', 'hz_bot_by_compra', 'hz_bot_compra_' + compra], function (data) {
-      var oldBotId = settings.botId;
-      var nextBotId = data['hz_bot_compra_' + compra] || ((data.hz_bot_by_compra || {})[String(compra)]) || '';
-      if (nextBotId === oldBotId && data.hz_token === settings.token && data.hz_app_id === settings.appId) return;
-      if (oldBotId && nextBotId !== oldBotId && running) {
-        pushLog('warn', 'Robô desta compra alterado; interrompendo o anterior antes da troca.');
-        elapsedBefore += Math.max(0, Math.floor((Date.now() - activeSince) / 1000));
-        running = false;
-        activeSince = 0;
-        resumeRequested = false;
-        saveState();
-        callBackend({ bot_id: oldBotId, action: 'pause', portal_url: window.location.href }, function () {});
-        chrome.storage.local.set({ ['hz_running_compra_' + compra]: false });
-      }
+    if (!changes.hz_app_id && !changes.hz_token) return;
+    chrome.storage.local.get(['hz_app_id', 'hz_token'], function (data) {
+      if (data.hz_token === settings.token && data.hz_app_id === settings.appId) return;
       applySettings(data);
-      if (nextBotId !== oldBotId) { botConfig = null; botItems = []; bindingConfirmed = false; restored = false; resumeRequested = false; }
-      if (!settings.token || !settings.appId || !settings.botId) {
-        noCreds = true; setStatus('Vincule um robô a esta compra no popup da extensão'); return;
+      if (!haveCreds()) {
+        noCreds = true;
+        setStatus('Cole o App ID e o Token no popup da extensão');
+        return;
       }
       idsRendered = false;
       lastRowsKey = '';
       dirty = true;
-      if (engineStarted) {
-        noCreds = false;
-        if (nextBotId !== oldBotId) restoreState(function () { loadBot(0); });
-        else loadBot(0);
-        return;
-      }
+      noCreds = false;
+      if (engineStarted) { loadBot(0); return; }
       startEngine();
     });
   });
@@ -1603,11 +1616,13 @@
       setStatus('Aguardando identificação da compra pelo portal — lances bloqueados');
       return;
     }
-    var uasg = String(botConfig.uasg || '').replace(/[^0-9]/g, '');
-    var numero = String(botConfig.numero_compra || '').replace(/[^0-9]/g, '');
-    if (uasg && numero && uasg === String(portalInfo.uasg).replace(/[^0-9]/g, '') && Number(numero) === Number(String(portalInfo.numero).replace(/[^0-9]/g, ''))) {
+    // O robô nasce do código desta compra, então o vínculo é por construção.
+    // A conferência fica porque custa nada e porque é ela que pega o caso em
+    // que o backend devolve outro robô: um lance na licitação errada não tem
+    // desfazer.
+    if (String(botConfig.purchase_id || '') === String(compra)) {
       bindingConfirmed = true;
-      setStatus(running ? 'Em Disputa' : 'Pronto — compra e robô conferidos');
+      setStatus(running ? 'Em Disputa' : 'Pronto — compra conferida');
       return;
     }
     if (running) {
@@ -1620,7 +1635,7 @@
     resumeRequested = false;
     saveState();
     setStatus('Robô não corresponde à compra desta aba — lances bloqueados');
-    pushLog('error', 'Vínculo incorreto: UASG ou número da compra do robô não corresponde ao portal. Confira o ID do robô nesta aba.');
+    pushLog('error', 'Vínculo incorreto: o robô devolvido pelo servidor é de outra compra (' + (botConfig.purchase_id || '—') + ' em vez de ' + compra + '). Recarregue a página; se persistir, avise o suporte — nenhum lance sai neste estado.');
   }
   function fetchPortalInfo() {
     apiCall('GET', '/comprasnet-fase-externa/v1/compras/' + compra + '/participacao').then(function (r) {
@@ -1665,7 +1680,7 @@
 
   function loadBot(attempt) {
     var requestedBotId = settings.botId;
-    setStatus('Carregando robô...');
+    setStatus(settings.botId ? 'Carregando robô...' : 'Preparando o robô desta compra...');
     // Watchdog: se o backend não responder em 15s (rede travada ou worker
     // reciclado), tenta de novo em vez de ficar preso em "Carregando...".
     var gotAnswer = false;
@@ -1674,7 +1689,26 @@
       if (attempt < 2) { pushLog('warn', 'Servidor demorou a responder — tentando carregar o robô novamente...'); loadBot(attempt + 1); }
       else { setStatus('Erro ao carregar robô'); pushLog('error', 'Sem resposta do servidor ao carregar o robô — recarregue a página (F5) ou clique em Tentar novamente.'); }
     }, 15000);
-    callBackend({ bot_id: requestedBotId, fetch_details: true, portal_url: window.location.href, purchase_id: compra }, function (resp) {
+    callBackend({
+      bot_id: requestedBotId || undefined,
+      fetch_details: true,
+      portal_url: window.location.href,
+      purchase_id: compra,
+      // Primeira vez nesta compra: é só daqui que o backend tem como saber de
+      // que licitação se trata. Depois serve para corrigir o que o portal
+      // ainda não tinha publicado quando o robô nasceu.
+      portal: {
+        uasg: portalInfo.uasg || '',
+        numero: portalInfo.numero || '',
+        ano: portalInfo.ano || '',
+        titulo: portalInfo.titulo || '',
+        orgao: portalInfo.orgao || '',
+        modalidade: portalInfo.modalidade || '',
+        situacao: portalInfo.situacao || '',
+        uf: portalInfo.uf || '',
+        link_pncp: portalInfo.link_pncp || ''
+      }
+    }, function (resp) {
       gotAnswer = true;
       clearTimeout(watchdog);
       if (settings.botId !== requestedBotId) return;
@@ -1689,26 +1723,24 @@
         }
         setStatus('Erro ao carregar robô');
         var errTxt = String((resp && resp.error) || 'sem resposta');
-        pushLog('error', 'Erro ao carregar robô: ' + errTxt + ' — verifique o App ID, o Token e o ID do Robô no popup da extensão (Copie-os na página Conectar Robô do HORASIS).');
+        pushLog('error', 'Erro ao preparar o robô desta compra: ' + errTxt);
         // Mostra o erro REAL na tela (não fica preso em "Carregando..." para sempre)
-        var hint = 'Verifique o App ID, o Token de Acesso e o ID do Robô no popup da extensão (ícone do HORASIS).';
-        if (/unauthorized|401|token/i.test(errTxt)) hint = 'Token de Acesso inválido ou expirado — copie o Token novamente na página Conectar Robô do HORASIS, cole no popup da extensão e clique em Salvar Configuração.';
-        else if (/não encontrado|404/i.test(errTxt)) hint = 'O ID do Robô não corresponde a nenhum robô cadastrado — copie o ID do robô correto na página Conectar Robô do HORASIS.';
-        else if (/permissão|403/i.test(errTxt)) hint = 'Este robô pertence a outro usuário/carteira — verifique qual Empresa está ativa e copie o ID do robô dela.';
+        var hint = 'Confira o App ID e o Token no popup da extensão (ícone do HORASIS).';
+        if (/unauthorized|401|token/i.test(errTxt)) hint = 'Token inválido ou expirado — gere um novo na página Conectar Robô do HORASIS, cole no popup da extensão e salve.';
         else if (/fetch|network|rede|HTTP 5\d\d/i.test(errTxt)) hint = 'Falha de rede — verifique sua conexão e confirme que o App ID está correto (página Conectar Robô do HORASIS).';
         var errCard = el('hzd-ids');
         if (errCard && errCard.getAttribute('data-err') !== 'loaderr') {
           errCard.setAttribute('data-err', 'loaderr');
           errCard.innerHTML = '<div style="grid-column:1/-1;padding:14px;font-size:11px;line-height:1.7;color:#1E293B">' +
-            '<span style="color:' + RED + ';font-weight:700">Não foi possível carregar a configuração do robô.</span><br>' +
+            '<span style="color:' + RED + ';font-weight:700">Não foi possível preparar o robô desta compra.</span><br>' +
             'Erro: ' + errTxt + '<br>' + hint + '<br>' +
             '<button id="hzd-retry-load" style="margin-top:8px;padding:6px 14px;border:0;border-radius:6px;background:' + NAVY + ';color:#fff;font-weight:700;font-size:11px;cursor:pointer">Tentar novamente</button></div>';
           var retryBtn = document.getElementById('hzd-retry-load');
           if (retryBtn) retryBtn.addEventListener('click', function (ev) {
             ev.stopPropagation();
             var e2 = el('hzd-ids');
-            if (e2) { e2.removeAttribute('data-err'); e2.innerHTML = '<div style="grid-column:1/-1" class="hzd-empty">Carregando configuração do robô...</div>'; }
-            setStatus('Carregando robô...');
+            if (e2) { e2.removeAttribute('data-err'); e2.innerHTML = '<div style="grid-column:1/-1" class="hzd-empty">Preparando o robô desta compra...</div>'; }
+            setStatus('Preparando o robô desta compra...');
             loadBot(0);
           });
         }
@@ -1716,6 +1748,9 @@
       }
       botConfig = (resp.data && resp.data.bot_config) || null;
       botItems = (resp.data && resp.data.items) || [];
+      // É aqui que o robô desta compra passa a existir para o motor. Todas as
+      // chamadas seguintes (lance, pausa, log, chat) já viajam com este id.
+      if (botConfig && botConfig.id) settings.botId = String(botConfig.id);
       validateBinding();
       var details = (resp.data && resp.data.licitation_details) || null;
       myCnpj = String((botConfig && botConfig.fornecedor_cnpj) || '');
