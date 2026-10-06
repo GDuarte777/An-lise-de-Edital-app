@@ -276,7 +276,7 @@
     + '#hz-li-painel.hz-min{height:42px !important;}'
     + '#hz-li-painel.hz-min .hzl-body{display:none;}'
     + '.hzl-head{background:linear-gradient(180deg,' + NAVY + ' 0%,#121D38 100%);box-shadow:inset 0 -2px 0 ' + GOLD + ';color:#fff;padding:10px 14px;display:flex;align-items:center;gap:9px;flex-shrink:0}'
-    + '.hzl-head img{width:22px;height:22px;background:#fff;border-radius:50%;padding:2px;box-sizing:border-box}'
+    + '.hzl-head img{width:23px;height:23px;border-radius:7px}'
     + '.hzl-title{font-size:12px;font-weight:700;letter-spacing:.03em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
     + '.hzl-badge{font-size:9px;font-weight:700;letter-spacing:.04em;padding:3px 9px;border-radius:999px;background:rgba(224,196,137,0.16);color:' + GOLD_SOFT + '}'
     + '.hzl-ico{background:none;border:none;color:#C3CDE2;cursor:pointer;font-size:13px}'

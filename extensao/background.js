@@ -104,6 +104,16 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Clicar no ícone abre o painel lateral, não uma janelinha.
+//
+// O popup de ação do Chrome fecha sozinho ao perder o foco, e não há API que
+// mude isso: qualquer clique na página do portal o fazia sumir no meio de uma
+// configuração. O painel lateral fica aberto até o operador fechá-lo no ✕, e
+// ainda convive lado a lado com a sala de disputa em vez de cobri-la.
+if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   try {
     // ─── Salvar credenciais (App ID e Token) ────────────────────────────

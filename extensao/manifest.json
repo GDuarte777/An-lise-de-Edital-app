@@ -7,7 +7,8 @@
     "storage",
     "activeTab",
     "scripting",
-    "tabs"
+    "tabs",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://*.supabase.co/*",
@@ -64,8 +65,10 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "icone.png",
-        "icone-128.png"
+        "icone-16.png",
+        "icone-48.png",
+        "icone-128.png",
+        "icone.png"
       ],
       "matches": [
         "https://*.gov.br/*",
@@ -75,7 +78,6 @@
     }
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_title": "HORASIS — Robô de Lances",
     "default_icon": {
       "16": "icone-16.png",
@@ -87,5 +89,8 @@
     "16": "icone-16.png",
     "48": "icone-48.png",
     "128": "icone-128.png"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   }
 }

@@ -7,9 +7,10 @@ Extensão Manifest V3 que opera a sala de disputa do **Comprasnet** e do
 
 1. `chrome://extensions` → ligar **Modo do desenvolvedor**
 2. **Carregar sem compactação** → apontar para esta pasta (`extensao/`)
-3. Clicar no ícone do HORASIS e colar **App ID** e **Token** da página
-   *Conectar Robô* — as duas são credenciais da sua conta, e o backend confere
-   que formam um par (App ID de uma conta com Token de outra não passa)
+3. Clicar no ícone do HORASIS — abre o **painel lateral**, que fica aberto até
+   você fechá-lo no ✕ — e colar **App ID** e **Token** da aba *Robô de Lances*.
+   As duas são credenciais da sua conta, e o backend confere que formam um par
+   (App ID de uma conta com Token de outra não passa)
 4. Abrir a sala de disputa. O painel sobe sozinho.
 
 Não há robô a cadastrar antes. O motor lê o código da compra da própria URL da
@@ -31,7 +32,7 @@ automático: sem piso não há como o robô saber onde parar.
 | Arquivo | Onde roda | Papel |
 | --- | --- | --- |
 | `background.js` | Service Worker | **Único lugar que conhece o backend.** Guarda credenciais e faz a chamada ao assistente de lances. |
-| `popup.html` / `popup.js` | Popup da barra | App ID, Token, configuração do robô e o botão que ativa o motor na aba. |
+| `popup.html` / `popup.js` | Painel lateral | App ID, Token, configuração do robô e o botão que ativa o motor na aba. |
 | `netprobe.js` | Mundo da página, `*.gov.br` | Sonda passiva: lê (nunca altera) o tráfego do portal e repassa ao motor. |
 | `dispute.js` | Mundo isolado, Comprasnet | Motor da disputa: painel, leitura de itens, envio de lance, chat. |
 | `licitanet-bridge.js` | Mundo da página, Licitanet | Alcança o estado interno da sala, que o mundo isolado não enxerga. |
@@ -70,6 +71,35 @@ um `supabase functions serve` local sem reempacotar nada.
 
 O caminho da rota foi mantido no mesmo formato da implementação anterior de
 propósito: trocar de backend passa a ser trocar de host, e não mexer no motor.
+
+## Por que painel lateral, e não o popup do ícone
+
+A janela que o Chrome abre ao clicar no ícone de uma extensão (`default_popup`)
+fecha sozinha assim que perde o foco. Não há API que mude isso — qualquer
+clique na página do portal a fazia sumir no meio de uma configuração.
+
+O painel lateral (`side_panel` + `setPanelBehavior({openPanelOnActionClick})`)
+fica aberto até o operador fechá-lo, e ainda convive lado a lado com a sala de
+disputa em vez de cobri-la. Por isso o manifesto **não** declara
+`default_popup`: declarar os dois faz o popup vencer.
+
+O mesmo `popup.html` serve ao painel lateral. Ele é fluido (`width: 100%`)
+porque a largura do painel é escolhida pelo operador, arrastando a borda.
+
+## Como a disputa é encontrada
+
+O portal é uma aplicação de página única. Quando o content script é injetado, o
+operador quase nunca está na sala de disputa ainda — ele navega até ela depois,
+e a URL muda sem recarregar a página. Por isso o motor **não desiste** se não
+achar o código da compra de cara: ele vigia, por duas vias.
+
+| Via | Como | Para quê |
+| --- | --- | --- |
+| Rota | `popstate`, `hashchange` e uma sondagem de 1s | `pushState` não dispara evento nenhum, e é assim que as rotas internas do portal mudam |
+| Tráfego | A sonda repassa cada resposta da API; o motor procura `/compras/<código>` na URL ou `chaveCompra` no corpo | Funciona mesmo quando a rota não carrega o código |
+
+Assim que uma das duas encontra, o painel sobe sozinho. `iniciarNaCompra` é
+idempotente de propósito: as duas vias podem acertar no mesmo instante.
 
 ## Convenção de nomes
 

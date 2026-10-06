@@ -111,7 +111,7 @@ elemento('save').addEventListener('click', async () => {
       }
 
       mostrarStatus('ok', 'Credenciais salvas. Ativando o motor nesta aba…');
-      ativarMotor(aba.id, motor, true);
+      ativarMotor(aba.id, motor);
     }
   );
 });
@@ -128,10 +128,10 @@ elemento('openDispute').addEventListener('click', async () => {
     return;
   }
   mostrarStatus('ok', 'Verificando o painel nesta aba…');
-  ativarMotor(aba.id, motor, false);
+  ativarMotor(aba.id, motor);
 });
 
-async function ativarMotor(tabId, arquivo, fecharAoFim) {
+async function ativarMotor(tabId, arquivo) {
   let resposta = await pingarMotor(tabId);
   if (!resposta) {
     try {
@@ -148,9 +148,10 @@ async function ativarMotor(tabId, arquivo, fecharAoFim) {
     }
   }
 
-  if (resposta && resposta.ok) {
-    mostrarStatus('ok', 'Painel ativo nesta compra. Feche este menu para vê-lo.');
-    if (fecharAoFim) setTimeout(() => window.close(), 700);
+  if (resposta && resposta.state === 'aguardando') {
+    mostrarStatus('ok', 'Motor ativo nesta aba, procurando a disputa. Abra a sala de disputa do pregão e o painel sobe sozinho.');
+  } else if (resposta && resposta.ok) {
+    mostrarStatus('ok', 'Painel ativo na compra ' + (resposta.compra || '—') + '.');
   } else {
     mostrarStatus('err', 'O motor não iniciou. Recarregue a página (F5) e tente novamente.');
   }
