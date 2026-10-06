@@ -79,7 +79,7 @@ vi.mock("../utils/roboLances", async () => {
     listarRobos: vi.fn(async () => [robo]),
     listarItens: vi.fn(async () => itens),
     listarTokens: vi.fn(async () => []),
-    lerPerfil: vi.fn(async () => real.PERFIL_PADRAO),
+    lerPerfil: vi.fn(async () => ({ ...real.PERFIL_PADRAO, app_id: "a1b2c3d4e5f60718293a4b5c6d7e8f90" })),
     salvarPerfil: vi.fn(async (p: any) => p),
     gerarToken: (...args: any[]) => gerarToken(...(args as [])),
     salvarItens: vi.fn(async () => ({ sucesso: true, mensagem: "2 item(ns) salvo(s)." })),
@@ -107,7 +107,21 @@ describe("aba do robô de lances", () => {
   it("monta e lista as disputas que a extensão abriu", async () => {
     render(<LanceBotTab />);
     expect(await screen.findByText("Pregão 90012/2026")).toBeTruthy();
-    expect(screen.getByDisplayValue("6a28b2eedb287c0541e5e303")).toBeTruthy();
+  });
+
+  it("mostra o App ID da própria conta, não um valor fixo no código", async () => {
+    // App ID igual para todos não identifica ninguém: a conferência contra o
+    // dono do Token, no backend, passaria a ser inútil.
+    render(<LanceBotTab />);
+    expect(await screen.findByDisplayValue("a1b2c3d4e5f60718293a4b5c6d7e8f90")).toBeTruthy();
+  });
+
+  it("avisa, em vez de mostrar campo vazio, quando o App ID não veio", async () => {
+    const { lerPerfil, PERFIL_PADRAO } = await import("../utils/roboLances");
+    (lerPerfil as any).mockResolvedValueOnce({ ...PERFIL_PADRAO, app_id: "" });
+
+    render(<LanceBotTab />);
+    expect(await screen.findByText(/App ID ainda não foi gerado/i)).toBeTruthy();
   });
 
   it("não oferece cadastro de robô", async () => {

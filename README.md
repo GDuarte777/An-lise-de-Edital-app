@@ -68,7 +68,6 @@ Configure em **Supabase → Edge Functions → api → Secrets**:
 | `GEMINI_API_KEY` + `ALLOW_SERVER_AI_KEY_FALLBACK=true` | Chave da plataforma, cobrada de quem publicou. Desligada por padrão: o modelo do produto é cada usuário trazer a sua. | opcional |
 | `DIAGNOSTICO_ATIVO=false` | Desliga a telemetria de diagnóstico na tabela `logs_diagnostico` | opcional |
 | `SUPABASE_SERVICE_ROLE_KEY` | Exigida pelo assistente de lances. O token da extensão não é um JWT do Supabase, então não há sessão para o Postgres aplicar RLS: o isolamento por conta é feito no código. Em muitos projetos a plataforma já injeta. | para o robô |
-| `HORASIS_APP_ID` | Restringe o assistente de lances a um App ID. Em branco, aceita qualquer um. | opcional |
 
 `SUPABASE_URL` e `SUPABASE_ANON_KEY` são injetados pela própria plataforma.
 
@@ -100,17 +99,27 @@ que cada disputa produziu. O piso de margem não mora no perfil de propósito �
 piso é por item, e um piso global herdado sem querer é a forma mais silenciosa
 de dar lance abaixo do custo.
 
-A extensão autentica com um token próprio, de vida longa, gerado em
-`POST /api/robos/tokens`. Não é o JWT da sessão do app porque ele expira em uma
-hora e um pregão passa de três: um token que morre no meio da disputa é um robô
-que para sozinho justamente quando mais importa.
+A extensão pede duas credenciais, e as duas são de cada usuário:
+
+| Credencial | O que é | Onde vive |
+| --- | --- | --- |
+| **App ID** | Identifica a conta. Não é segredo: viaja na URL da chamada. | `perfil_robo_usuario.app_id`, gerado pelo banco na primeira leitura do perfil |
+| **Token** | Autentica. Vale ~90 dias e é revogável sozinho. | `tokens_robo`, guardado só como hash |
+
+Os dois são conferidos **como par**: o App ID da URL precisa pertencer ao dono
+do Token, senão a chamada é recusada. Um App ID copiado sozinho não serve para
+nada, e um par montado com pedaços de contas diferentes não passa.
+
+O Token não é o JWT da sessão do app porque ele expira em uma hora e um pregão
+passa de três: um token que morre no meio da disputa é um robô que para sozinho
+justamente quando mais importa.
 
 ## Verificações
 
 ```bash
 npm run lint            # tipos do frontend
 npm run typecheck:edge  # tipos do backend (Deno) com o tsc do projeto
-npm test                # 181 testes
+npm test                # 183 testes
 npm run build           # build de produção do frontend
 ```
 

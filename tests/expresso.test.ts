@@ -52,11 +52,11 @@ describe("roteamento", () => {
     });
 
     const saida = await app.despachar(
-      requisicao({ method: "POST", path: "/api/apps/6a28b2ee/functions/bidAssistant" }),
+      requisicao({ method: "POST", path: "/api/apps/a1b2c3d4/functions/bidAssistant" }),
     );
 
     expect(saida.status).toBe(200);
-    expect(visto).toEqual({ appId: "6a28b2ee" });
+    expect(visto).toEqual({ appId: "a1b2c3d4" });
   });
 
   it("não casa caminho com número de segmentos diferente", async () => {
@@ -64,7 +64,7 @@ describe("roteamento", () => {
     app.post("/api/apps/:appId/functions/bidAssistant", (_req, res) => res.json({ nunca: true }));
 
     const saida = await app.despachar(
-      requisicao({ method: "POST", path: "/api/apps/6a28b2ee/functions/bidAssistant/extra" }),
+      requisicao({ method: "POST", path: "/api/apps/a1b2c3d4/functions/bidAssistant/extra" }),
     );
 
     expect(saida.status).toBe(404);

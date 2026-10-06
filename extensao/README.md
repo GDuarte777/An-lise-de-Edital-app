@@ -8,7 +8,8 @@ Extensão Manifest V3 que opera a sala de disputa do **Comprasnet** e do
 1. `chrome://extensions` → ligar **Modo do desenvolvedor**
 2. **Carregar sem compactação** → apontar para esta pasta (`extensao/`)
 3. Clicar no ícone do HORASIS e colar **App ID** e **Token** da página
-   *Conectar Robô*
+   *Conectar Robô* — as duas são credenciais da sua conta, e o backend confere
+   que formam um par (App ID de uma conta com Token de outra não passa)
 4. Abrir a sala de disputa. O painel sobe sozinho.
 
 Não há robô a cadastrar antes. O motor lê o código da compra da própria URL da

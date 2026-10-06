@@ -12,7 +12,7 @@ import { Switch } from "./ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import {
-  APP_ID_EXTENSAO, MODOS_ROBO, PERFIL_PADRAO, gerarToken, lerPerfil,
+  MODOS_ROBO, PERFIL_PADRAO, gerarToken, lerPerfil,
   listarItens, listarRobos, listarTokens, numeroOuNulo, revogarToken,
   salvarItens, salvarPerfil,
   type ItemRoboLance, type ModoRobo, type PerfilRobo, type RoboLance,
@@ -142,6 +142,7 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
       )}
 
       <ConectarRobo
+        appId={perfil.app_id}
         tokens={tokens}
         tokenNovo={tokenNovo}
         aoGerar={criarToken}
@@ -236,8 +237,9 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
 // ─── Conectar a extensão ───────────────────────────────────────────────
 
 function ConectarRobo({
-  tokens, tokenNovo, aoGerar, aoRevogar, aoDescartarToken,
+  appId, tokens, tokenNovo, aoGerar, aoRevogar, aoDescartarToken,
 }: {
+  appId: string;
   tokens: TokenRobo[];
   tokenNovo: string;
   aoGerar: () => void;
@@ -255,11 +257,22 @@ function ConectarRobo({
         </div>
 
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Instale a extensão HORASIS no Chrome, clique no ícone dela e cole os dois valores abaixo. É a única
-          configuração: a partir daí, qualquer sala de disputa que você abrir já sobe com o painel.
+          Instale a extensão HORASIS no Chrome, clique no ícone dela e cole os dois valores abaixo. Eles são seus:
+          o App ID identifica a sua conta e o Token autentica. É a única configuração — a partir daí, qualquer sala
+          de disputa que você abrir já sobe com o painel.
         </p>
 
-        <CampoCopiavel rotulo="App ID" valor={APP_ID_EXTENSAO} />
+        {appId ? (
+          <CampoCopiavel rotulo="App ID" valor={appId} />
+        ) : (
+          <div className="space-y-1.5">
+            <Label className="text-[11px]">App ID</Label>
+            <p className="text-[11px] text-destructive leading-relaxed">
+              Seu App ID ainda não foi gerado. Ele nasce na primeira leitura do perfil — recarregue a página. Se
+              continuar vazio, o backend não está respondendo e a extensão não tem como conectar.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-2">
           <Label className="text-[11px]">Token de acesso</Label>

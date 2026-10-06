@@ -33,15 +33,6 @@ import {
 /** Prefixo dos tokens de extensão. Serve para distingui-los de um JWT. */
 const PREFIXO_TOKEN = "hzr_";
 
-/**
- * App ID exigido, quando configurado.
- *
- * Vazio significa "aceita qualquer um": o App ID identifica a instalação da
- * plataforma, não o usuário, e quem autentica é o token. Definir a variável
- * fecha a porta de quem aponta uma extensão de outra instalação para cá.
- */
-const APP_ID_ESPERADO = String(process.env.HORASIS_APP_ID || "").trim();
-
 function urlSupabase(): string {
   return String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").replace(/\/+$/, "");
 }
@@ -202,14 +193,40 @@ async function carregarRoboDaCompra(userId: string, purchaseId: string): Promise
   return linhas[0] || null;
 }
 
-/** Perfil padrão da conta, ou os valores de fábrica se ainda não houver um. */
-async function carregarPerfil(userId: string): Promise<any> {
+const COLUNAS_PERFIL =
+  "app_id,mode,dispute_type,item_selection_enabled,min_reduction,max_reduction,response_time,fornecedor_cnpj,termos_alerta";
+
+async function lerPerfil(userId: string): Promise<any | null> {
   const linhas = await consultar("perfil_robo_usuario", {
-    select: "mode,dispute_type,item_selection_enabled,min_reduction,max_reduction,response_time,fornecedor_cnpj,termos_alerta",
+    select: COLUNAS_PERFIL,
     user_id: `eq.${userId}`,
     limit: "1",
   });
-  return linhas[0] || {
+  return linhas[0] || null;
+}
+
+/**
+ * Perfil da conta, criado na primeira vez que alguém pergunta por ele.
+ *
+ * É aqui que o App ID da conta nasce (o banco o gera por padrão). Criar sob
+ * demanda, em vez de num gatilho de cadastro de usuário, evita que contas
+ * antigas fiquem sem credencial — e o INSERT ignora duplicata, então duas
+ * chamadas simultâneas convergem para a mesma linha em vez de uma delas
+ * estourar.
+ */
+async function carregarPerfil(userId: string): Promise<any> {
+  const existente = await lerPerfil(userId);
+  if (existente) return existente;
+
+  await gravar("perfil_robo_usuario", [{ user_id: userId }], "resolution=ignore-duplicates,return=minimal", "user_id");
+  const criado = await lerPerfil(userId);
+  if (criado) return criado;
+
+  // O banco recusou a criação (projeto sem a migração aplicada, por exemplo).
+  // Devolver os valores de fábrica mantém a disputa de pé; o App ID vazio é o
+  // que denuncia o problema, porque sem ele não há como conectar a extensão.
+  return {
+    app_id: "",
     mode: "Manual Assistido",
     dispute_type: "global",
     item_selection_enabled: false,
@@ -219,6 +236,16 @@ async function carregarPerfil(userId: string): Promise<any> {
     fornecedor_cnpj: null,
     termos_alerta: [],
   };
+}
+
+/** Dono de um App ID, ou null se ele não pertence a ninguém. */
+async function donoDoAppId(appId: string): Promise<string | null> {
+  const linhas = await consultar("perfil_robo_usuario", {
+    select: "user_id",
+    app_id: `eq.${appId}`,
+    limit: "1",
+  });
+  return linhas[0]?.user_id || null;
 }
 
 function textoCurto(valor: unknown, limite = 200): string | null {
@@ -387,14 +414,23 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
       const indisponivel = configurado();
       if (indisponivel) return res.status(indisponivel.status).json({ error: indisponivel.erro });
 
-      if (APP_ID_ESPERADO && req.params.appId !== APP_ID_ESPERADO) {
-        return res.status(404).json({ error: "App ID desconhecido." });
-      }
-
       const userId = await donoDaRequisicao(req);
       if (!userId) {
         return res.status(401).json({
           error: "Token inválido ou expirado — gere um novo na página Conectar Robô e cole no popup da extensão.",
+        });
+      }
+
+      // O App ID viaja na URL e não é segredo: quem autentica é o Token. O que
+      // esta conferência garante é que os dois são da MESMA conta — um par
+      // montado com pedaços de contas diferentes não passa, e um App ID
+      // copiado sozinho não serve para nada.
+      const appId = String(req.params.appId || "").trim();
+      if (!appId || (await donoDoAppId(appId)) !== userId) {
+        // 404, não 403: responder "existe, mas não é seu" transformaria esta
+        // rota num verificador de App IDs alheios.
+        return res.status(404).json({
+          error: "App ID não confere com o Token — copie os dois da página Conectar Robô e cole no popup da extensão.",
         });
       }
 
@@ -673,6 +709,11 @@ function registrarRotasTokens(app: AplicativoExpresso): void {
       const expiraEm = Number.isFinite(dias) && dias > 0
         ? new Date(Date.now() + dias * 86_400_000).toISOString()
         : null;
+
+      // Garante que a conta tenha App ID antes de entregar um Token: um Token
+      // sem o par não conecta a extensão, e o operador descobriria isso só na
+      // sala de disputa.
+      await carregarPerfil(userId);
 
       await gravar("tokens_robo", [{
         user_id: userId,

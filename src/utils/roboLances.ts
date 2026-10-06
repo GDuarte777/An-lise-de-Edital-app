@@ -13,9 +13,6 @@
 import { apiFetch, readJsonResponseSafe } from "./aiClientHelper";
 import { getActiveUser, getSupabaseClient } from "./supabaseClient";
 
-/** Identificador desta instalação da plataforma, colado no popup da extensão. */
-export const APP_ID_EXTENSAO = "6a28b2eedb287c0541e5e303";
-
 export type ModoRobo = "Manual Assistido" | "Automático" | "Estratégico";
 export type TipoDisputa = "global" | "por_item";
 
@@ -97,6 +94,14 @@ export interface TokenRobo {
 
 /** Configuração que todo robô recém-criado herda. O piso NÃO mora aqui. */
 export interface PerfilRobo {
+  /**
+   * App ID desta conta — a primeira das duas credenciais que a extensão pede.
+   *
+   * Não é segredo (viaja na URL da chamada; quem autentica é o Token), mas é
+   * de cada usuário e é conferido contra o dono do Token. O servidor o gera na
+   * primeira leitura do perfil; o app nunca o escolhe.
+   */
+  app_id: string;
   mode: ModoRobo;
   dispute_type: TipoDisputa;
   item_selection_enabled: boolean;
@@ -108,6 +113,7 @@ export interface PerfilRobo {
 }
 
 export const PERFIL_PADRAO: PerfilRobo = {
+  app_id: "",
   mode: "Manual Assistido",
   dispute_type: "global",
   item_selection_enabled: false,
@@ -251,7 +257,10 @@ export async function lerPerfil(): Promise<PerfilRobo> {
 }
 
 export async function salvarPerfil(perfil: PerfilRobo): Promise<PerfilRobo> {
-  const resposta = await apiFetch("/api/robos/perfil", { method: "POST", body: perfil as any });
+  // O App ID não é editável: o servidor o ignora, e mandá-lo de volta aqui só
+  // sugeriria o contrário a quem ler este código depois.
+  const { app_id: _ignorado, ...editavel } = perfil;
+  const resposta = await apiFetch("/api/robos/perfil", { method: "POST", body: editavel as any });
   const dados = await readJsonResponseSafe(resposta);
   if (!resposta.ok) throw new Error(dados?.error || "Não foi possível salvar o perfil do robô.");
   return { ...PERFIL_PADRAO, ...(dados?.perfil || {}) };
