@@ -109,7 +109,14 @@ function scriptObservador(): string {
  * Liga o observador numa janela do portal e encaminha cada evento capturado.
  * Reinjeta a cada navegação, porque a página perde o script ao trocar de rota.
  */
+const jaObservados = new WeakSet<WebContents>();
+
 export function observarSala(conteudo: WebContents, aoEvento: (e: EventoSala) => void): void {
+  // Chamar duas vezes na mesma janela empilhava listeners de console e duplicava cada
+  // evento no log — e a janela da sala passa por aqui a cada "conferir" e cada início.
+  if (jaObservados.has(conteudo)) return;
+  jaObservados.add(conteudo);
+
   const injetar = () => {
     conteudo.executeJavaScript(scriptObservador(), true).catch(() => {
       // Página ainda carregando ou navegação cancelada: a próxima tentativa cobre.
