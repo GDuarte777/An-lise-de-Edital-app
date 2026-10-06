@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/empacotar-extensao.mjs",
     "build": "vite build",
     "start": "vite preview --host 0.0.0.0 --port 3000",
     "clean": "rm -rf dist build",
@@ -14,7 +15,8 @@
     "preview": "vite preview",
     "typecheck:edge": "tsc -p tsconfig.edge.json",
     "deploy:api": "supabase functions deploy api --project-ref cghlfhndoqohmrrvppjj",
-    "dev:api": "supabase functions serve api --no-verify-jwt"
+    "dev:api": "supabase functions serve api --no-verify-jwt",
+    "empacotar:extensao": "node scripts/empacotar-extensao.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

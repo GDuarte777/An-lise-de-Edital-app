@@ -611,11 +611,18 @@ export function registrarRotasRoboLances(app: AplicativoExpresso): void {
   registrarRotasTokens(app);
 }
 
-// ─── Tokens da extensão ────────────────────────────────────────────────
+// ─── Perfil e tokens ───────────────────────────────────────────────────
 //
-// Autenticadas pelo JWT da sessão do app: é a página Conectar Robô que as usa.
-// Um token de extensão não pode gerar outro token — se um vazasse, a conta
-// ainda seria revogável de um lugar só.
+// Duas exigências diferentes de propósito.
+//
+// O PERFIL aceita as duas credenciais, porque quem configura o robô é a
+// própria extensão: modo, faixa de redução e tempo de resposta são ajustados
+// no popup, durante o trabalho, e não numa tela de administração.
+//
+// Os TOKENS só aceitam o JWT da sessão do app. Um token de extensão não pode
+// gerar outro: se um vazasse, a conta ainda seria revogável de um lugar só —
+// e esse lugar exige login. É a diferença entre uma credencial que opera e uma
+// que se multiplica.
 
 async function usuarioDaSessao(req: Requisicao, res: Resposta): Promise<string | null> {
   const cabecalho = String(req.headers.authorization || "");
@@ -628,11 +635,21 @@ async function usuarioDaSessao(req: Requisicao, res: Resposta): Promise<string |
   return userId;
 }
 
+/** Dono da requisição, aceitando tanto o JWT da sessão quanto o token da extensão. */
+async function usuarioDoPerfil(req: Requisicao, res: Resposta): Promise<string | null> {
+  const userId = await donoDaRequisicao(req);
+  if (!userId) {
+    res.status(401).json({ error: "Entre na sua conta ou configure o token no popup da extensão." });
+    return null;
+  }
+  return userId;
+}
+
 function registrarRotasTokens(app: AplicativoExpresso): void {
   app.get("/api/robos/perfil", async (req, res): Promise<any> => {
     const indisponivel = configurado();
     if (indisponivel) return res.status(indisponivel.status).json({ error: indisponivel.erro });
-    const userId = await usuarioDaSessao(req, res);
+    const userId = await usuarioDoPerfil(req, res);
     if (!userId) return;
 
     try {
@@ -646,7 +663,7 @@ function registrarRotasTokens(app: AplicativoExpresso): void {
   app.post("/api/robos/perfil", async (req, res): Promise<any> => {
     const indisponivel = configurado();
     if (indisponivel) return res.status(indisponivel.status).json({ error: indisponivel.erro });
-    const userId = await usuarioDaSessao(req, res);
+    const userId = await usuarioDoPerfil(req, res);
     if (!userId) return;
 
     // Lista fechada: um campo inesperado no corpo não vira coluna gravada.

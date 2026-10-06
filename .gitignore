@@ -11,3 +11,9 @@ coverage/
 
 # Estado local da CLI do Supabase
 supabase/.temp/
+
+# A extensão empacotada é gerada no build (scripts/empacotar-extensao.mjs).
+# Commitá-la seria deixar envelhecer um arquivo que precisa acompanhar o
+# código da extensão byte a byte.
+public/extensao-horasis.zip
+public/extensao-horasis.json

@@ -93,11 +93,25 @@ amarrado a uma licitação escolhida na plataforma — um passo que só podia se
 feito com antecedência, e um pregão que aparece de manhã para disputar à tarde
 não tem essa antecedência. Quem esquecia chegava na sala sem robô.
 
-O que a tela do app guarda é o antes e o depois: o **perfil padrão** que todo
-robô novo herda (modo, faixa de redução, tempo de resposta) e o histórico do
-que cada disputa produziu. O piso de margem não mora no perfil de propósito —
-piso é por item, e um piso global herdado sem querer é a forma mais silenciosa
-de dar lance abaixo do custo.
+**A configuração do robô é feita na extensão, não na plataforma.** Modo, faixa
+de redução, tempo de resposta e CNPJ ficam no popup; o piso de margem de cada
+item, na tabela do painel, dentro da sala de disputa. O motivo é onde o
+operador está: no navegador, com o portal aberto — mandá-lo a outra tela para
+mudar o tempo de resposta é mandá-lo sair da disputa.
+
+A aba Robô de Lances da plataforma faz três coisas e só três: entrega a
+extensão para baixar, mostra as duas credenciais e exibe, em modo leitura, o
+que cada disputa produziu.
+
+O piso de margem não entra no perfil padrão de propósito — piso é por item, e
+um piso global herdado sem querer é a forma mais silenciosa de dar lance abaixo
+do custo.
+
+O pacote `.zip` da extensão é gerado no build por
+`scripts/empacotar-extensao.mjs` e servido em `/extensao-horasis.zip`. Ele não
+é commitado: um `.zip` parado no repositório envelhece em silêncio, e o
+resultado é o operador instalar uma extensão antiga que conversa com um backend
+novo — erro que só aparece no meio do pregão.
 
 A extensão pede duas credenciais, e as duas são de cada usuário:
 
@@ -119,7 +133,7 @@ justamente quando mais importa.
 ```bash
 npm run lint            # tipos do frontend
 npm run typecheck:edge  # tipos do backend (Deno) com o tsc do projeto
-npm test                # 184 testes
+npm test                # 186 testes
 npm run build           # build de produção do frontend
 ```
 

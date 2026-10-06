@@ -10,11 +10,40 @@ const HOST_LICITANET = 'portal.licitanet.com.br';
 
 const elemento = (id) => document.getElementById(id);
 
-function mostrarStatus(tipo, texto) {
-  const alvo = elemento('status');
+function mostrarStatus(tipo, texto, id = 'status') {
+  const alvo = elemento(id);
   alvo.style.display = 'block';
   alvo.className = 'status ' + tipo;
   alvo.textContent = texto;
+}
+
+const DICAS_MODO = {
+  'Manual Assistido': 'Calcula e mostra o próximo lance, mas nunca envia sozinho. É você quem clica.',
+  'Automático': 'Cobre o concorrente sozinho, respeitando o tempo de resposta e o piso de margem.',
+  'Estratégico': 'Automático, mas varia o intervalo e a redução dentro da faixa. Uma sequência de lances idênticos é a assinatura mais óbvia de robô.',
+};
+
+/**
+ * Converte o que foi digitado em número, ou em null.
+ *
+ * Campo em branco nunca vira zero: para o backend, null significa "não
+ * configurado" e zero é um valor válido — a diferença decide se o robô para
+ * ou continua baixando.
+ */
+function numeroOuNulo(texto) {
+  const limpo = String(texto || '').trim().replace(',', '.');
+  if (!limpo) return null;
+  const n = Number(limpo);
+  return Number.isFinite(n) ? n : null;
+}
+
+function conversar(mensagem) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(mensagem, (resposta) => {
+      if (chrome.runtime.lastError) resolve({ ok: false, error: chrome.runtime.lastError.message });
+      else resolve(resposta || { ok: false, error: 'Sem resposta do serviço da extensão.' });
+    });
+  });
 }
 
 function abaAtiva() {
@@ -72,13 +101,16 @@ elemento('save').addEventListener('click', async () => {
         return;
       }
 
+      // Com credenciais válidas, a configuração do robô passa a ser editável.
+      carregarPerfil();
+
       const motor = motorDoPortal(aba && aba.url);
       if (!motor) {
-        mostrarStatus('ok', 'Configuração salva. Abra a sala de disputa do Comprasnet ou do Licitanet para o painel aparecer.');
+        mostrarStatus('ok', 'Credenciais salvas. Abra a sala de disputa do Comprasnet ou do Licitanet para o painel aparecer.');
         return;
       }
 
-      mostrarStatus('ok', 'Configuração salva. Ativando o motor nesta aba…');
+      mostrarStatus('ok', 'Credenciais salvas. Ativando o motor nesta aba…');
       ativarMotor(aba.id, motor, true);
     }
   );
@@ -124,6 +156,57 @@ async function ativarMotor(tabId, arquivo, fecharAoFim) {
   }
 }
 
+// ─── Configuração do robô ──────────────────────────────────────────────
+// Ela é editada aqui, e não numa tela da plataforma: quem opera o pregão está
+// no navegador, com o portal aberto, e mandá-lo a outro lugar para mudar o
+// tempo de resposta é mandá-lo sair da disputa.
+
+function mostrarDicaDoModo() {
+  elemento('modoDica').textContent = DICAS_MODO[elemento('modo').value] || '';
+}
+
+elemento('modo').addEventListener('change', mostrarDicaDoModo);
+
+async function carregarPerfil() {
+  const resposta = await conversar({ action: 'horasis_perfil_ler' });
+  if (!resposta.ok) {
+    // Sem credenciais ainda, ou backend fora do ar. A seção fica escondida em
+    // vez de mostrar campos vazios que não salvariam.
+    elemento('secaoRobo').hidden = true;
+    return;
+  }
+  const perfil = (resposta.data && resposta.data.perfil) || {};
+  elemento('modo').value = perfil.mode || 'Manual Assistido';
+  elemento('reducaoMin').value = perfil.min_reduction ?? '';
+  elemento('reducaoMax').value = perfil.max_reduction ?? '';
+  elemento('tempoResposta').value = perfil.response_time ?? '';
+  elemento('cnpj').value = perfil.fornecedor_cnpj || '';
+  mostrarDicaDoModo();
+  elemento('secaoRobo').hidden = false;
+}
+
+elemento('salvarRobo').addEventListener('click', async () => {
+  mostrarStatus('ok', 'Salvando…', 'statusRobo');
+  const resposta = await conversar({
+    action: 'horasis_perfil_salvar',
+    perfil: {
+      mode: elemento('modo').value,
+      min_reduction: numeroOuNulo(elemento('reducaoMin').value),
+      max_reduction: numeroOuNulo(elemento('reducaoMax').value),
+      response_time: numeroOuNulo(elemento('tempoResposta').value) || 3,
+      fornecedor_cnpj: elemento('cnpj').value.trim() || null,
+    },
+  });
+  if (!resposta.ok) {
+    mostrarStatus('err', resposta.error || 'Não foi possível salvar.', 'statusRobo');
+    return;
+  }
+  // Vale para as disputas abertas a partir de agora. Mexer na estratégia de
+  // uma sala já em andamento, de outra tela, seria a pior hora possível para
+  // uma surpresa.
+  mostrarStatus('ok', 'Configuração salva — vale para as próximas disputas.', 'statusRobo');
+});
+
 // ─── Carregar o que já está salvo ──────────────────────────────────────
 // Só credenciais: o robô de cada compra é criado pelo backend a partir do
 // código da compra que o motor lê da própria URL da sala de disputa.
@@ -132,4 +215,5 @@ async function ativarMotor(tabId, arquivo, fecharAoFim) {
   if (dados.hz_app_id) elemento('appId').value = dados.hz_app_id;
   if (dados.hz_token) elemento('token').value = dados.hz_token;
   if (dados.hz_api_base) elemento('apiBase').value = dados.hz_api_base;
+  if (dados.hz_app_id && dados.hz_token) carregarPerfil();
 })();
