@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 // ═══════════════════════════════════════════════════════════════════════
