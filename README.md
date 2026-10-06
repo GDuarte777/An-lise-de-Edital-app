@@ -119,7 +119,7 @@ justamente quando mais importa.
 ```bash
 npm run lint            # tipos do frontend
 npm run typecheck:edge  # tipos do backend (Deno) com o tsc do projeto
-npm test                # 183 testes
+npm test                # 184 testes
 npm run build           # build de produção do frontend
 ```
 

@@ -142,13 +142,35 @@ describe("aba do robô de lances", () => {
     expect(aviso.textContent).not.toMatch(/2 item/);
   });
 
-  it("mostra o token gerado para ser copiado", async () => {
+  it("gera o token e já o deixa na área de transferência", async () => {
+    // Uma ação só: o valor em claro existe uma única vez, e "gerei, agora
+    // copio" é onde alguém fecha a tela com o token na mão sem ter copiado.
+    const escrever = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: escrever }, configurable: true });
+
     render(<LanceBotTab />);
-    fireEvent.click(await screen.findByRole("button", { name: /gerar token/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /gerar e copiar token/i }));
 
     await waitFor(() => expect(screen.getByDisplayValue("hzr_tokenDeTeste123")).toBeTruthy());
     expect(gerarToken).toHaveBeenCalledTimes(1);
+    expect(escrever).toHaveBeenCalledWith("hzr_tokenDeTeste123");
+    await screen.findByText(/copiado para a área de transferência/i);
     // O aviso de que o valor não volta precisa estar junto do token.
     expect(screen.getByText(/não aparece de novo/i)).toBeTruthy();
+  });
+
+  it("não afirma que copiou quando a área de transferência recusa", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: async () => { throw new Error("bloqueado"); } },
+      configurable: true,
+    });
+
+    render(<LanceBotTab />);
+    fireEvent.click(await screen.findByRole("button", { name: /gerar e copiar token/i }));
+
+    // O token continua na tela, com o botão de copiar ao lado.
+    await waitFor(() => expect(screen.getByDisplayValue("hzr_tokenDeTeste123")).toBeTruthy());
+    expect(screen.queryByText(/copiado para a área de transferência/i)).toBeNull();
+    expect(screen.getByText(/Copie o valor acima/i)).toBeTruthy();
   });
 });

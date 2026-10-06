@@ -92,14 +92,16 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
     }
   }
 
-  async function criarToken() {
+  async function criarToken(): Promise<string> {
     try {
       const token = await gerarToken("Extensão do navegador", 90);
       setTokenNovo(token);
       setTokens(await listarTokens());
       setAviso(null);
+      return token;
     } catch (erro: any) {
       setAviso({ tipo: "erro", texto: erro?.message || "Não foi possível gerar o token." });
+      return "";
     }
   }
 
@@ -242,11 +244,39 @@ function ConectarRobo({
   appId: string;
   tokens: TokenRobo[];
   tokenNovo: string;
-  aoGerar: () => void;
+  aoGerar: () => Promise<string>;
   aoRevogar: (id: string) => void;
   aoDescartarToken: () => void;
 }) {
   const ativos = useMemo(() => tokens.filter((t) => !t.revogado), [tokens]);
+  const [gerando, setGerando] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+
+  /**
+   * Gera o token e já o deixa na área de transferência.
+   *
+   * São duas ações num clique de propósito: o valor em claro existe uma única
+   * vez, e o caminho "gerei, agora copio" é onde alguém fecha a tela com o
+   * token na mão sem ter copiado — e aí só resta gerar outro.
+   *
+   * A cópia pode falhar (permissão negada, documento sem foco). Quando falha,
+   * o valor continua visível com o botão de copiar ao lado, e o texto abaixo
+   * dele muda para não afirmar uma cópia que não aconteceu.
+   */
+  async function gerarECopiar() {
+    setGerando(true);
+    setCopiado(false);
+    const token = await aoGerar();
+    if (token) {
+      try {
+        await navigator.clipboard.writeText(token);
+        setCopiado(true);
+      } catch {
+        // Fica visível na tela com o botão de copiar; nada a avisar.
+      }
+    }
+    setGerando(false);
+  }
 
   return (
     <Card className="bg-muted/40 py-5">
@@ -280,22 +310,35 @@ function ConectarRobo({
             <>
               <CampoCopiavel rotulo="" valor={tokenNovo} destaque />
               <p className="text-[11px] text-warning leading-relaxed">
-                Copie agora. O servidor guarda apenas um hash deste token — ele não aparece de novo em lugar nenhum,
-                e quem o perder gera outro.
+                {copiado
+                  ? "Token copiado para a área de transferência — cole no campo Token do popup da extensão. "
+                  : "Copie o valor acima e cole no campo Token do popup da extensão. "}
+                O servidor guarda apenas um hash dele: este valor não aparece de novo em lugar nenhum, e quem o
+                perder gera outro.
               </p>
               <Button size="sm" variant="ghost" onClick={aoDescartarToken}>Já copiei</Button>
             </>
           ) : (
-            <Button size="sm" onClick={aoGerar}>
-              <KeyRound className="w-3.5 h-3.5" />
-              Gerar token
-            </Button>
+            <>
+              <Button size="sm" disabled={gerando} onClick={gerarECopiar}>
+                {gerando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
+                Gerar e copiar token
+              </Button>
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                O token vai direto para a área de transferência, pronto para colar no popup da extensão.
+              </p>
+            </>
           )}
         </div>
 
         {ativos.length > 0 && (
           <div className="space-y-1.5">
             <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide">Tokens ativos</span>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              Só os primeiros caracteres aparecem: o valor completo é guardado como hash e não pode ser copiado de
+              volta. Perdeu o token de uma máquina? Gere outro — este continua valendo onde já está colado, até você
+              revogá-lo.
+            </p>
             {ativos.map((token) => (
               <div key={token.id} className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 <code className="bg-background border border-border rounded px-1.5 py-0.5">{token.prefixo}…</code>
