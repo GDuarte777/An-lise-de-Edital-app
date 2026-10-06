@@ -15,7 +15,14 @@
     if (req.action !== 'horasis_dispute_status') return;
     var panel = document.getElementById('hz-painel-disputa');
     if (panel && req.open) panel.style.display = 'flex';
-    reply({ ok: !!panel, compra: compra || null, state: panel ? 'visible' : 'initializing' });
+    // 'aguardando' não é falha: o motor está vivo nesta aba, vigiando, e sobe
+    // sozinho quando o operador abrir a sala. Dizer "não iniciou" aqui mandaria
+    // ele recarregar a página sem necessidade.
+    reply({
+      ok: !!panel || !compra,
+      compra: compra || null,
+      state: panel ? 'visible' : (compra ? 'initializing' : 'aguardando')
+    });
   });
 
   // ─── Identidade HORASIS ────────────────────────────────────────────────
@@ -30,8 +37,17 @@
   var GOLD = '#C09A52';
   var GOLD_SOFT = '#E0C489';
   var PRIMARY = NAVY;
-  var GREEN = '#0E9F6E';
-  var RED = '#C2453F';
+  // Superfícies do painel escuro. Duas camadas acima do fundo: cartão (SUP) e
+  // cabeçalho de cartão (SUP2). Mais camadas do que isso e as bordas somem.
+  var SUP = '#16223F';
+  var SUP2 = '#1B2947';
+  var LINHA = '#243457';
+  var TEXTO = '#E4EAF6';
+  var SUAVE = '#8FA0C4';
+  // Verde e vermelho em versão clara: os do painel claro ficam ilegíveis
+  // sobre navy, e são justamente os dois que precisam ser lidos de relance.
+  var GREEN = '#56E0AC';
+  var RED = '#FF9A9A';
 
   var settings = { token: '', appId: '', botId: '' };
   var botConfig = null;
@@ -99,16 +115,49 @@
   function detectCompra() {
     var out = null;
     try {
-      var sp = new URLSearchParams(window.location.search);
-      var pref = ['compra', 'chaveCompra', 'idCompra', 'chave'];
-      for (var i = 0; i < pref.length && !out; i++) {
-        var v = sp.get(pref[i]);
-        if (v && /^\d{10,}$/.test(v)) out = v;
+      // O portal é uma aplicação de página única: dependendo da rota, o código
+      // da compra está na query, no caminho ou depois do '#'. Procurar nos três
+      // é a diferença entre o painel abrir e o operador achar que a extensão
+      // não funciona.
+      var partes = [window.location.search, window.location.hash];
+      for (var p = 0; p < partes.length && !out; p++) {
+        var bruto = String(partes[p] || '');
+        var q = bruto.indexOf('?');
+        var sp = new URLSearchParams(q >= 0 ? bruto.slice(q) : (p === 0 ? bruto : ''));
+        var pref = ['compra', 'chaveCompra', 'idCompra', 'chave'];
+        for (var i = 0; i < pref.length && !out; i++) {
+          var v = sp.get(pref[i]);
+          if (v && /^\d{10,}$/.test(v)) out = v;
+        }
+        if (!out) sp.forEach(function (val) { if (!out && val && /^\d{10,}$/.test(val)) out = val; });
       }
-      if (!out) sp.forEach(function (val) { if (!out && val && /^\d{10,}$/.test(val)) out = val; });
-      if (!out) { var m = window.location.pathname.match(/compras\/(\d{10,})/); if (m) out = m[1]; }
+      if (!out) {
+        var alvo = window.location.pathname + window.location.hash;
+        var m = alvo.match(/(?:compras|disputa|acompanhamento-compra)\/(\d{10,})/) || alvo.match(/\/(\d{14,})(?:[\/?#]|$)/);
+        if (m) out = m[1];
+      }
     } catch (e) {}
     return out;
+  }
+
+  /**
+   * Procura o código da compra no tráfego que o portal gera.
+   *
+   * É a segunda via da identificação, para quando a rota não carrega o código.
+   * A sonda já repassa cada resposta da API do portal; a sala de disputa fala
+   * com /comprasnet-disputa/v1/compras/<codigo>, e o corpo das respostas traz
+   * chaveCompra. Qualquer um dos dois serve.
+   */
+  function compraDoTrafego(d) {
+    try {
+      var alvo = String(d && d.u || '');
+      var m = alvo.match(/\/compras\/(\d{10,})/) || alvo.match(/[?&](?:compra|chaveCompra|idCompra)=(\d{10,})/);
+      if (m) return m[1];
+      var corpo = String(d && d.b || '').substring(0, 4000);
+      var mc = corpo.match(/"chaveCompra"\s*:\s*"?(\d{10,})"?/);
+      if (mc) return mc[1];
+    } catch (e) {}
+    return null;
   }
 
   // ===== Helpers =====
@@ -1050,82 +1099,83 @@
   }
 
   // ═══ Painel da disputa ═══════════════════════════════════════════════
-  // O painel fica por cima da sala de disputa do portal, então ele não pode
-  // competir com ela: fundo claro para a tabela de itens, que é o que se lê o
-  // tempo todo, e a marca concentrada na barra de título e nos fios dourados.
-  // O console de eventos no pé é escuro de propósito — é o único bloco onde a
-  // informação chega em fluxo e precisa ser distinguível de relance.
-  var STYLE = '#hz-painel-disputa{position:fixed;bottom:16px;right:16px;z-index:999999;width:700px;max-width:calc(100vw - 24px);height:648px;max-height:calc(100vh - 32px);background:#fff;border-radius:14px;box-shadow:0 18px 48px rgba(12,20,40,0.30);border:1px solid #DCE1EC;font-family:Inter,Segoe UI,system-ui,sans-serif;display:flex;flex-direction:column;color:#1B2436;overflow:hidden}'
-    + '#hz-painel-disputa.hz-min{height:44px !important}'
+  // Superfície escura, da mesma família do painel lateral. Não é só estética:
+  // o painel fica por cima da sala de disputa do portal, que é clara, e o
+  // contraste entre os dois é o que deixa óbvio, de relance, onde termina a
+  // página do governo e começa o robô. Um painel claro sobre fundo claro é
+  // onde se clica na coisa errada no fim de um pregão.
+  var STYLE = '#hz-painel-disputa{position:fixed;bottom:16px;right:16px;z-index:999999;width:716px;max-width:calc(100vw - 24px);height:660px;max-height:calc(100vh - 32px);background:' + NAVY_DEEP + ';border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,0.45);border:1px solid ' + LINHA + ';font-family:Inter,Segoe UI,system-ui,sans-serif;display:flex;flex-direction:column;color:' + TEXTO + ';overflow:hidden}'
+    + '#hz-painel-disputa.hz-min{height:46px !important}'
     + '#hz-painel-disputa.hz-min .hzd-body,#hz-painel-disputa.hz-min .hzd-foot{display:none}'
     + '#hz-painel-disputa.hz-max{left:10px !important;top:10px !important;right:10px !important;bottom:10px !important;width:auto !important;height:auto !important;max-height:none !important}'
-    // Barra de título: o fio dourado embaixo é a assinatura da marca e se
-    // repete no popup, para o painel ser reconhecido como da mesma extensão.
-    + '.hzd-head{background:linear-gradient(180deg,' + NAVY + ' 0%,#121D38 100%);box-shadow:inset 0 -2px 0 ' + GOLD + ';color:#fff;padding:10px 14px;display:flex;align-items:center;gap:9px;flex-shrink:0;cursor:move;user-select:none}'
-    + '.hzd-head img{width:22px;height:22px;background:#fff;border-radius:50%;padding:2px;box-sizing:border-box;pointer-events:none}'
-    + '.hzd-title{font-size:12px;font-weight:700;letter-spacing:.03em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
-    + '.hzd-badge{font-size:9px;font-weight:700;letter-spacing:.04em;padding:3px 9px;border-radius:999px;background:rgba(224,196,137,0.16);color:' + GOLD_SOFT + ';max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
-    + '.hzd-clock{font-size:12px;font-family:JetBrains Mono,Consolas,monospace;color:#C3CDE2;white-space:nowrap}'
-    + '.hzd-ico{background:none;border:none;color:#C3CDE2;cursor:pointer;font-size:13px;padding:0 3px;line-height:1}'
+    // Barra de título: o fio dourado embaixo é a assinatura da marca e
+    // reaparece no painel lateral.
+    + '.hzd-head{background:linear-gradient(180deg,' + NAVY + ' 0%,#101B33 100%);box-shadow:inset 0 -2px 0 ' + GOLD + ';padding:11px 15px;display:flex;align-items:center;gap:10px;flex-shrink:0;cursor:move;user-select:none}'
+    + '.hzd-head img{width:24px;height:24px;border-radius:7px;pointer-events:none}'
+    + '.hzd-title{font-size:12px;font-weight:700;letter-spacing:.04em;color:#fff;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+    + '.hzd-badge{font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:4px 10px;border-radius:7px;background:rgba(224,196,137,0.14);border:1px solid rgba(224,196,137,0.30);color:' + GOLD_SOFT + ';max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+    + '.hzd-clock{font-size:12px;font-family:JetBrains Mono,Consolas,monospace;color:#A9B7D4;white-space:nowrap}'
+    + '.hzd-ico{background:none;border:none;color:#A9B7D4;cursor:pointer;font-size:13px;padding:0 3px;line-height:1}'
     + '.hzd-ico:hover{color:' + GOLD_SOFT + '}'
-    + '.hzd-body{overflow:hidden;padding:11px;display:flex;flex-direction:column;gap:10px;flex:1;min-height:0}'
-    + '.hzd-schedule{background:#F6F7FA;border:1px solid #E6E9F0;border-radius:9px;padding:8px 11px;flex-shrink:0;font-size:11px;color:#1B2436}'
+    + '.hzd-body{overflow:hidden;padding:12px;display:flex;flex-direction:column;gap:10px;flex:1;min-height:0}'
+    + '.hzd-schedule{background:' + SUP + ';border:1px solid ' + LINHA + ';border-radius:10px;padding:9px 12px;flex-shrink:0;font-size:11px;color:' + TEXTO + '}'
     + '.hzd-schedule-row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-weight:600}'
-    + '.hzd-schedule-track{height:6px;background:#E3E7EF;border-radius:999px;margin-top:7px;overflow:hidden}'
-    + '.hzd-schedule-fill{height:100%;width:0;background:linear-gradient(90deg,' + NAVY + ',' + GOLD + ');border-radius:999px}'
-    // Cada cartão é marcado por um traço dourado à esquerda do seu título:
-    // é o que separa um bloco do outro sem precisar de mais linhas na tela.
-    + '.hzd-card{border:1px solid #E6E9F0;border-radius:10px;overflow:hidden;flex-shrink:0;background:#fff;display:flex;flex-direction:column}'
-    + '.hzd-card-title{background:#F6F7FA;box-shadow:inset 3px 0 0 ' + GOLD + ';padding:7px 11px;font-size:9px;font-weight:700;letter-spacing:.09em;color:#6B7689;text-transform:uppercase;border-bottom:1px solid #E6E9F0;display:flex;justify-content:space-between;align-items:center;gap:6px;flex-shrink:0}'
-    + '.hzd-id-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px 16px;padding:10px 11px;font-size:10px;overflow:auto;max-height:110px}'
-    + '.hzd-id-grid .k{color:#8A96AC;font-size:8px;text-transform:uppercase;letter-spacing:.06em;font-weight:700}'
-    + '.hzd-id-grid .v{color:#1B2436;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}'
-    + '.hzd-metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;flex-shrink:0}'
-    + '.hzd-metric{background:#F6F7FA;border:1px solid #E6E9F0;border-radius:9px;padding:7px 9px}'
-    + '.hzd-metric .k{font-size:8px;text-transform:uppercase;letter-spacing:.06em;color:#8A96AC;font-weight:700}'
-    + '.hzd-metric .v{font-size:12.5px;font-weight:700;color:' + NAVY + ';margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums}'
+    + '.hzd-schedule-track{height:6px;background:#0B1226;border-radius:999px;margin-top:8px;overflow:hidden}'
+    + '.hzd-schedule-fill{height:100%;width:0;background:linear-gradient(90deg,#3E5ea0,' + GOLD + ');border-radius:999px}'
+    // Cada cartão leva um traço dourado à esquerda do título: separa um bloco
+    // do outro sem precisar de mais linhas na tela.
+    + '.hzd-card{border:1px solid ' + LINHA + ';border-radius:12px;overflow:hidden;flex-shrink:0;background:' + SUP + ';display:flex;flex-direction:column}'
+    + '.hzd-card-title{background:' + SUP2 + ';box-shadow:inset 3px 0 0 ' + GOLD + ';padding:8px 12px;font-size:9px;font-weight:700;letter-spacing:.10em;color:' + SUAVE + ';text-transform:uppercase;border-bottom:1px solid ' + LINHA + ';display:flex;justify-content:space-between;align-items:center;gap:6px;flex-shrink:0}'
+    + '.hzd-id-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 16px;padding:11px 12px;font-size:10px;overflow:auto;max-height:112px}'
+    + '.hzd-id-grid .k{color:' + SUAVE + ';font-size:8px;text-transform:uppercase;letter-spacing:.07em;font-weight:700}'
+    + '.hzd-id-grid .v{color:' + TEXTO + ';font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}'
+    + '.hzd-metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;flex-shrink:0}'
+    + '.hzd-metric{background:' + SUP + ';border:1px solid ' + LINHA + ';border-radius:10px;padding:8px 10px}'
+    + '.hzd-metric .k{font-size:8px;text-transform:uppercase;letter-spacing:.07em;color:' + SUAVE + ';font-weight:700}'
+    + '.hzd-metric .v{font-size:13px;font-weight:700;color:#fff;margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums}'
     + '.hzd-items{flex:1 1 auto !important;min-height:120px}'
     + '.hzd-tscroll{overflow:auto;flex:1;min-height:0}'
     + '.hzd-table{width:100%;border-collapse:collapse;font-size:10px}'
-    + '.hzd-table th{background:#F2F4F8;text-align:left;padding:6px 7px;font-size:8px;text-transform:uppercase;letter-spacing:.06em;color:#6B7689;border-bottom:1px solid #E3E7EF;white-space:nowrap;position:sticky;top:0;z-index:1}'
-    + '.hzd-table td{padding:5px 7px;border-bottom:1px solid #F3F5F9;vertical-align:top;white-space:nowrap}'
-    + '.hzd-table tbody tr:hover{background:#FAFBFD}'
+    + '.hzd-table th{background:' + SUP2 + ';text-align:left;padding:7px 8px;font-size:8px;text-transform:uppercase;letter-spacing:.07em;color:' + SUAVE + ';border-bottom:1px solid ' + LINHA + ';white-space:nowrap;position:sticky;top:0;z-index:1}'
+    + '.hzd-table td{padding:6px 8px;border-bottom:1px solid #16213C;vertical-align:top;white-space:nowrap;color:' + TEXTO + '}'
+    + '.hzd-table tbody tr:hover{background:#17244180}'
     + '.hzd-num{text-align:right;font-variant-numeric:tabular-nums}'
-    + '.hzd-cfg{width:56px;height:22px;border:1px solid #D5DAE5;border-radius:6px;font-size:10px;padding:0 5px;text-align:right;font-family:inherit;color:#1B2436}'
-    + '.hzd-cfg:focus{outline:none;border-color:' + GOLD + ';box-shadow:0 0 0 2px rgba(192,154,82,0.20)}'
-    // Estado do item: verde é "vencendo", vermelho é "perdendo". Nada mais na
-    // tabela usa essas duas cores, então elas são lidas sem o rótulo.
-    + '.hzd-st{font-size:9px;font-weight:700;padding:2px 8px;border-radius:999px;letter-spacing:.02em}'
-    + '.hzd-st-w{background:rgba(14,159,110,0.13);color:#0A7A54}'
-    + '.hzd-st-l{background:rgba(194,69,63,0.12);color:#A8352F}'
-    + '.hzd-st-a{background:#F1F3F8;color:#5B6780}'
-    + '.hzd-st-e{background:#E8EAF0;color:#4A5468}'
-    + '.hzd-cls{color:' + GREEN + ';font-weight:700;text-align:center}'
-    + '.hzd-empty{text-align:center;padding:14px;font-size:10px;color:#8A96AC}'
+    + '.hzd-cfg{width:58px;height:23px;background:' + NAVY_DEEP + ';border:1px solid ' + LINHA + ';border-radius:7px;font-size:10px;padding:0 6px;text-align:right;font-family:inherit;color:' + TEXTO + '}'
+    + '.hzd-cfg:focus{outline:none;border-color:' + GOLD + ';box-shadow:0 0 0 2px rgba(192,154,82,0.25)}'
+    // Verde é "vencendo", vermelho é "perdendo". Nada mais na tabela usa esse
+    // par, e é por isso que dá para varrer a coluna sem ler o rótulo.
+    + '.hzd-st{font-size:9px;font-weight:700;padding:2px 9px;border-radius:7px;letter-spacing:.03em;display:inline-block}'
+    + '.hzd-st-w{background:rgba(61,213,152,0.16);color:#56E0AC;border:1px solid rgba(61,213,152,0.32)}'
+    + '.hzd-st-l{background:rgba(255,138,138,0.14);color:#FF9A9A;border:1px solid rgba(255,138,138,0.30)}'
+    + '.hzd-st-a{background:rgba(169,183,212,0.12);color:#A9B7D4;border:1px solid rgba(169,183,212,0.22)}'
+    + '.hzd-st-e{background:rgba(120,134,165,0.14);color:#8D9BBC;border:1px solid rgba(120,134,165,0.24)}'
+    + '.hzd-cls{color:#56E0AC;font-weight:700;text-align:center}'
+    + '.hzd-empty{text-align:center;padding:16px;font-size:10px;color:' + SUAVE + '}'
     // Abas: o sublinhado dourado é o mesmo fio da barra de título.
-    + '.hzd-tabs{display:flex;gap:2px;border-bottom:1px solid #E6E9F0;flex-shrink:0;padding:0 7px}'
-    + '.hzd-tab{padding:6px 11px;font-size:10px;font-weight:700;letter-spacing:.03em;color:#6B7689;cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;white-space:nowrap;font-family:inherit}'
-    + '.hzd-tab:hover{color:' + NAVY + '}'
-    + '.hzd-tab.on{color:' + NAVY + ';border-bottom-color:' + GOLD + '}'
-    + '.hzd-feed{height:124px;overflow-y:auto;padding:8px 11px;background:' + NAVY_DEEP + ';color:#D7DEEC;font-family:JetBrains Mono,Consolas,monospace;font-size:10px;flex-shrink:0}'
-    + '.hzd-feed-e{padding:1px 0;line-height:1.5;word-break:break-word}'
+    + '.hzd-tabs{display:flex;gap:2px;border-bottom:1px solid ' + LINHA + ';flex-shrink:0;padding:0 8px;background:' + SUP2 + '}'
+    + '.hzd-tab{padding:7px 12px;font-size:10px;font-weight:700;letter-spacing:.04em;color:' + SUAVE + ';cursor:pointer;border:none;background:none;border-bottom:2px solid transparent;white-space:nowrap;font-family:inherit}'
+    + '.hzd-tab:hover{color:' + TEXTO + '}'
+    + '.hzd-tab.on{color:' + GOLD_SOFT + ';border-bottom-color:' + GOLD + '}'
+    + '.hzd-feed{height:128px;overflow-y:auto;padding:9px 12px;background:#070C1A;color:#C6D1E8;font-family:JetBrains Mono,Consolas,monospace;font-size:10px;flex-shrink:0}'
+    + '.hzd-feed-e{padding:1px 0;line-height:1.55;word-break:break-word}'
     + '.hzd-feed-e.err{color:#FF9A9A}.hzd-feed-e.ok{color:#65E0AE}.hzd-feed-e.warn{color:#EFC36A}'
     + '.hzd-feed-e.chat b{color:' + GOLD_SOFT + '}'
     + '.hzd-feed a{color:' + GOLD_SOFT + '}'
     + '.hzd-feed-e.det b{color:' + GOLD_SOFT + '}'
-    + '.hzd-foot{display:flex;align-items:center;gap:7px;padding:9px 12px;border-top:1px solid #E6E9F0;background:#FBFCFE;flex-shrink:0}'
-    + '.hzd-foot input{height:28px;border:1px solid #D5DAE5;border-radius:7px;padding:0 9px;font-size:11px;width:76px;font-family:inherit;color:#1B2436}'
-    + '.hzd-foot input:focus{outline:none;border-color:' + GOLD + ';box-shadow:0 0 0 2px rgba(192,154,82,0.20)}'
-    + '.hzd-btn{height:28px;padding:0 13px;border:none;border-radius:7px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;font-family:inherit}'
-    + '.hzd-btn:hover{filter:brightness(1.07)}'
-    + '.hzd-btn-send{background:' + NAVY + ';color:#fff}'
-    // Dourado sobre navy é a cor de ação do operador, a mesma do botão
-    // principal do popup. Em disputa ele se esvazia: continuar rodando é o
-    // estado normal, e o que precisa de destaque passa a ser parar.
+    + '.hzd-foot{display:flex;align-items:center;gap:8px;padding:10px 13px;border-top:1px solid ' + LINHA + ';background:' + SUP2 + ';flex-shrink:0}'
+    + '.hzd-foot input{height:29px;background:' + NAVY_DEEP + ';border:1px solid ' + LINHA + ';border-radius:8px;padding:0 10px;font-size:11px;width:80px;font-family:inherit;color:' + TEXTO + '}'
+    + '.hzd-foot input::placeholder{color:#5E6E8E}'
+    + '.hzd-foot input:focus{outline:none;border-color:' + GOLD + ';box-shadow:0 0 0 2px rgba(192,154,82,0.25)}'
+    + '.hzd-btn{height:29px;padding:0 14px;border:none;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;font-family:inherit}'
+    + '.hzd-btn:hover{filter:brightness(1.09)}'
+    + '.hzd-btn-send{background:#243457;color:' + TEXTO + ';border:1px solid #32457010}'
+    // Dourado sobre navy é a cor de ação do operador, a mesma do painel
+    // lateral. Em disputa ele se esvazia: continuar rodando é o estado normal,
+    // e o que precisa de destaque passa a ser parar.
     + '.hzd-btn-run{background:' + GOLD + ';color:' + NAVY + ';border:1px solid transparent}'
-    + '.hzd-btn-run.on{background:#fff;color:' + NAVY + ';border:1px solid ' + GOLD + '}'
-    + '.hzd-mode{font-size:10px;font-weight:600;color:#6B7689;flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
-    + '.hzd-grip{position:absolute;left:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;opacity:.5;color:#8A96AC;font-size:11px;text-align:center;line-height:14px;user-select:none}'
+    + '.hzd-btn-run.on{background:transparent;color:' + GOLD_SOFT + ';border:1px solid ' + GOLD + '}'
+    + '.hzd-mode{font-size:10px;font-weight:600;color:' + SUAVE + ';flex:1;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+    + '.hzd-grip{position:absolute;left:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;opacity:.55;color:' + SUAVE + ';font-size:11px;text-align:center;line-height:14px;user-select:none}'
     + '#hz-painel-disputa.hz-so-itens #hzd-ids-card,#hz-painel-disputa.hz-so-itens .hzd-metrics,#hz-painel-disputa.hz-so-itens #hzd-feed-card,#hz-painel-disputa.hz-so-itens #hzd-schedule{display:none}'
     + '#hz-painel-disputa.hz-so-itens .hzd-body{gap:6px}';
 
@@ -1174,7 +1224,7 @@
       +   '<div class="hzd-card" id="hzd-ids-card"><div class="hzd-card-title"><span>Identificação do Portal</span><span id="hzd-robo-id"></span></div><div class="hzd-id-grid" id="hzd-ids"><div class="hzd-empty">Carregando configuração do robô...</div></div></div>'
       +   '<div class="hzd-metrics" id="hzd-metrics"></div>'
       +   '<div class="hzd-schedule" id="hzd-schedule" style="display:none"><div class="hzd-schedule-row"><span id="hzd-schedule-label"></span><span id="hzd-schedule-detail"></span></div><div class="hzd-schedule-track" id="hzd-schedule-track" role="progressbar" aria-label="Progresso do horário previsto da disputa" aria-valuemin="0" aria-valuemax="100"><div class="hzd-schedule-fill" id="hzd-schedule-fill"></div></div></div>'
-      +   '<div class="hzd-card hzd-items"><div class="hzd-card-title"><span>Lances</span><span style="display:flex;gap:8px;align-items:center"><span id="hzd-items-count">0 item(ns) monitorado(s)</span><button class="hzd-ico" id="hzd-expand" title="Expandir somente a área de itens" style="color:#6B7689;font-size:11px;background:none;border:none;cursor:pointer">⤢</button></span></div>'
+      +   '<div class="hzd-card hzd-items"><div class="hzd-card-title"><span>Lances</span><span style="display:flex;gap:8px;align-items:center"><span id="hzd-items-count">0 item(ns) monitorado(s)</span><button class="hzd-ico" id="hzd-expand" title="Expandir somente a área de itens" style="color:#8FA0C4;font-size:11px;background:none;border:none;cursor:pointer">⤢</button></span></div>'
       +     '<div class="hzd-tscroll" id="hzd-tscroll"><table class="hzd-table"><thead><tr><th>#</th><th>Descrição</th><th>Status</th><th>Melhor Lance</th><th>Meu Lance</th><th>Lance Manual</th><th>Mínimo R$</th><th>Desc. R$</th><th>Var. %</th><th>Situação</th><th>Fechado</th></tr></thead><tbody id="hzd-tbody"></tbody></table><div class="hzd-empty" id="hzd-tempty">Nenhum item monitorado ainda.</div></div>'
       +   '</div>'
       +   '<div class="hzd-card" id="hzd-feed-card"><div class="hzd-tabs">'
@@ -1361,7 +1411,7 @@
             + idCell('Compra', compra || '—')
             + (portalInfo.link_pncp ? idCell('Edital PNCP', portalInfo.link_pncp) : '')
             + (myCnpj ? idCell('Fornecedor (CNPJ)', myCnpj) : '')
-            + '<div style="grid-column:1/-1;font-size:10px;line-height:1.5;padding-top:4px;color:' + (noCreds ? '#B45309' : '#64748B') + '">' + (noCreds
+            + '<div style="grid-column:1/-1;font-size:10px;line-height:1.5;padding-top:4px;color:' + (noCreds ? GOLD_SOFT : SUAVE) + '">' + (noCreds
               ? 'Extensão sem credenciais — abra o popup do HORASIS e cole o App ID e o Token da página Conectar Robô. O portal continua sendo monitorado; os lances ficam bloqueados até lá.'
               : 'Preparando o robô desta compra...') + '</div>'
           : '<div class="hzd-empty">Identificando a compra pelo portal...</div>';
@@ -1398,7 +1448,7 @@
         '<div class="hzd-metric"><div class="k">' + (botConfig ? 'Valor Inicial' : 'Valor Estimado') + '</div><div class="v">' + fmtBR(botConfig ? botConfig.initial_value : portalEstimate()) + '</div></div>'
         + '<div class="hzd-metric"><div class="k">' + (botConfig ? 'Valor Mínimo' : 'Melhor Lance') + '</div><div class="v" style="color:' + (botConfig ? RED : GREEN) + '">' + fmtBR(botConfig ? botConfig.minimum_value : (globalBest().value || 0)) + '</div></div>'
         + '<div class="hzd-metric"><div class="k">Vencendo</div><div class="v" style="color:' + GREEN + '">' + winning + '/' + monitored + '</div></div>'
-        + '<div class="hzd-metric"><div class="k">Nossos Lances</div><div class="v" style="color:' + PRIMARY + '">' + ourBids + '</div></div>'
+        + '<div class="hzd-metric"><div class="k">Nossos Lances</div><div class="v" style="color:' + GOLD_SOFT + '">' + ourBids + '</div></div>'
         + '<div class="hzd-metric"><div class="k">Total Lances</div><div class="v">' + totalBids + '</div></div>';
     }
 
@@ -1531,9 +1581,6 @@
   function setStatus(msg) { statusLabel = msg; dirty = true; }
 
   // ===== Init =====
-  compra = detectCompra();
-  if (!compra) return;          // não parece a sala de disputa: não assume a página
-  window.__HZ_MOTOR_ATIVO__ = true; // o content.js antigo não abre painel aqui
   var engineStarted = false;
   var noCreds = false;
   function applySettings(data) {
@@ -1574,18 +1621,75 @@
       pushLog('warn', 'Extensão sem credenciais. Abra o popup do HORASIS, cole o App ID e o Token da página Conectar Robô e salve. O portal continua sendo monitorado; os lances ficam bloqueados até lá.');
     }
   }
-  chrome.storage.local.get(['hz_app_id', 'hz_token'], function (data) {
-    applySettings(data);
-    // Só retoma após validar sessão, configuração e itens atuais do portal.
-    running = false;
-    restoreState(function () {
-      buildPanel();
-      renderTimer = setInterval(renderTick, 700);
-      dirty = true;
-      startEngine();
-      pushLog('info', resumeRequested ? 'Histórico restaurado. Aguardando validação da sessão e dos itens para retomar automaticamente.' : 'Histórico restaurado. Motor aguardando comando Iniciar.');
+  /**
+   * Liga o motor nesta compra. Idempotente: a identificação pode chegar por
+   * dois caminhos ao mesmo tempo (a rota muda e o portal responde a primeira
+   * chamada no mesmo instante), e ligar duas vezes abriria dois painéis.
+   */
+  function iniciarNaCompra(codigo) {
+    if (compra || !codigo) return;
+    compra = String(codigo);
+    window.__HZ_MOTOR_ATIVO__ = true;
+    pararVigia();
+
+    chrome.storage.local.get(['hz_app_id', 'hz_token'], function (data) {
+      applySettings(data);
+      // Só retoma após validar sessão, configuração e itens atuais do portal.
+      running = false;
+      restoreState(function () {
+        buildPanel();
+        renderTimer = setInterval(renderTick, 700);
+        dirty = true;
+        startEngine();
+        pushLog('info', resumeRequested ? 'Histórico restaurado. Aguardando validação da sessão e dos itens para retomar automaticamente.' : 'Histórico restaurado. Motor aguardando comando Iniciar.');
+      });
     });
-  });
+  }
+
+  // ===== Vigia: encontra a disputa aberta sem o operador informar nada =====
+  //
+  // O portal é uma aplicação de página única. Quando a extensão é injetada, o
+  // operador quase nunca está na sala de disputa ainda — ele navega até ela
+  // depois, e a URL muda sem recarregar a página. Desistir na primeira leitura
+  // era o que fazia o painel nunca aparecer.
+  //
+  // Duas vias, porque nenhuma cobre tudo sozinha: a rota (barata, imediata) e
+  // o tráfego que o portal gera (funciona mesmo quando a rota não carrega o
+  // código da compra).
+  var vigiaTimer = null;
+  var vigiaOuvinte = null;
+
+  function pararVigia() {
+    if (vigiaTimer) { clearInterval(vigiaTimer); vigiaTimer = null; }
+    if (vigiaOuvinte) { window.removeEventListener('message', vigiaOuvinte); vigiaOuvinte = null; }
+    window.removeEventListener('popstate', olharRota);
+    window.removeEventListener('hashchange', olharRota);
+  }
+
+  function olharRota() { iniciarNaCompra(detectCompra()); }
+
+  function iniciarVigia() {
+    olharRota();
+    if (compra) return;
+
+    window.addEventListener('popstate', olharRota);
+    window.addEventListener('hashchange', olharRota);
+    // pushState não dispara evento nenhum, e é como as rotas internas do
+    // portal mudam. Uma sondagem barata cobre esse caso sem instrumentar a
+    // History API da página.
+    vigiaTimer = setInterval(olharRota, 1000);
+
+    vigiaOuvinte = function (ev) {
+      if (ev.source !== window || !ev.data || ev.data.type !== 'HZ_NET_SONDA' || !ev.data.d) return;
+      iniciarNaCompra(compraDoTrafego(ev.data.d));
+    };
+    window.addEventListener('message', vigiaOuvinte);
+    // A sonda guarda o que passou antes deste script existir; o HELLO pede o
+    // replay, e é por ele que a compra costuma aparecer já na primeira volta.
+    try { window.postMessage({ type: 'HZ_NET_SONDA_OLA' }, window.location.origin); } catch (e) {}
+  }
+
+  iniciarVigia();
   // Recarrega automaticamente quando o usuário salvar as credenciais no popup
   chrome.storage.onChanged.addListener(function (changes, area) {
     if (area !== 'local') return;
@@ -1603,7 +1707,9 @@
       dirty = true;
       noCreds = false;
       if (engineStarted) { loadBot(0); return; }
-      startEngine();
+      // Sem compra identificada o motor não tem o que carregar; o vigia segue
+      // procurando e liga tudo quando a sala aparecer.
+      if (compra) startEngine();
     });
   });
 
@@ -1731,10 +1837,10 @@
         var errCard = el('hzd-ids');
         if (errCard && errCard.getAttribute('data-err') !== 'loaderr') {
           errCard.setAttribute('data-err', 'loaderr');
-          errCard.innerHTML = '<div style="grid-column:1/-1;padding:14px;font-size:11px;line-height:1.7;color:#1E293B">' +
+          errCard.innerHTML = '<div style="grid-column:1/-1;padding:14px;font-size:11px;line-height:1.7;color:' + TEXTO + '">' +
             '<span style="color:' + RED + ';font-weight:700">Não foi possível preparar o robô desta compra.</span><br>' +
             'Erro: ' + errTxt + '<br>' + hint + '<br>' +
-            '<button id="hzd-retry-load" style="margin-top:8px;padding:6px 14px;border:0;border-radius:6px;background:' + NAVY + ';color:#fff;font-weight:700;font-size:11px;cursor:pointer">Tentar novamente</button></div>';
+            '<button id="hzd-retry-load" style="margin-top:8px;padding:6px 14px;border:0;border-radius:6px;background:' + GOLD + ';color:' + NAVY + ';font-weight:700;font-size:11px;cursor:pointer">Tentar novamente</button></div>';
           var retryBtn = document.getElementById('hzd-retry-load');
           if (retryBtn) retryBtn.addEventListener('click', function (ev) {
             ev.stopPropagation();

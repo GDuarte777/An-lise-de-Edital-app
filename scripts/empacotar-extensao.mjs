@@ -22,7 +22,7 @@ const destino = join(raiz, "public");
 const NOME_ZIP = "extensao-horasis.zip";
 
 /** Arquivos que não devem viajar dentro da extensão instalada. */
-const IGNORADOS = new Set(["README.md", ".DS_Store"]);
+const IGNORADOS = new Set(["README.md", ".DS_Store", "icone.svg"]);
 
 async function listarArquivos(pasta) {
   const entradas = await readdir(pasta, { withFileTypes: true });

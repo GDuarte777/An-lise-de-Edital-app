@@ -27,7 +27,9 @@
     * { box-sizing: border-box; }
 
     body {
-      width: 352px;
+      /* Painel lateral: o operador escolhe a largura arrastando a borda. */
+      width: 100%;
+      min-width: 300px;
       margin: 0;
       padding: 0;
       background: var(--navy-900);
@@ -47,13 +49,7 @@
       align-items: center;
       gap: 10px;
     }
-    header img {
-      width: 28px; height: 28px;
-      background: #fff;
-      border-radius: 50%;
-      padding: 3px;
-      box-sizing: border-box;
-    }
+    header img { width: 30px; height: 30px; border-radius: 9px; }
     .marca { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
     .marca b {
       font-size: 13px;
