@@ -30,8 +30,60 @@ const CHAVE_PUBLICAVEL_PADRAO = 'sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o'
 
 /** Monta a URL do assistente de lances para um App ID. */
 function urlDoAssistente(apiBase, appId) {
-  const base = String(apiBase || API_BASE_PADRAO).replace(/\/+$/, '');
-  return base + '/api/apps/' + encodeURIComponent(appId) + '/functions/bidAssistant';
+  return urlDaApi(apiBase, '/api/apps/' + encodeURIComponent(appId) + '/functions/bidAssistant');
+}
+
+function urlDaApi(apiBase, caminho) {
+  return String(apiBase || API_BASE_PADRAO).replace(/\/+$/, '') + caminho;
+}
+
+/**
+ * Chamada autenticada ao backend, com as credenciais lidas do storage.
+ *
+ * Três tentativas com espera crescente: o Service Worker do Manifest V3 pode
+ * ser encerrado pelo Chrome no meio de um fetch — com a página do portal em
+ * atividade alta isso acontece e aparece como "Failed to fetch" sem causa
+ * visível. O que falha depois disso é falha de verdade e precisa chegar à tela.
+ */
+function chamarBackend(caminhoOuUrl, metodo, corpo, responder) {
+  chrome.storage.local.get(['hz_api_base', 'hz_app_id', 'hz_token'], (cfg) => {
+    if (!cfg.hz_app_id || !cfg.hz_token) {
+      responder({ ok: false, error: 'Extensão sem credenciais — cole o App ID e o Token acima e salve.' });
+      return;
+    }
+    const url = typeof caminhoOuUrl === 'function'
+      ? caminhoOuUrl(cfg.hz_api_base, cfg.hz_app_id)
+      : urlDaApi(cfg.hz_api_base, caminhoOuUrl);
+
+    const tentar = (tentativa) => {
+      fetch(url, {
+        method: metodo,
+        mode: 'cors',
+        credentials: 'omit',
+        headers: {
+          'Authorization': 'Bearer ' + cfg.hz_token,
+          'apikey': CHAVE_PUBLICAVEL_PADRAO,
+          'Content-Type': 'application/json'
+        },
+        body: corpo === undefined ? undefined : JSON.stringify(corpo)
+      })
+        .then((r) => r.text().then((texto) => {
+          let dados;
+          try {
+            dados = JSON.parse(texto);
+          } catch (e) {
+            dados = { error: 'Resposta inválida do servidor: ' + texto.substring(0, 200) };
+          }
+          if (!r.ok) responder({ ok: false, error: dados.error || ('HTTP ' + r.status) });
+          else responder({ ok: true, data: dados });
+        }))
+        .catch((err) => {
+          if (tentativa < 2) setTimeout(() => tentar(tentativa + 1), 700 * (tentativa + 1));
+          else responder({ ok: false, error: err.message });
+        });
+    };
+    tentar(0);
+  });
 }
 
 // Ao instalar ou atualizar, injeta o motor nas abas de disputa já abertas.
@@ -82,50 +134,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // storage aqui dentro, então um content script comprometido pela página
     // do portal não teria como ler o token da conta.
     if (request.action === 'horasis_bid_assistant') {
-      chrome.storage.local.get(['hz_api_base', 'hz_app_id', 'hz_token'], (cfg) => {
-        const appId = cfg.hz_app_id;
-        const token = cfg.hz_token;
-        if (!appId || !token) {
-          sendResponse({ ok: false, error: 'Extensão sem credenciais — abra o popup do HORASIS e salve App ID e Token.' });
-          return;
-        }
-        const apiUrl = urlDoAssistente(cfg.hz_api_base, appId);
-
-        // O Service Worker do Manifest V3 pode ser encerrado pelo Chrome no
-        // meio de um fetch — com a página do portal em atividade alta isso
-        // acontece e aparece como "Failed to fetch" sem causa visível. Três
-        // tentativas com espera crescente cobrem essa reciclagem; o que falha
-        // depois disso é falha de verdade e precisa chegar à tela.
-        const tentar = (tentativa) => {
-          fetch(apiUrl, {
-            method: 'POST',
-            mode: 'cors',
-            credentials: 'omit',
-            headers: {
-              'Authorization': 'Bearer ' + token,
-              'apikey': CHAVE_PUBLICAVEL_PADRAO,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(request.payload || {})
-          })
-            .then((r) => r.text().then((texto) => {
-              let dados;
-              try {
-                dados = JSON.parse(texto);
-              } catch (e) {
-                dados = { error: 'Resposta inválida do servidor: ' + texto.substring(0, 200) };
-              }
-              if (!r.ok) sendResponse({ ok: false, error: dados.error || ('HTTP ' + r.status) });
-              else sendResponse({ ok: true, data: dados });
-            }))
-            .catch((err) => {
-              if (tentativa < 2) setTimeout(() => tentar(tentativa + 1), 700 * (tentativa + 1));
-              else sendResponse({ ok: false, error: err.message });
-            });
-        };
-        tentar(0);
-      });
+      chamarBackend(urlDoAssistente, 'POST', request.payload || {}, sendResponse);
       return true; // mantém o canal aberto para o fetch assíncrono
+    }
+
+    // ─── Configuração do robô ───────────────────────────────────────────
+    // Ela é editada aqui, no popup, e não numa tela da plataforma: quem opera
+    // o pregão está no navegador, com o portal aberto, e mandá-lo a outro
+    // lugar para mudar o tempo de resposta é mandá-lo sair da disputa.
+    if (request.action === 'horasis_perfil_ler') {
+      chamarBackend('/api/robos/perfil', 'GET', undefined, sendResponse);
+      return true;
+    }
+
+    if (request.action === 'horasis_perfil_salvar') {
+      chamarBackend('/api/robos/perfil', 'POST', request.perfil || {}, sendResponse);
+      return true;
     }
 
     // Ação não reconhecida — devolver false libera o canal em vez de travá-lo.

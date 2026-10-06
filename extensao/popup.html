@@ -142,6 +142,51 @@
     .status.ok  { background: rgba(61, 213, 152, 0.10); border-color: rgba(61, 213, 152, 0.35); color: var(--ok); }
     .status.err { background: rgba(255, 138, 138, 0.10); border-color: rgba(255, 138, 138, 0.35); color: var(--erro); }
 
+    select {
+      width: 100%;
+      padding: 9px 11px;
+      background: var(--navy-800);
+      border: 1px solid var(--linha);
+      border-radius: 8px;
+      color: var(--texto);
+      font-size: 12px;
+      font-family: inherit;
+    }
+    select:focus {
+      outline: none;
+      border-color: var(--gold);
+      box-shadow: 0 0 0 3px rgba(192, 154, 82, 0.16);
+    }
+
+    .linha-tripla {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      align-items: end;
+    }
+    .linha-tripla label { font-size: 9px; letter-spacing: .05em; }
+    .linha-tripla input { margin-bottom: 0; }
+
+    .secao {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--linha);
+    }
+    .secao h3 {
+      margin: 0 0 10px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+      color: var(--gold-sw);
+    }
+    .nota {
+      font-size: 10px;
+      color: var(--suave);
+      line-height: 1.5;
+      margin: 0 0 10px;
+    }
+
     details {
       margin-top: 14px;
       border-top: 1px solid var(--linha);
@@ -187,15 +232,55 @@
     <label for="token">Token de acesso</label>
     <input id="token" type="password" placeholder="Cole aqui o Token" autocomplete="off" />
 
-    <button class="primario" id="save">Salvar configuração</button>
+    <button class="primario" id="save">Salvar credenciais</button>
     <button class="secundario" id="openDispute">Abrir painel da disputa</button>
 
     <div class="status" id="status" style="display:none;"></div>
 
+    <!-- A configuração do robô vive aqui, e não numa tela da plataforma:
+         quem opera o pregão está no navegador, com o portal aberto. -->
+    <section class="secao" id="secaoRobo" hidden>
+      <h3>Configuração do robô</h3>
+      <p class="nota">
+        Vale para as disputas que você abrir a partir de agora. O <b>piso de margem</b> é por item e fica na
+        tabela do painel, na sala de disputa.
+      </p>
+
+      <label for="modo">Modo</label>
+      <select id="modo">
+        <option value="Manual Assistido">Manual assistido — só sugere</option>
+        <option value="Automático">Automático — cobre sozinho</option>
+        <option value="Estratégico">Estratégico — varia o intervalo</option>
+      </select>
+      <p class="nota" id="modoDica"></p>
+
+      <div class="linha-tripla">
+        <div>
+          <label for="reducaoMin">Red. mín. %</label>
+          <input id="reducaoMin" inputmode="decimal" placeholder="1" />
+        </div>
+        <div>
+          <label for="reducaoMax">Red. máx. %</label>
+          <input id="reducaoMax" inputmode="decimal" placeholder="5" />
+        </div>
+        <div>
+          <label for="tempoResposta">Resposta (s)</label>
+          <input id="tempoResposta" inputmode="numeric" placeholder="3" />
+        </div>
+      </div>
+
+      <label for="cnpj">CNPJ do fornecedor</label>
+      <input id="cnpj" placeholder="00.000.000/0001-00" autocomplete="off" />
+      <p class="nota">Usado para avisar quando o pregoeiro mencionar sua empresa no chat.</p>
+
+      <button class="primario" id="salvarRobo">Salvar configuração do robô</button>
+      <div class="status" id="statusRobo" style="display:none;"></div>
+    </section>
+
     <details>
       <summary>Como usar</summary>
       <div class="ajuda">
-        <p>Copie o <b>App ID</b> e o <b>Token</b> na página <b>Conectar Robô</b> do HORASIS e cole nos campos acima. É tudo: não há robô para cadastrar.</p>
+        <p>Copie o <b>App ID</b> e o <b>Token</b> na aba <b>Robô de Lances</b> do HORASIS e cole nos campos acima. É tudo: não há robô para cadastrar.</p>
         <p>Abra a sala de disputa e o painel sobe sozinho, já com os itens lidos do portal. O <b>piso de margem</b> de cada item você digita na própria tabela do painel — enquanto um item estiver sem piso, ele é monitorado mas não recebe lance automático.</p>
         <p><b>Duas disputas ao mesmo tempo:</b> abra cada compra em uma aba. Cada aba cuida da sua, sem configuração nenhuma.</p>
         <p>Na sala de disputa do <b>Licitanet</b> o motor abre sozinho — basta estar logado como fornecedor.</p>

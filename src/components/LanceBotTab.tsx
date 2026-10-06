@@ -8,18 +8,24 @@ import { Card, CardContent } from "./ui/card";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
-import { Switch } from "./ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import {
-  MODOS_ROBO, PERFIL_PADRAO, gerarToken, lerPerfil,
-  listarItens, listarRobos, listarTokens, numeroOuNulo, revogarToken,
-  salvarItens, salvarPerfil,
-  type ItemRoboLance, type ModoRobo, type PerfilRobo, type RoboLance,
-  type TipoDisputa, type TokenRobo,
+  PERFIL_PADRAO, gerarToken, lerPerfil, listarItens, listarRobos, listarTokens,
+  revogarToken,
+  type ItemRoboLance, type PerfilRobo, type RoboLance, type TokenRobo,
 } from "../utils/roboLances";
 
-const URL_INSTALADOR =
+/**
+ * Pacote da extensão, gerado no build por scripts/empacotar-extensao.mjs.
+ *
+ * Não é um arquivo commitado: um .zip parado no repositório envelhece em
+ * silêncio, e o resultado disso é o operador instalar uma extensão antiga que
+ * conversa com um backend novo — erro que só aparece no meio do pregão.
+ */
+const ARQUIVO_EXTENSAO = "/extensao-horasis.zip";
+const METADADOS_EXTENSAO = "/extensao-horasis.json";
+
+const URL_INSTALADOR_DESKTOP =
   "https://github.com/GDuarte777/An-lise-de-Edital-app/releases/latest/download/HORASIS-LanceBot-Setup.exe";
 
 type Aviso = { tipo: "ok" | "erro"; texto: string } | null;
@@ -27,15 +33,13 @@ type Aviso = { tipo: "ok" | "erro"; texto: string } | null;
 /**
  * Robô de lances.
  *
- * Não se cadastra robô aqui, e isso é a decisão central da tela: o robô nasce
- * quando a extensão abre a sala de disputa. Um pregão que aparece de manhã
- * para disputar à tarde não tem tempo de cadastro prévio, e quem esquecia
- * chegava na sala sem robô.
+ * Esta tela não configura o robô. Ela entrega a extensão e as duas credenciais
+ * — e mostra o que as disputas produziram. Modo, faixa de redução e tempo de
+ * resposta são ajustados no popup da própria extensão, e o piso de margem na
+ * tabela do painel, dentro da sala de disputa.
  *
- * O que fica aqui é o antes e o depois. Antes: o perfil padrão que todo robô
- * novo herda. Depois: o que cada disputa produziu, com os pisos de margem
- * abertos para ajuste — os mesmos que o operador digita na tabela do painel,
- * durante o pregão.
+ * O motivo é onde o operador está: no navegador, com o portal aberto. Mandá-lo
+ * a outra tela para mudar o tempo de resposta é mandá-lo sair da disputa.
  */
 export default function LanceBotTab(_props: { activeEdital?: any }) {
   const [robos, setRobos] = useState<RoboLance[]>([]);
@@ -60,14 +64,13 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
       setCarregando(true);
       await carregarRobos();
       // Perfil e tokens dependem da Edge Function. Se ela estiver fora do ar,
-      // a lista de disputas ainda vale a tela: falhar tudo junto esconderia o
-      // que continua funcionando.
+      // o download da extensão e a lista de disputas ainda valem a tela.
       try {
         setPerfil(await lerPerfil());
-      } catch { /* mantém o padrão */ }
+      } catch { /* o App ID aparece vazio, com aviso próprio */ }
       try {
         setTokens(await listarTokens());
-      } catch { /* a conexão continua configurável */ }
+      } catch { /* a geração de token tem o seu próprio erro */ }
       setCarregando(false);
     })();
   }, [carregarRobos]);
@@ -81,16 +84,6 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
       .then(setItens)
       .catch((erro) => setAviso({ tipo: "erro", texto: erro?.message || "Não foi possível carregar os itens." }));
   }, [selecionado]);
-
-  async function guardarPerfil(novo: PerfilRobo) {
-    setPerfil(novo);
-    try {
-      setPerfil(await salvarPerfil(novo));
-      setAviso({ tipo: "ok", texto: "Perfil salvo. Vale para as próximas disputas; quem já está em sala não muda." });
-    } catch (erro: any) {
-      setAviso({ tipo: "erro", texto: erro?.message || "Não foi possível salvar o perfil." });
-    }
-  }
 
   async function criarToken(): Promise<string> {
     try {
@@ -125,7 +118,7 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
         <div className="flex-1">
           <h2 className="text-base font-bold text-foreground">Robô de Lances</h2>
           <p className="text-xs text-muted-foreground">
-            Abra a sala de disputa e o robô daquela compra nasce sozinho. Não há nada para cadastrar antes.
+            Instale a extensão, cole as duas credenciais e abra a sala de disputa. O robô nasce sozinho.
           </p>
         </div>
       </div>
@@ -143,6 +136,8 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
         </div>
       )}
 
+      <BaixarExtensao />
+
       <ConectarRobo
         appId={perfil.app_id}
         tokens={tokens}
@@ -152,15 +147,13 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
         aoDescartarToken={() => setTokenNovo("")}
       />
 
-      <PerfilPadrao perfil={perfil} aoSalvar={guardarPerfil} />
-
       <Card className="py-5">
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <span className="text-xs font-bold text-foreground uppercase tracking-wide">Disputas</span>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                Cada compra que a extensão abriu aparece aqui.
+                Cada compra que a extensão abriu aparece aqui, com o que foi configurado no painel.
               </p>
             </div>
             <Button size="sm" variant="outline" onClick={carregarRobos}>
@@ -176,7 +169,7 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
           ) : robos.length === 0 ? (
             <p className="text-xs text-muted-foreground leading-relaxed">
               Nenhuma disputa ainda. Instale a extensão, cole o App ID e o Token acima e abra a sala de disputa de um
-              pregão — ela aparece aqui sozinha, com o que o portal informou.
+              pregão — ela aparece aqui sozinha.
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">
@@ -201,17 +194,7 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
         </CardContent>
       </Card>
 
-      {roboAberto && (
-        <PisosDaDisputa
-          robo={roboAberto}
-          itens={itens}
-          aoMudar={setItens}
-          aoSalvar={async () => {
-            const r = await salvarItens(roboAberto.id, itens);
-            setAviso({ tipo: r.sucesso ? "ok" : "erro", texto: r.mensagem });
-          }}
-        />
-      )}
+      {roboAberto && <ResumoDaDisputa robo={roboAberto} itens={itens} />}
 
       <Card className="py-5">
         <CardContent className="space-y-3">
@@ -225,7 +208,7 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
             extensão.
           </p>
           <Button asChild size="sm" variant="outline" className="w-fit">
-            <a href={URL_INSTALADOR}>
+            <a href={URL_INSTALADOR_DESKTOP}>
               <Download className="w-3.5 h-3.5" />
               Baixar instalador
             </a>
@@ -233,6 +216,70 @@ export default function LanceBotTab(_props: { activeEdital?: any }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ─── Baixar a extensão ─────────────────────────────────────────────────
+
+interface PacoteExtensao {
+  versao: string;
+  bytes: number;
+}
+
+function BaixarExtensao() {
+  const [pacote, setPacote] = useState<PacoteExtensao | null>(null);
+
+  useEffect(() => {
+    // Em `npm run dev` o pacote não existe (ele é gerado no build). O botão
+    // continua na tela: o que falta é só a etiqueta de versão.
+    fetch(METADADOS_EXTENSAO)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((dados) => dados?.versao && setPacote(dados))
+      .catch(() => {});
+  }, []);
+
+  return (
+    <Card className="py-5 border-primary/30">
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Puzzle className="w-4 h-4 text-primary" />
+          <span className="text-xs font-bold text-foreground uppercase tracking-wide">Extensão do navegador</span>
+          {pacote && (
+            <Badge variant="secondary" className="text-[9px]">
+              v{pacote.versao} · {(pacote.bytes / 1024).toFixed(0)} KB
+            </Badge>
+          )}
+        </div>
+
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          É ela que opera a sala de disputa do Comprasnet e do Licitanet. Toda a configuração do robô — modo, faixa
+          de redução, tempo de resposta e o piso de margem de cada item — é feita dentro dela, onde você já está
+          durante o pregão.
+        </p>
+
+        <Button asChild>
+          <a href={ARQUIVO_EXTENSAO} download>
+            <Download className="w-4 h-4" />
+            Baixar extensão
+          </a>
+        </Button>
+
+        <ol className="text-[11px] text-muted-foreground leading-relaxed space-y-1.5 list-decimal pl-4">
+          <li>Descompacte o arquivo numa pasta que você não vá apagar — o Chrome carrega a extensão de lá.</li>
+          <li>
+            Abra <code className="bg-muted px-1 py-0.5 rounded">chrome://extensions</code> e ligue o
+            {" "}<b>Modo do desenvolvedor</b>, no canto superior direito.
+          </li>
+          <li>Clique em <b>Carregar sem compactação</b> e aponte para a pasta descompactada.</li>
+          <li>Clique no ícone do HORASIS na barra e cole o App ID e o Token abaixo.</li>
+        </ol>
+
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          A instalação é em modo desenvolvedor porque a extensão não está publicada na Chrome Web Store. O Chrome
+          avisa sobre isso a cada abertura — é esperado, e não indica problema com o arquivo.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -282,14 +329,12 @@ function ConectarRobo({
     <Card className="bg-muted/40 py-5">
       <CardContent className="space-y-4">
         <div className="flex items-center gap-2">
-          <Puzzle className="w-4 h-4 text-primary" />
-          <span className="text-xs font-bold text-foreground uppercase tracking-wide">Conectar robô</span>
+          <KeyRound className="w-4 h-4 text-primary" />
+          <span className="text-xs font-bold text-foreground uppercase tracking-wide">Suas credenciais</span>
         </div>
 
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Instale a extensão HORASIS no Chrome, clique no ícone dela e cole os dois valores abaixo. Eles são seus:
-          o App ID identifica a sua conta e o Token autentica. É a única configuração — a partir daí, qualquer sala
-          de disputa que você abrir já sobe com o painel.
+          Cole as duas no popup da extensão. Elas são suas: o App ID identifica a sua conta e o Token autentica.
         </p>
 
         {appId ? (
@@ -412,144 +457,29 @@ function CampoCopiavel({ rotulo, valor, destaque }: { rotulo: string; valor: str
   );
 }
 
-// ─── Perfil padrão ─────────────────────────────────────────────────────
+// ─── Resumo de uma disputa (somente leitura) ───────────────────────────
 
-function PerfilPadrao({ perfil, aoSalvar }: { perfil: PerfilRobo; aoSalvar: (p: PerfilRobo) => void }) {
-  const [rascunho, setRascunho] = useState(perfil);
-  const [salvando, setSalvando] = useState(false);
-
-  useEffect(() => setRascunho(perfil), [perfil]);
-
-  const mudar = (campo: keyof PerfilRobo, valor: any) => setRascunho({ ...rascunho, [campo]: valor });
-  const descricaoDoModo = MODOS_ROBO.find((m) => m.valor === rascunho.mode)?.descricao || "";
-
-  return (
-    <Card className="py-5">
-      <CardContent className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <span className="text-xs font-bold text-foreground uppercase tracking-wide">Perfil padrão</span>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Todo robô novo nasce com isto. Mudar aqui não altera disputa em andamento.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            disabled={salvando}
-            onClick={async () => {
-              setSalvando(true);
-              await aoSalvar(rascunho);
-              setSalvando(false);
-            }}
-          >
-            {salvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-            Salvar
-          </Button>
-        </div>
-
-        <Campo rotulo="Modo" dica={descricaoDoModo}>
-          <Select value={rascunho.mode} onValueChange={(v) => mudar("mode", v as ModoRobo)}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {MODOS_ROBO.map((modo) => (
-                <SelectItem key={modo.valor} value={modo.valor}>{modo.rotulo}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Campo>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Campo rotulo="Redução mínima (%)">
-            <Input
-              value={rascunho.min_reduction ?? ""}
-              placeholder="1"
-              onChange={(e) => mudar("min_reduction", numeroOuNulo(e.target.value))}
-            />
-          </Campo>
-          <Campo rotulo="Redução máxima (%)" dica="Só é usada no modo Estratégico, que sorteia dentro da faixa.">
-            <Input
-              value={rascunho.max_reduction ?? ""}
-              placeholder="5"
-              onChange={(e) => mudar("max_reduction", numeroOuNulo(e.target.value))}
-            />
-          </Campo>
-          <Campo rotulo="Tempo de resposta (s)">
-            <Input
-              type="number"
-              min={1}
-              value={rascunho.response_time}
-              onChange={(e) => mudar("response_time", Number(e.target.value) || 3)}
-            />
-          </Campo>
-        </div>
-
-        <Campo rotulo="CNPJ do fornecedor" dica="Usado para detectar menções à sua empresa no chat do pregoeiro.">
-          <Input
-            value={rascunho.fornecedor_cnpj || ""}
-            placeholder="00.000.000/0001-00"
-            onChange={(e) => mudar("fornecedor_cnpj", e.target.value || null)}
-          />
-        </Campo>
-
-        <div className="space-y-3 rounded-xl border border-border p-3">
-          <Opcao
-            rotulo="Disputar item a item"
-            texto="Ligado, o robô só atua nos itens que tiverem configuração própria. Desligado, ele acompanha tudo que o portal mostrar — e continua sem dar lance em item sem piso."
-            marcado={rascunho.dispute_type === "por_item"}
-            aoMudar={(v) => mudar("dispute_type", (v ? "por_item" : "global") as TipoDisputa)}
-          />
-          {rascunho.dispute_type === "por_item" && (
-            <Opcao
-              rotulo="Exigir seleção explícita"
-              texto="Ligado, um item só entra em disputa se estiver marcado para participar E tiver piso. É a configuração mais conservadora."
-              marcado={rascunho.item_selection_enabled}
-              aoMudar={(v) => mudar("item_selection_enabled", v)}
-            />
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Pisos de uma disputa ──────────────────────────────────────────────
-
-function PisosDaDisputa({
-  robo, itens, aoMudar, aoSalvar,
-}: {
-  robo: RoboLance;
-  itens: ItemRoboLance[];
-  aoMudar: (itens: ItemRoboLance[]) => void;
-  aoSalvar: () => void;
-}) {
-  function mudarItem(numero: number, campo: keyof ItemRoboLance, valor: any) {
-    aoMudar(itens.map((item) => (item.numero_item === numero ? { ...item, [campo]: valor } : item)));
-  }
-
+function ResumoDaDisputa({ robo, itens }: { robo: RoboLance; itens: ItemRoboLance[] }) {
   const semPiso = itens.filter((i) => i.valor_minimo === null);
+  const moeda = (v: number | null) =>
+    v === null ? "—" : v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
   return (
     <Card className="py-5">
       <CardContent className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <span className="text-xs font-bold text-foreground uppercase tracking-wide">{robo.title}</span>
-            <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
-              {robo.orgao || "Órgão não informado pelo portal"}
-              {robo.link_sistema_origem && (
-                <>
-                  {" · "}
-                  <a href={robo.link_sistema_origem} target="_blank" rel="noopener noreferrer" className="underline">
-                    edital no PNCP
-                  </a>
-                </>
-              )}
-            </p>
-          </div>
-          <Button size="sm" onClick={aoSalvar}>
-            <Check className="w-3.5 h-3.5" />
-            Salvar
-          </Button>
+        <div className="min-w-0">
+          <span className="text-xs font-bold text-foreground uppercase tracking-wide">{robo.title}</span>
+          <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+            {robo.orgao || "Órgão não informado pelo portal"}
+            {robo.link_sistema_origem && (
+              <>
+                {" · "}
+                <a href={robo.link_sistema_origem} target="_blank" rel="noopener noreferrer" className="underline">
+                  edital no PNCP
+                </a>
+              </>
+            )}
+          </p>
         </div>
 
         {itens.length === 0 ? (
@@ -573,53 +503,24 @@ function PisosDaDisputa({
                   <TableRow>
                     <TableHead className="w-12">#</TableHead>
                     <TableHead>Descrição</TableHead>
-                    <TableHead className="w-20">Participar</TableHead>
-                    <TableHead className="w-28">Mínimo R$</TableHead>
-                    <TableHead className="w-28">Lance manual</TableHead>
-                    <TableHead className="w-24">Desc. R$</TableHead>
-                    <TableHead className="w-20">Var. %</TableHead>
+                    <TableHead className="w-28 text-right">Mínimo</TableHead>
+                    <TableHead className="w-28 text-right">Lance manual</TableHead>
+                    <TableHead className="w-24 text-right">Desconto</TableHead>
+                    <TableHead className="w-20 text-right">Var. %</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {itens.map((item) => (
                     <TableRow key={item.numero_item}>
                       <TableCell className="font-mono text-xs">{item.numero_item}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground max-w-[220px] truncate">
+                      <TableCell className="text-xs text-muted-foreground max-w-[260px] truncate">
                         {item.descricao || "—"}
                       </TableCell>
-                      <TableCell>
-                        <Switch
-                          checked={item.participar}
-                          onCheckedChange={(v) => mudarItem(item.numero_item, "participar", v)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          className="h-8 text-xs text-right"
-                          value={item.valor_minimo ?? ""}
-                          onChange={(e) => mudarItem(item.numero_item, "valor_minimo", numeroOuNulo(e.target.value))}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          className="h-8 text-xs text-right"
-                          value={item.lance_manual ?? ""}
-                          onChange={(e) => mudarItem(item.numero_item, "lance_manual", numeroOuNulo(e.target.value))}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          className="h-8 text-xs text-right"
-                          value={item.desconto ?? ""}
-                          onChange={(e) => mudarItem(item.numero_item, "desconto", numeroOuNulo(e.target.value))}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          className="h-8 text-xs text-right"
-                          value={item.variacao ?? ""}
-                          onChange={(e) => mudarItem(item.numero_item, "variacao", numeroOuNulo(e.target.value))}
-                        />
+                      <TableCell className="text-xs text-right tabular-nums">{moeda(item.valor_minimo)}</TableCell>
+                      <TableCell className="text-xs text-right tabular-nums">{moeda(item.lance_manual)}</TableCell>
+                      <TableCell className="text-xs text-right tabular-nums">{moeda(item.desconto)}</TableCell>
+                      <TableCell className="text-xs text-right tabular-nums">
+                        {item.variacao === null ? "—" : `${item.variacao}%`}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -630,43 +531,11 @@ function PisosDaDisputa({
         )}
 
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          <b>Mínimo</b> é o piso: abaixo dele o robô para. <b>Lance manual</b> envia esse valor exato, ignorando o
-          cálculo — mas continua respeitando o piso. <b>Desconto</b> e <b>variação</b> definem quanto baixar por
-          lance (reais ou percentual) e vencem a faixa de redução do perfil.
+          Esta tela é só leitura. Para mudar o piso de um item, use a tabela do painel na sala de disputa — é lá que
+          o valor vale no instante do lance.
         </p>
       </CardContent>
     </Card>
-  );
-}
-
-// ─── Peças de interface ────────────────────────────────────────────────
-
-function Campo({ rotulo, dica, children }: { rotulo: string; dica?: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <Label className="text-[11px]">{rotulo}</Label>
-      {children}
-      {dica && <p className="text-[10px] text-muted-foreground leading-relaxed">{dica}</p>}
-    </div>
-  );
-}
-
-function Opcao({
-  rotulo, texto, marcado, aoMudar,
-}: {
-  rotulo: string;
-  texto: string;
-  marcado: boolean;
-  aoMudar: (valor: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <Switch checked={marcado} onCheckedChange={aoMudar} className="mt-0.5" />
-      <div className="space-y-0.5">
-        <span className="block text-xs font-bold text-foreground">{rotulo}</span>
-        <span className="block text-[11px] text-muted-foreground leading-relaxed">{texto}</span>
-      </div>
-    </div>
   );
 }
 

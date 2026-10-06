@@ -124,12 +124,33 @@ describe("aba do robô de lances", () => {
     expect(await screen.findByText(/App ID ainda não foi gerado/i)).toBeTruthy();
   });
 
-  it("não oferece cadastro de robô", async () => {
-    // O robô nasce na sala de disputa. Um botão de "novo robô" aqui traria de
-    // volta exatamente o passo prévio que se quis eliminar.
+  it("não oferece cadastro nem configuração de robô", async () => {
+    // O robô nasce na sala de disputa e é configurado no popup da extensão.
+    // Qualquer um dos dois aqui traz de volta o passo que se quis eliminar:
+    // tirar o operador do navegador onde ele está durante o pregão.
     render(<LanceBotTab />);
     await screen.findByText("Pregão 90012/2026");
     expect(screen.queryByRole("button", { name: /novo rob/i })).toBeNull();
+    expect(screen.queryByText(/perfil padrão/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /salvar config/i })).toBeNull();
+  });
+
+  it("oferece a extensão para baixar", async () => {
+    render(<LanceBotTab />);
+    const link = await screen.findByRole("link", { name: /baixar extensão/i });
+    expect(link.getAttribute("href")).toBe("/extensao-horasis.zip");
+    expect(link.hasAttribute("download")).toBe(true);
+  });
+
+  it("mostra os pisos da disputa sem deixar editá-los", async () => {
+    // O piso vale no instante do lance, e esse instante acontece no painel.
+    // Um campo editável aqui sugeriria duas fontes da verdade.
+    render(<LanceBotTab />);
+    fireEvent.click(await screen.findByText("Pregão 90012/2026"));
+
+    await screen.findByText(/R\$\s*11\.800,00/);
+    expect(screen.queryByRole("button", { name: /^salvar$/i })).toBeNull();
+    expect(screen.getByText(/só leitura/i)).toBeTruthy();
   });
 
   it("avisa quando um item da disputa não tem piso de margem", async () => {

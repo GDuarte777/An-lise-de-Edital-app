@@ -14,16 +14,24 @@ Extensão Manifest V3 que opera a sala de disputa do **Comprasnet** e do
 
 Não há robô a cadastrar antes. O motor lê o código da compra da própria URL da
 sala e o backend cria (ou recupera) o robô daquela licitação na primeira
-chamada. O que o operador configura é o **piso de margem**, item a item, na
-tabela do painel — e enquanto um item estiver sem piso ele é monitorado mas não
-recebe lance automático.
+chamada.
+
+**Toda a configuração do robô vive aqui, não na plataforma:**
+
+| O quê | Onde | Alcance |
+| --- | --- | --- |
+| Modo, faixa de redução, tempo de resposta, CNPJ | Popup, seção *Configuração do robô* | A conta inteira — vale para as disputas abertas a partir dali |
+| Piso de margem, lance manual, desconto, variação | Tabela do painel, na sala de disputa | Aquele item daquela compra |
+
+Enquanto um item estiver sem piso ele é monitorado mas não recebe lance
+automático: sem piso não há como o robô saber onde parar.
 
 ## Os arquivos
 
 | Arquivo | Onde roda | Papel |
 | --- | --- | --- |
 | `background.js` | Service Worker | **Único lugar que conhece o backend.** Guarda credenciais e faz a chamada ao assistente de lances. |
-| `popup.html` / `popup.js` | Popup da barra | App ID, Token e o botão que ativa o motor na aba. |
+| `popup.html` / `popup.js` | Popup da barra | App ID, Token, configuração do robô e o botão que ativa o motor na aba. |
 | `netprobe.js` | Mundo da página, `*.gov.br` | Sonda passiva: lê (nunca altera) o tráfego do portal e repassa ao motor. |
 | `dispute.js` | Mundo isolado, Comprasnet | Motor da disputa: painel, leitura de itens, envio de lance, chat. |
 | `licitanet-bridge.js` | Mundo da página, Licitanet | Alcança o estado interno da sala, que o mundo isolado não enxerga. |
