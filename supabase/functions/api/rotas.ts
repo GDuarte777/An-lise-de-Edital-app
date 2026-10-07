@@ -2418,10 +2418,18 @@ ${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum
 Dúvida do usuário: "${message.substring(0, 500)}"`;
 
       console.log("Chamando Gemini API para gerar título de conversa...");
+      // O título é descartável: se não vier rápido, um nome genérico serve.
+      // Com o orçamento padrão de 60s, gerar o rótulo da conversa chegou a tomar
+      // 29 segundos girando a cadeia de fallback — tempo que o usuário sente
+      // como lentidão do chat, para ganhar três palavras que ele nem pediu.
+      // Orçamento curto e sem raciocínio: ou sai em poucos segundos, ou cai no
+      // fallback local em silêncio.
       const response = await generateAiResponse({
         model: "gemini-3.7-flash",
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         aiConfig,
+        budgetMs: Number(process.env.AI_TITULO_ORCAMENTO_MS || 8_000),
+        thinkingLevel: "MINIMAL",
       });
 
       let generatedTitle = response.text ? response.text.trim() : "";

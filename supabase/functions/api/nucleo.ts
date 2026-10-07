@@ -1201,6 +1201,34 @@ export async function generateAiResponse(params: {
     const MAX_MODELS_DOWN_IN_A_ROW = 3;
     let budgetExhausted = false;
 
+    /**
+     * Desiste da rotação quando a COTA da chave acabou, não só quando o modelo caiu.
+     *
+     * A cota diária do plano gratuito é por modelo, então o primeiro 429 pode ser
+     * só daquele modelo e vale tentar outro. Quando o SEGUNDO modelo diferente
+     * também responde 429, não é mais o modelo: é a chave que está no fim do dia,
+     * e os outros quatro da cadeia vão responder igual.
+     *
+     * Sem este freio, uma resposta definitiva que o Google dá em 270 ms custava os
+     * 60 s inteiros do orçamento — seis modelos, duas tentativas cada, mais a
+     * repetição sem ferramentas — para terminar no mesmo lugar. O usuário esperava
+     * um minuto para ler "cota esgotada".
+     */
+    let modelsOutOfQuota = 0;
+    const MAX_MODELS_OUT_OF_QUOTA = 2;
+    let quotaExhausted = false;
+
+    /**
+     * A busca no Google (grounding) tem cota PRÓPRIA e é a primeira a esgotar.
+     *
+     * O desligamento das ferramentas valia só para o modelo da vez, então a cada
+     * um dos seis modelos a chamada era refeita com busca ativa, tomava 429 da
+     * cota de grounding e só então repetia sem ela: seis idas e voltas perdidas
+     * por requisição. Uma vez que a busca recusou, ela está recusada para esta
+     * requisição inteira.
+     */
+    let toolsBannedForRequest = false;
+
     for (const keyToUse of candidateKeys) {
       const customClient = new GoogleGenAI({
         apiKey: keyToUse,
@@ -1221,6 +1249,11 @@ export async function generateAiResponse(params: {
           console.warn(`[Dynamic AI Router] ${modelsDownInARow} modelos seguidos indisponíveis — tratando como sobrecarga geral do provedor.`);
           break;
         }
+        if (modelsOutOfQuota >= MAX_MODELS_OUT_OF_QUOTA) {
+          quotaExhausted = true;
+          console.warn(`[Dynamic AI Router] ${modelsOutOfQuota} modelos responderam 429 — a cota da chave acabou. Interrompendo sem tentar os demais.`);
+          break;
+        }
 
         let attempt = 0;
         const maxAttempts = 2;
@@ -1229,7 +1262,7 @@ export async function generateAiResponse(params: {
         // A busca no Google (grounding) consome uma cota SEPARADA da cota de geração
         // de texto e é a primeira a se esgotar no plano gratuito. Quando isso acontece
         // repetimos a chamada no mesmo modelo sem a ferramenta, em vez de desistir.
-        let useTools = Boolean(tools);
+        let useTools = Boolean(tools) && !toolsBannedForRequest;
         
         while (attempt < maxAttempts) {
           try {
@@ -1268,8 +1301,9 @@ export async function generateAiResponse(params: {
             // Google, não do modelo. Refaz a MESMA chamada sem ferramentas antes de
             // classificar o erro ou rotacionar de modelo.
             if (useTools) {
-              console.log(`[Dynamic AI Router] ${geminiModelName} falhou com googleSearch ativo. Repetindo sem ferramentas...`);
+              console.log(`[Dynamic AI Router] ${geminiModelName} falhou com googleSearch ativo. Repetindo sem ferramentas (e sem busca pelo resto desta requisição)...`);
               useTools = false;
+              toolsBannedForRequest = true;
               continue;
             }
 
@@ -1307,7 +1341,8 @@ export async function generateAiResponse(params: {
             if (isQuotaOrRateLimit) {
               // Model quota is exhausted. Do not retry or run schema fallback on this exhausted model;
               // immediately rotate to the next model in uniqueModels (e.g. gemini-3.1-flash-lite, gemini-2.5-flash)
-              console.log(`[Dynamic AI Router] Model ${geminiModelName} reached quota (429). Rotating to alternative model...`);
+              modelsOutOfQuota++;
+              console.log(`[Dynamic AI Router] Model ${geminiModelName} reached quota (429) — ${modelsOutOfQuota}/${MAX_MODELS_OUT_OF_QUOTA}. Rotating to alternative model...`);
               break;
             }
 
@@ -1386,6 +1421,18 @@ export async function generateAiResponse(params: {
           modelsDownInARow++;
         }
       }
+
+      // Cota é da chave, não do modelo: trocar de modelo não resolve, e tentar
+      // outra chave do mesmo projeto também não.
+      if (quotaExhausted) break;
+    }
+    if (quotaExhausted) {
+      throw new Error(
+        `⚠️ Cota da sua chave do Gemini esgotada (429) em ${modelsOutOfQuota} modelos. ` +
+        `No plano gratuito o limite é de poucas dezenas de requisições por dia, por modelo, ` +
+        `e ele reinicia a cada 24h. Para uso contínuo, ative o faturamento no Google AI Studio ` +
+        `(https://ai.dev/rate-limit).`
+      );
     }
     if (budgetExhausted) {
       throw new Error(
