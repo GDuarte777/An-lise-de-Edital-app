@@ -877,9 +877,22 @@ export function ensureValidUuid(idStr: string | undefined): string {
 }
 
 // 6. Planilhas de Disputas (planilhas_disputas)
-export async function fetchDisputasFromSupabase(): Promise<any[]> {
+/**
+ * Busca as disputas informando se a consulta REALMENTE aconteceu.
+ *
+ * `fetchDisputasFromSupabase` devolve `[]` para tudo: banco vazio, Supabase não
+ * configurado, tabela ausente, erro de rede. Quem chama trata os dois casos
+ * igual — e eles pedem reações opostas. O calendário, por exemplo, sobrescrevia
+ * o cache local com a lista vazia a cada refresh (foco da janela, evento de
+ * realtime, polling de 30s): uma disputa marcada à mão aparecia e, segundos
+ * depois, desaparecia sem explicação.
+ *
+ * Esta versão separa as duas coisas. A antiga continua existindo com o mesmo
+ * comportamento, para não mexer em quem já depende dela.
+ */
+export async function fetchDisputasComStatus(): Promise<{ ok: boolean; rows: any[] }> {
   const client = getSupabaseClient();
-  if (!client || isTableMissing("planilhas_disputas")) return [];
+  if (!client || isTableMissing("planilhas_disputas")) return { ok: false, rows: [] };
   try {
     const user = await getActiveUser();
     const guestId = getGuestUserId();
@@ -895,10 +908,10 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
     if (error) {
       if (isTableMissingError(error)) {
         markTableMissing("planilhas_disputas");
-        return [];
+        return { ok: false, rows: [] };
       }
       console.warn("fetchDisputasFromSupabase error:", error.message);
-      return [];
+      return { ok: false, rows: [] };
     }
 
     // Filter client-side: show rows belonging to this user or guest, or rows without user_id
@@ -914,22 +927,31 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
         return rowUserId === user.id || rowUserId === guestId || !rowUserId;
       });
       // If no user-specific rows, return all (in case migration is needed)
-      return userRows.length > 0 ? userRows : allRows;
+      return { ok: true, rows: userRows.length > 0 ? userRows : allRows };
     }
 
     // Guest user: return rows with guestId or null user_id
-    return allRows.filter((r: any) => {
-      const rawRow = data?.find((d: any) => d.id === r.id);
-      const rowUserId = rawRow?.user_id || "";
-      return rowUserId === guestId || rowUserId === userId || !rowUserId;
-    });
+    return {
+      ok: true,
+      rows: allRows.filter((r: any) => {
+        const rawRow = data?.find((d: any) => d.id === r.id);
+        const rowUserId = rawRow?.user_id || "";
+        return rowUserId === guestId || rowUserId === userId || !rowUserId;
+      })
+    };
 
   } catch (err: any) {
     if (isTableMissingError(err)) {
       markTableMissing("planilhas_disputas");
     }
-    return [];
+    return { ok: false, rows: [] };
   }
+}
+
+/** Compatibilidade: mesma assinatura e mesmo comportamento de antes. */
+export async function fetchDisputasFromSupabase(): Promise<any[]> {
+  const { rows } = await fetchDisputasComStatus();
+  return rows;
 }
 
 export function mapDisputaFromDb(item: any) {
