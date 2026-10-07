@@ -7,6 +7,7 @@
 // migração sem ser reescrita.
 // ═══════════════════════════════════════════════════════════════════════
 import type { AplicativoExpresso } from "./expresso.ts";
+import { titularConversa } from "./tituloConversa.ts";
 import {
   Buffer,
   CHAVE_MESTRA_IA,
@@ -49,6 +50,24 @@ import {
 } from "./pncpQuery.ts";
 import type { EndpointContratacao } from "./pncpQuery.ts";
 import { registrarRotasRoboLances } from "./roboLances.ts";
+
+/**
+ * A busca no Google (grounding) só entra quando explicitamente ligada.
+ *
+ * Ela tem cota SEPARADA da geração de texto e, no plano gratuito, é a primeira
+ * a recusar: no log de produção, toda chamada com busca ativa levava 429 em
+ * ~270 ms e precisava ser refeita sem ela. Ou seja, ligada por padrão a busca
+ * não acrescentava informação nenhuma — só gastava uma das poucas requisições
+ * por minuto disponíveis e atrasava a resposta.
+ *
+ * AI_BUSCA_WEB=true devolve o comportamento antigo para quem tiver cota de
+ * grounding (plano pago).
+ */
+function ferramentasDeBusca(): any[] | undefined {
+  return String(process.env.AI_BUSCA_WEB || "").toLowerCase() === "true"
+    ? [{ googleSearch: {} }]
+    : undefined;
+}
 
 export function registrarRotas(app: AplicativoExpresso): void {
   // O assistente de lances vive em módulo próprio: ele é o único caminho deste
@@ -2242,11 +2261,11 @@ Retorne sua resposta estritamente no seguinte formato JSON, sem comentários nem
 Retorne exclusivamente o JSON bruto estruturado e validável.`;
 
             const response = await generateAiResponse({
-              model: "gemini-3.7-flash",
+              model: "gemini-3.8-flash",
               contents: [{ text: prompt }],
               aiConfig,
               jsonMode: true,
-              tools: [{ googleSearch: {} }]
+              tools: ferramentasDeBusca()
             });
 
             const parsedResult = cleanAndParseJson(response.text);
@@ -2374,13 +2393,13 @@ Edital Selecionado pelo Usuário nesta Conversa:
 ${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum edital selecionado pelo usuário para esta conversa."}
 `;
 
-      // Invoke Gemini API with system instruction & Google Search grounding
-      console.log("Chamando Gemini API Chat com Web Search ativo...");
+      const tools = ferramentasDeBusca();
+      console.log(`Chamando Gemini API Chat | busca web: ${tools ? "ativa" : "desligada"}`);
       const response = await generateAiResponse({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: formattedHistory,
         systemInstruction: contextPrefix,
-        tools: [{ googleSearch: {} }],
+        tools,
         aiConfig,
       });
 
@@ -2405,45 +2424,56 @@ ${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum
   });
 
   // API Route: Generate Chat Title based on first message
+  /**
+   * Título da conversa — montado AQUI, sem gastar uma chamada ao provedor.
+   *
+   * Esta rota disparava uma cadeia de IA inteira, em paralelo com a mensagem que
+   * o usuário estava esperando. O limite que aperta no plano gratuito do Gemini é
+   * o de requisições POR MINUTO (5 no Flash), então o rótulo da conversa comia
+   * metade do orçamento do minuto para produzir três palavras que ninguém pediu —
+   * e ainda ajudava a provocar o 429 que atrasava a resposta de verdade.
+   *
+   * O texto da primeira pergunta já diz do que a conversa trata. Derivar dele é
+   * instantâneo, não consome limite nenhum e acerta na prática tanto quanto.
+   *
+   * Quem quiser o título gerado pelo modelo liga AI_TITULO_VIA_IA=true; aí ele
+   * roda com orçamento curto e cai no título local em silêncio se não couber.
+   */
   app.post("/api/chat/title", async (req, res): Promise<any> => {
-    try {
-      const { message, aiConfig: clientAiConfig } = req.body;
-      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
-      if (!message || typeof message !== "string") {
-        return res.status(400).json({ error: "Mensagem ausente ou inválida." });
-      }
+    const { message, aiConfig: clientAiConfig } = req.body;
+    if (!message || typeof message !== "string") {
+      return res.status(400).json({ error: "Mensagem ausente ou inválida." });
+    }
 
+    const tituloLocal = titularConversa(message);
+
+    if (String(process.env.AI_TITULO_VIA_IA || "").toLowerCase() !== "true") {
+      return res.json({ title: tituloLocal });
+    }
+
+    try {
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
       const prompt = `Gere um título curto, direto e descritivo (no máximo 3 ou 4 palavras) para um chat de licitações públicas que se inicia com a seguinte dúvida do usuário. Não coloque aspas, não adicione pontos finais nem explicações adicionais, retorne APENAS o título direto em português do Brasil. Se for apenas uma saudação inicial simples (como 'olá', 'tudo bem', 'bom dia'), retorne 'Conversa Rápida'.
 
 Dúvida do usuário: "${message.substring(0, 500)}"`;
 
-      console.log("Chamando Gemini API para gerar título de conversa...");
-      // O título é descartável: se não vier rápido, um nome genérico serve.
-      // Com o orçamento padrão de 60s, gerar o rótulo da conversa chegou a tomar
-      // 29 segundos girando a cadeia de fallback — tempo que o usuário sente
-      // como lentidão do chat, para ganhar três palavras que ele nem pediu.
-      // Orçamento curto e sem raciocínio: ou sai em poucos segundos, ou cai no
-      // fallback local em silêncio.
       const response = await generateAiResponse({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         aiConfig,
         budgetMs: Number(process.env.AI_TITULO_ORCAMENTO_MS || 8_000),
         thinkingLevel: "MINIMAL",
       });
 
-      let generatedTitle = response.text ? response.text.trim() : "";
-      // Strip any surrounding quotes or punctuation if the AI included them
-      generatedTitle = generatedTitle.replace(/^["'“”‘`]+|["'“”’`]+$/g, "").replace(/[.!?]+$/, "").trim();
+      let gerado = (response.text || "").trim()
+        .replace(/^["'“”‘`]+|["'“”’`]+$/g, "")
+        .replace(/[.!?]+$/, "")
+        .trim();
 
-      if (!generatedTitle || generatedTitle.length > 50) {
-        generatedTitle = "Discussão de Edital";
-      }
-
-      return res.json({ title: generatedTitle });
+      return res.json({ title: gerado && gerado.length <= 50 ? gerado : tituloLocal });
     } catch (error: any) {
-      console.warn("Erro ao gerar título de conversa, usando fallback local...", error.message || error);
-      return res.json({ title: null });
+      console.warn("Título pela IA falhou, usando o local:", error?.message || error);
+      return res.json({ title: tituloLocal });
     }
   });
 

@@ -185,6 +185,7 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
 // ⚠️ A família 2.5 foi descontinuada para novas chaves ("This model is no longer
 // available to new users" → HTTP 404), por isso não entra mais em nenhuma lista.
 export const VALID_GEMINI_MODELS = [
+  "gemini-3.8-flash",
   "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash",
@@ -193,6 +194,21 @@ export const VALID_GEMINI_MODELS = [
   "gemini-flash-latest",
   "gemini-3.1-pro-preview"
 ];
+
+/**
+ * Teto de chamadas ao provedor POR REQUISIÇÃO do usuário.
+ *
+ * O limite do plano gratuito que realmente aperta não é o diário, é o de
+ * REQUISIÇÕES POR MINUTO: 5 no Flash. A cadeia de fallback disparava até doze
+ * chamadas para uma única mensagem de chat (seis modelos, duas tentativas cada,
+ * mais a repetição sem busca web), e a rota de título disparava outra cadeia em
+ * paralelo. Da sexta chamada em diante o Google recusava com 429 — ou seja, a
+ * plataforma produzia o próprio estouro de limite e depois esperava por ele.
+ *
+ * Com teto de três, uma mensagem cabe folgadamente dentro de 5/min mesmo
+ * contando o título, e sobra limite para o usuário mandar a próxima.
+ */
+export const MAX_CHAMADAS_PROVEDOR = Number(process.env.AI_MAX_CHAMADAS_PROVEDOR || 3);
 
 export const GEMINI_MODEL_ALIASES: Record<string, string> = {
   "flash": "gemini-flash-latest",
@@ -213,24 +229,29 @@ export const GEMINI_MODEL_ALIASES: Record<string, string> = {
 };
 
 export function normalizeGeminiModel(model: string | undefined): string {
-  if (!model) return "gemini-3.7-flash";
+  if (!model) return "gemini-3.8-flash";
   const trimmed = model.trim().toLowerCase();
   if (VALID_GEMINI_MODELS.includes(trimmed)) return trimmed;
   if (GEMINI_MODEL_ALIASES[trimmed]) return GEMINI_MODEL_ALIASES[trimmed];
-  return "gemini-3.7-flash";
+  return "gemini-3.8-flash";
 }
 
 // Lista de fallback: mantém o modelo escolhido pelo usuário em primeiro lugar e,
 // em caso de 429/503, rotaciona por modelos de famílias e cotas diferentes.
 export function getFallbackModels(primaryModel: string): string[] {
   const normPrimary = normalizeGeminiModel(primaryModel);
+  // O primeiro reserva é o Flash Lite de propósito: no plano gratuito ele tem
+  // 15 req/min e 500 por dia, contra 5/min e 20/dia do Flash. Quando o Flash
+  // recusa por limite de taxa, trocar para outro Flash encontra o mesmo teto —
+  // quem tem folga é o Lite.
+  //
+  // A lista é curta porque cada entrada é uma chamada a mais contra um limite de
+  // 5 por minuto: uma cadeia longa não aumenta a chance de sucesso, ela consome
+  // o limite que a própria requisição seguinte vai precisar.
   const baseList = [
     normPrimary,
-    "gemini-3.6-flash",
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-flash-latest",
-    "gemini-3.7-flash"
+    "gemini-flash-latest"
   ];
   return Array.from(new Set(baseList.filter(Boolean)));
 }
@@ -1218,6 +1239,11 @@ export async function generateAiResponse(params: {
     const MAX_MODELS_OUT_OF_QUOTA = 2;
     let quotaExhausted = false;
 
+    // Chamadas efetivamente disparadas ao Google nesta requisição. É este número,
+    // e não o de modelos tentados, que conta contra o limite de 5 por minuto.
+    let chamadasAoProvedor = 0;
+    let tetoDeChamadasAtingido = false;
+
     /**
      * A busca no Google (grounding) tem cota PRÓPRIA e é a primeira a esgotar.
      *
@@ -1249,6 +1275,10 @@ export async function generateAiResponse(params: {
           console.warn(`[Dynamic AI Router] ${modelsDownInARow} modelos seguidos indisponíveis — tratando como sobrecarga geral do provedor.`);
           break;
         }
+        if (tetoDeChamadasAtingido) {
+          console.warn(`[Dynamic AI Router] Teto de ${MAX_CHAMADAS_PROVEDOR} chamadas ao provedor atingido. Interrompendo para não estourar o limite por minuto.`);
+          break;
+        }
         if (modelsOutOfQuota >= MAX_MODELS_OUT_OF_QUOTA) {
           quotaExhausted = true;
           console.warn(`[Dynamic AI Router] ${modelsOutOfQuota} modelos responderam 429 — a cota da chave acabou. Interrompendo sem tentar os demais.`);
@@ -1265,8 +1295,13 @@ export async function generateAiResponse(params: {
         let useTools = Boolean(tools) && !toolsBannedForRequest;
         
         while (attempt < maxAttempts) {
+          if (chamadasAoProvedor >= MAX_CHAMADAS_PROVEDOR) {
+            tetoDeChamadasAtingido = true;
+            break;
+          }
           try {
-            console.log(`[Dynamic AI Router] Requesting Gemini | Model: ${geminiModelName} (Attempt ${attempt + 1}/${maxAttempts})`);
+            chamadasAoProvedor++;
+            console.log(`[Dynamic AI Router] Requesting Gemini | Model: ${geminiModelName} (Attempt ${attempt + 1}/${maxAttempts}) [chamada ${chamadasAoProvedor}/${MAX_CHAMADAS_PROVEDOR}]`);
             
             const reqConfig: any = {};
             if (systemInstruction) reqConfig.systemInstruction = systemInstruction;
@@ -1426,12 +1461,16 @@ export async function generateAiResponse(params: {
       // outra chave do mesmo projeto também não.
       if (quotaExhausted) break;
     }
-    if (quotaExhausted) {
+    if (quotaExhausted || tetoDeChamadasAtingido) {
+      // No plano gratuito do Gemini o limite que aperta é o de REQUISIÇÕES POR
+      // MINUTO (5 no Flash, 15 no Flash Lite), não o diário. Dizer "ative o
+      // faturamento" diante de um 429 de RPM manda o usuário resolver a coisa
+      // errada — e foi exatamente o engano que levou a esta correção.
       throw new Error(
-        `⚠️ Cota da sua chave do Gemini esgotada (429) em ${modelsOutOfQuota} modelos. ` +
-        `No plano gratuito o limite é de poucas dezenas de requisições por dia, por modelo, ` +
-        `e ele reinicia a cada 24h. Para uso contínuo, ative o faturamento no Google AI Studio ` +
-        `(https://ai.dev/rate-limit).`
+        `⚠️ O Gemini recusou por limite de taxa (429). No plano gratuito são poucas ` +
+        `requisições por minuto (5 no Flash, 15 no Flash Lite) — aguarde cerca de um ` +
+        `minuto e tente de novo. Se acontecer sempre, troque para o Flash Lite em ` +
+        `"IA & Modelos", que tem o triplo do limite, ou ative o faturamento no Google AI Studio.`
       );
     }
     if (budgetExhausted) {
