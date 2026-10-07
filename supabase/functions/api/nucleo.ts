@@ -184,77 +184,20 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
 // Modelos Gemini que a API generativelanguage.googleapis.com realmente expõe hoje.
 // ⚠️ A família 2.5 foi descontinuada para novas chaves ("This model is no longer
 // available to new users" → HTTP 404), por isso não entra mais em nenhuma lista.
-export const VALID_GEMINI_MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.7-flash",
-  "gemini-3.6-flash",
-  "gemini-3.5-flash",
-  "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
-  "gemini-flash-latest",
-  "gemini-3.1-pro-preview"
-];
-
-/**
- * Teto de chamadas ao provedor POR REQUISIÇÃO do usuário.
- *
- * O limite do plano gratuito que realmente aperta não é o diário, é o de
- * REQUISIÇÕES POR MINUTO: 5 no Flash. A cadeia de fallback disparava até doze
- * chamadas para uma única mensagem de chat (seis modelos, duas tentativas cada,
- * mais a repetição sem busca web), e a rota de título disparava outra cadeia em
- * paralelo. Da sexta chamada em diante o Google recusava com 429 — ou seja, a
- * plataforma produzia o próprio estouro de limite e depois esperava por ele.
- *
- * Com teto de três, uma mensagem cabe folgadamente dentro de 5/min mesmo
- * contando o título, e sobra limite para o usuário mandar a próxima.
- */
-export const MAX_CHAMADAS_PROVEDOR = Number(process.env.AI_MAX_CHAMADAS_PROVEDOR || 3);
-
-export const GEMINI_MODEL_ALIASES: Record<string, string> = {
-  "flash": "gemini-flash-latest",
-  "gemini-flash": "gemini-flash-latest",
-  "pro": "gemini-3.1-pro-preview",
-  "gemini-pro": "gemini-3.1-pro-preview",
-  "gemini-3.1-pro": "gemini-3.1-pro-preview",
-  "lite": "gemini-3.1-flash-lite",
-  "flash-lite": "gemini-3.1-flash-lite",
-  "gemini-lite": "gemini-3.1-flash-lite",
-  "gemini-flash-lite": "gemini-3.1-flash-lite",
-  // Modelos aposentados → apontam para o substituto recomendado pelo próprio Google
-  "gemini-2.5-flash": "gemini-3.6-flash",
-  "2.5-flash": "gemini-3.6-flash",
-  "gemini-2.5-flash-lite": "gemini-3.1-flash-lite",
-  "2.5-flash-lite": "gemini-3.1-flash-lite",
-  "gemini-2.5-pro": "gemini-3.1-pro-preview"
-};
-
-export function normalizeGeminiModel(model: string | undefined): string {
-  if (!model) return "gemini-3.8-flash";
-  const trimmed = model.trim().toLowerCase();
-  if (VALID_GEMINI_MODELS.includes(trimmed)) return trimmed;
-  if (GEMINI_MODEL_ALIASES[trimmed]) return GEMINI_MODEL_ALIASES[trimmed];
-  return "gemini-3.8-flash";
-}
-
-// Lista de fallback: mantém o modelo escolhido pelo usuário em primeiro lugar e,
-// em caso de 429/503, rotaciona por modelos de famílias e cotas diferentes.
-export function getFallbackModels(primaryModel: string): string[] {
-  const normPrimary = normalizeGeminiModel(primaryModel);
-  // O primeiro reserva é o Flash Lite de propósito: no plano gratuito ele tem
-  // 15 req/min e 500 por dia, contra 5/min e 20/dia do Flash. Quando o Flash
-  // recusa por limite de taxa, trocar para outro Flash encontra o mesmo teto —
-  // quem tem folga é o Lite.
-  //
-  // A lista é curta porque cada entrada é uma chamada a mais contra um limite de
-  // 5 por minuto: uma cadeia longa não aumenta a chance de sucesso, ela consome
-  // o limite que a própria requisição seguinte vai precisar.
-  const baseList = [
-    normPrimary,
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest"
-  ];
-  return Array.from(new Set(baseList.filter(Boolean)));
-}
+export {
+  VALID_GEMINI_MODELS,
+  GEMINI_MODEL_ALIASES,
+  normalizeGeminiModel,
+  getFallbackModels,
+  MAX_CHAMADAS_PROVEDOR,
+  TIMEOUT_POR_CHAMADA_MS,
+} from "./modelosGemini.ts";
+import {
+  normalizeGeminiModel,
+  getFallbackModels,
+  MAX_CHAMADAS_PROVEDOR,
+  TIMEOUT_POR_CHAMADA_MS,
+} from "./modelosGemini.ts";
 
 /**
  * Server-side API keys are a shared cost: every request that falls back to one is billed
@@ -1286,8 +1229,9 @@ export async function generateAiResponse(params: {
         }
 
         let attempt = 0;
+        // Duas tentativas por modelo cobrem erro de formato/esquema, que vale
+        // repetir. Sobrecarga (503) não repete mais aqui: rotaciona de modelo.
         const maxAttempts = 2;
-        let delay = 1000;
         let modelFailedTransiently = false;
         // A busca no Google (grounding) consome uma cota SEPARADA da cota de geração
         // de texto e é a primeira a se esgotar no plano gratuito. Quando isso acontece
@@ -1313,7 +1257,7 @@ export async function generateAiResponse(params: {
             // Sem isso, o orçamento só era conferido ENTRE tentativas: uma única
             // chamada lenta seguia até o fim, e uma execução chegou a 269s mesmo
             // com orçamento de 100s configurado.
-            reqConfig.httpOptions = { timeout: Math.max(5_000, remainingMs()) };
+            reqConfig.httpOptions = { timeout: Math.max(5_000, Math.min(TIMEOUT_POR_CHAMADA_MS, remainingMs())) };
 
             const response = await customClient.models.generateContent({
               model: geminiModelName,
@@ -1393,15 +1337,13 @@ export async function generateAiResponse(params: {
 
             if (isTransient) {
               modelFailedTransiently = true;
-              // Só vale repetir se ainda houver tempo para a espera E para outra
-              // tentativa: cada retentativa reenvia o documento inteiro ao provedor.
-              if (attempt < maxAttempts && remainingMs() > delay * 3) {
-                console.log(`[Dynamic AI Router] Transient 503 on ${geminiModelName}. Waiting ${delay}ms before retry...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-                delay *= 2;
-                continue;
-              }
-              // If retry failed, rotate to the next model
+              // Repetir o MESMO modelo que acabou de responder "sobrecarregado" foi
+              // medido e não ajuda: no log de produção a segunda tentativa no
+              // gemini-3.7-flash travou 47 s e morreu no abort, enquanto o modelo
+              // reserva — com o triplo de folga de limite — nunca chegou a ser
+              // chamado. Rotacionar na hora usa o mesmo tempo para tentar algo que
+              // pode de fato responder.
+              console.log(`[Dynamic AI Router] ${geminiModelName} sobrecarregado (503). Passando para o próximo modelo em vez de repetir.`);
               break;
             }
 
@@ -1427,7 +1369,7 @@ export async function generateAiResponse(params: {
                   if (systemInstruction) reqConfigNoSchema.systemInstruction = systemInstruction;
                   if (jsonMode) reqConfigNoSchema.responseMimeType = "application/json";
                   if (thinkingLevel) reqConfigNoSchema.thinkingConfig = { thinkingLevel };
-                  reqConfigNoSchema.httpOptions = { timeout: Math.max(5_000, remainingMs()) };
+                  reqConfigNoSchema.httpOptions = { timeout: Math.max(5_000, Math.min(TIMEOUT_POR_CHAMADA_MS, remainingMs())) };
 
                   const responseNoSchema = await customClient.models.generateContent({
                     model: geminiModelName,

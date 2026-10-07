@@ -2395,12 +2395,18 @@ ${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum
 
       const tools = ferramentasDeBusca();
       console.log(`Chamando Gemini API Chat | busca web: ${tools ? "ativa" : "desligada"}`);
+      // Conversa não é análise de edital: o orçamento de 60 s existe para ler um
+      // documento de 180 páginas, e aplicá-lo ao chat só garantiu que o usuário
+      // esperasse um minuto para receber a resposta local de reserva. Com 25 s
+      // cabem as três chamadas do teto e ainda sobra margem antes do limite de
+      // 60 s do navegador, que é quem mostra "a resposta demorou mais de 60s".
       const response = await generateAiResponse({
         model: "gemini-3.8-flash",
         contents: formattedHistory,
         systemInstruction: contextPrefix,
         tools,
         aiConfig,
+        budgetMs: Number(process.env.AI_CHAT_ORCAMENTO_MS || 25_000),
       });
 
       return res.json({ reply: response.text });
