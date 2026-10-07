@@ -7,6 +7,7 @@ import {
   montarQueryContratacoes,
   temProximaPagina,
   formatarDataPncp,
+  classificarStatusPncp,
 } from "./pncpQuery";
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -132,7 +133,9 @@ async function consultarClassificando(rotulo: string, query: string, timeoutMs =
 
   const ms = Date.now() - inicio;
 
-  if (resposta.status >= 400 && resposta.status < 500) {
+  const classe = classificarStatusPncp(resposta.status);
+
+  if (classe === "contrato") {
     registrar(`| ${rotulo} | ${ms} ms | HTTP ${resposta.status} — CONTRATO VIOLADO |`);
     return {
       tipo: "contrato",
@@ -141,8 +144,9 @@ async function consultarClassificando(rotulo: string, query: string, timeoutMs =
     };
   }
 
-  if (resposta.status >= 500) {
-    registrar(`| ${rotulo} | ${ms} ms | HTTP ${resposta.status} (portal) — ${resposta.texto.slice(0, 70)} |`);
+  if (classe === "portal") {
+    const rotuloStatus = resposta.status === 429 ? "limite de taxa do portal" : "portal";
+    registrar(`| ${rotulo} | ${ms} ms | HTTP ${resposta.status} (${rotuloStatus}) — ${resposta.texto.slice(0, 70)} |`);
     return { tipo: "portal", status: resposta.status };
   }
 
