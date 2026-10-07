@@ -240,3 +240,27 @@ export function escolherArquivoEdital<T extends { titulo?: string; tipo?: string
 
   return melhorPontuacao > 0 ? melhor : null;
 }
+
+/**
+ * Como tratar o status que o PNCP devolveu, para o teste de contrato.
+ *
+ * "contrato" significa: o portal recusou uma consulta que consideramos VÁLIDA,
+ * e portanto a premissa da plataforma mudou. É o único caso que deve soar
+ * alarme.
+ *
+ * A regra era "todo 4xx é violação de contrato", e isso varria o 429 junto. Mas
+ * 429 quer dizer "você está rápido demais", nunca "esta consulta é inválida": o
+ * teste dispara cerca de vinte cenários em sequência e esgota o limitador do
+ * próprio portal, e aí reportava o limite que ele mesmo provocou como se o PNCP
+ * tivesse mudado a API. Isso fez o workflow falhar no main e em branches alheios
+ * sem que ninguém tivesse tocado em nada — exatamente o alarme que, segundo o
+ * cabeçalho do workflow, todos aprendem a ignorar.
+ *
+ * 408 e 425 entram pelo mesmo motivo: são condições de tempo, não de contrato.
+ */
+export function classificarStatusPncp(status: number): "ok" | "portal" | "contrato" {
+  if (status === 429 || status === 408 || status === 425) return "portal";
+  if (status >= 500) return "portal";
+  if (status >= 400) return "contrato";
+  return "ok";
+}

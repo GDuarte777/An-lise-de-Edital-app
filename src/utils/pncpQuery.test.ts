@@ -14,6 +14,7 @@ import {
   PNCP_TIMEOUT_PADRAO_MS,
   PNCP_ORCAMENTO_PADRAO_MS,
   PNCP_MAX_DURACAO_PADRAO_S,
+  classificarStatusPncp
 } from "./pncpQuery";
 
 describe("tamanho de página", () => {
@@ -238,5 +239,40 @@ describe("prazos calibrados pela medição do portal", () => {
 
   it("não ultrapassa o teto de 60 s do plano Hobby da Vercel", () => {
     expect(PNCP_MAX_DURACAO_PADRAO_S).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("classificarStatusPncp", () => {
+  // O teste de contrato contra a API real falhava no main e em branches alheios
+  // sem que ninguém tivesse mexido em nada: ele dispara ~20 cenários seguidos,
+  // esgota o limitador do próprio PNCP e reportava o 429 resultante como
+  // "o portal recusou uma consulta válida". Um alarme que soa por algo que não é
+  // defeito nosso é um alarme que todos aprendem a ignorar — que é justamente o
+  // que o cabeçalho daquele workflow diz para evitar.
+  it("trata 429 como condição do portal, não violação de contrato", () => {
+    expect(classificarStatusPncp(429)).toBe("portal");
+  });
+
+  it("trata esperas (408, 425) como condição do portal", () => {
+    expect(classificarStatusPncp(408)).toBe("portal");
+    expect(classificarStatusPncp(425)).toBe("portal");
+  });
+
+  it("mantém 5xx como condição do portal", () => {
+    expect(classificarStatusPncp(500)).toBe("portal");
+    expect(classificarStatusPncp(502)).toBe("portal");
+    expect(classificarStatusPncp(504)).toBe("portal");
+  });
+
+  it("continua acusando violação de contrato nos 4xx que dizem respeito à consulta", () => {
+    // 400 é o que o portal devolve para tamanhoPagina inválido: a premissa mudou.
+    expect(classificarStatusPncp(400)).toBe("contrato");
+    expect(classificarStatusPncp(404)).toBe("contrato");
+    expect(classificarStatusPncp(422)).toBe("contrato");
+  });
+
+  it("trata as respostas de sucesso como ok", () => {
+    expect(classificarStatusPncp(200)).toBe("ok");
+    expect(classificarStatusPncp(204)).toBe("ok");
   });
 });

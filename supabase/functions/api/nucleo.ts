@@ -20,6 +20,8 @@ import { GoogleGenAI, Type } from "npm:@google/genai@2.8.0";
 import {
   derivarChaveMestra,
   descriptografarConfiguracao,
+  descriptografarSegredo,
+  estaCriptografado,
 } from "./segredos.ts";
 
 export { GoogleGenAI, Type, Buffer, process, fs, path };
@@ -184,56 +186,20 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
 // Modelos Gemini que a API generativelanguage.googleapis.com realmente expõe hoje.
 // ⚠️ A família 2.5 foi descontinuada para novas chaves ("This model is no longer
 // available to new users" → HTTP 404), por isso não entra mais em nenhuma lista.
-export const VALID_GEMINI_MODELS = [
-  "gemini-3.7-flash",
-  "gemini-3.6-flash",
-  "gemini-3.5-flash",
-  "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
-  "gemini-flash-latest",
-  "gemini-3.1-pro-preview"
-];
-
-export const GEMINI_MODEL_ALIASES: Record<string, string> = {
-  "flash": "gemini-flash-latest",
-  "gemini-flash": "gemini-flash-latest",
-  "pro": "gemini-3.1-pro-preview",
-  "gemini-pro": "gemini-3.1-pro-preview",
-  "gemini-3.1-pro": "gemini-3.1-pro-preview",
-  "lite": "gemini-3.1-flash-lite",
-  "flash-lite": "gemini-3.1-flash-lite",
-  "gemini-lite": "gemini-3.1-flash-lite",
-  "gemini-flash-lite": "gemini-3.1-flash-lite",
-  // Modelos aposentados → apontam para o substituto recomendado pelo próprio Google
-  "gemini-2.5-flash": "gemini-3.6-flash",
-  "2.5-flash": "gemini-3.6-flash",
-  "gemini-2.5-flash-lite": "gemini-3.1-flash-lite",
-  "2.5-flash-lite": "gemini-3.1-flash-lite",
-  "gemini-2.5-pro": "gemini-3.1-pro-preview"
-};
-
-export function normalizeGeminiModel(model: string | undefined): string {
-  if (!model) return "gemini-3.7-flash";
-  const trimmed = model.trim().toLowerCase();
-  if (VALID_GEMINI_MODELS.includes(trimmed)) return trimmed;
-  if (GEMINI_MODEL_ALIASES[trimmed]) return GEMINI_MODEL_ALIASES[trimmed];
-  return "gemini-3.7-flash";
-}
-
-// Lista de fallback: mantém o modelo escolhido pelo usuário em primeiro lugar e,
-// em caso de 429/503, rotaciona por modelos de famílias e cotas diferentes.
-export function getFallbackModels(primaryModel: string): string[] {
-  const normPrimary = normalizeGeminiModel(primaryModel);
-  const baseList = [
-    normPrimary,
-    "gemini-3.6-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-flash-latest",
-    "gemini-3.7-flash"
-  ];
-  return Array.from(new Set(baseList.filter(Boolean)));
-}
+export {
+  VALID_GEMINI_MODELS,
+  GEMINI_MODEL_ALIASES,
+  normalizeGeminiModel,
+  getFallbackModels,
+  MAX_CHAMADAS_PROVEDOR,
+  TIMEOUT_POR_CHAMADA_MS,
+} from "./modelosGemini.ts";
+import {
+  normalizeGeminiModel,
+  getFallbackModels,
+  MAX_CHAMADAS_PROVEDOR,
+  TIMEOUT_POR_CHAMADA_MS,
+} from "./modelosGemini.ts";
 
 /**
  * Server-side API keys are a shared cost: every request that falls back to one is billed
@@ -317,6 +283,30 @@ export function describeAiFailure(error: any): string {
 // Helper: resolve the active AI config for a user from Supabase, payload, or server environment
 export async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: any): Promise<{ provider: string; apiKey: string; model: string } | null> {
   console.log(`[AI Config] resolveAiConfig called. clientAiConfig present: ${!!clientAiConfig}, apiKey length: ${clientAiConfig?.apiKey?.length || 0}`);
+
+  /**
+   * O cliente pode mandar a chave CIFRADA em vez da chave de API.
+   *
+   * Com AI_KEYS_ENCRYPTION_KEY ligada, /api/user-config passou a gravar
+   * "enc:v1:..." na tabela. O frontend hidrata o localStorage lendo essa tabela
+   * direto pelo PostgREST e NÃO tem como decifrar — a chave mestra é só do
+   * servidor. Resultado: o navegador passou a enviar o texto cifrado como se
+   * fosse a chave, e o Google respondia "API key not valid", em toda mensagem.
+   *
+   * Decifrar aqui é a correção certa, e não só um remendo: o servidor é o único
+   * que tem a chave mestra, e qualquer caminho que traga um valor cifrado — este
+   * cliente, um cliente antigo em cache, outra integração — passa a funcionar.
+   */
+  if (clientAiConfig?.apiKey && estaCriptografado(clientAiConfig.apiKey)) {
+    const decifrada = descriptografarSegredo(String(clientAiConfig.apiKey), CHAVE_MESTRA_IA);
+    if (decifrada && decifrada.trim().length > 10) {
+      console.log("[AI Config] Chave recebida cifrada do cliente; decifrada no servidor.");
+      clientAiConfig = { ...clientAiConfig, apiKey: decifrada.trim() };
+    } else {
+      console.warn("[AI Config] Chave cifrada do cliente não pôde ser decifrada; seguindo para a configuração do banco.");
+      clientAiConfig = { ...clientAiConfig, apiKey: "" };
+    }
+  }
 
   // 1. If client sent a valid aiConfig (with a real key), trust it immediately
   if (clientAiConfig?.apiKey && clientAiConfig.apiKey.trim().length > 10) {
@@ -1201,6 +1191,39 @@ export async function generateAiResponse(params: {
     const MAX_MODELS_DOWN_IN_A_ROW = 3;
     let budgetExhausted = false;
 
+    /**
+     * Desiste da rotação quando a COTA da chave acabou, não só quando o modelo caiu.
+     *
+     * A cota diária do plano gratuito é por modelo, então o primeiro 429 pode ser
+     * só daquele modelo e vale tentar outro. Quando o SEGUNDO modelo diferente
+     * também responde 429, não é mais o modelo: é a chave que está no fim do dia,
+     * e os outros quatro da cadeia vão responder igual.
+     *
+     * Sem este freio, uma resposta definitiva que o Google dá em 270 ms custava os
+     * 60 s inteiros do orçamento — seis modelos, duas tentativas cada, mais a
+     * repetição sem ferramentas — para terminar no mesmo lugar. O usuário esperava
+     * um minuto para ler "cota esgotada".
+     */
+    let modelsOutOfQuota = 0;
+    const MAX_MODELS_OUT_OF_QUOTA = 2;
+    let quotaExhausted = false;
+
+    // Chamadas efetivamente disparadas ao Google nesta requisição. É este número,
+    // e não o de modelos tentados, que conta contra o limite de 5 por minuto.
+    let chamadasAoProvedor = 0;
+    let tetoDeChamadasAtingido = false;
+
+    /**
+     * A busca no Google (grounding) tem cota PRÓPRIA e é a primeira a esgotar.
+     *
+     * O desligamento das ferramentas valia só para o modelo da vez, então a cada
+     * um dos seis modelos a chamada era refeita com busca ativa, tomava 429 da
+     * cota de grounding e só então repetia sem ela: seis idas e voltas perdidas
+     * por requisição. Uma vez que a busca recusou, ela está recusada para esta
+     * requisição inteira.
+     */
+    let toolsBannedForRequest = false;
+
     for (const keyToUse of candidateKeys) {
       const customClient = new GoogleGenAI({
         apiKey: keyToUse,
@@ -1221,19 +1244,34 @@ export async function generateAiResponse(params: {
           console.warn(`[Dynamic AI Router] ${modelsDownInARow} modelos seguidos indisponíveis — tratando como sobrecarga geral do provedor.`);
           break;
         }
+        if (tetoDeChamadasAtingido) {
+          console.warn(`[Dynamic AI Router] Teto de ${MAX_CHAMADAS_PROVEDOR} chamadas ao provedor atingido. Interrompendo para não estourar o limite por minuto.`);
+          break;
+        }
+        if (modelsOutOfQuota >= MAX_MODELS_OUT_OF_QUOTA) {
+          quotaExhausted = true;
+          console.warn(`[Dynamic AI Router] ${modelsOutOfQuota} modelos responderam 429 — a cota da chave acabou. Interrompendo sem tentar os demais.`);
+          break;
+        }
 
         let attempt = 0;
+        // Duas tentativas por modelo cobrem erro de formato/esquema, que vale
+        // repetir. Sobrecarga (503) não repete mais aqui: rotaciona de modelo.
         const maxAttempts = 2;
-        let delay = 1000;
         let modelFailedTransiently = false;
         // A busca no Google (grounding) consome uma cota SEPARADA da cota de geração
         // de texto e é a primeira a se esgotar no plano gratuito. Quando isso acontece
         // repetimos a chamada no mesmo modelo sem a ferramenta, em vez de desistir.
-        let useTools = Boolean(tools);
+        let useTools = Boolean(tools) && !toolsBannedForRequest;
         
         while (attempt < maxAttempts) {
+          if (chamadasAoProvedor >= MAX_CHAMADAS_PROVEDOR) {
+            tetoDeChamadasAtingido = true;
+            break;
+          }
           try {
-            console.log(`[Dynamic AI Router] Requesting Gemini | Model: ${geminiModelName} (Attempt ${attempt + 1}/${maxAttempts})`);
+            chamadasAoProvedor++;
+            console.log(`[Dynamic AI Router] Requesting Gemini | Model: ${geminiModelName} (Attempt ${attempt + 1}/${maxAttempts}) [chamada ${chamadasAoProvedor}/${MAX_CHAMADAS_PROVEDOR}]`);
             
             const reqConfig: any = {};
             if (systemInstruction) reqConfig.systemInstruction = systemInstruction;
@@ -1245,7 +1283,7 @@ export async function generateAiResponse(params: {
             // Sem isso, o orçamento só era conferido ENTRE tentativas: uma única
             // chamada lenta seguia até o fim, e uma execução chegou a 269s mesmo
             // com orçamento de 100s configurado.
-            reqConfig.httpOptions = { timeout: Math.max(5_000, remainingMs()) };
+            reqConfig.httpOptions = { timeout: Math.max(5_000, Math.min(TIMEOUT_POR_CHAMADA_MS, remainingMs())) };
 
             const response = await customClient.models.generateContent({
               model: geminiModelName,
@@ -1268,8 +1306,9 @@ export async function generateAiResponse(params: {
             // Google, não do modelo. Refaz a MESMA chamada sem ferramentas antes de
             // classificar o erro ou rotacionar de modelo.
             if (useTools) {
-              console.log(`[Dynamic AI Router] ${geminiModelName} falhou com googleSearch ativo. Repetindo sem ferramentas...`);
+              console.log(`[Dynamic AI Router] ${geminiModelName} falhou com googleSearch ativo. Repetindo sem ferramentas (e sem busca pelo resto desta requisição)...`);
               useTools = false;
+              toolsBannedForRequest = true;
               continue;
             }
 
@@ -1307,7 +1346,8 @@ export async function generateAiResponse(params: {
             if (isQuotaOrRateLimit) {
               // Model quota is exhausted. Do not retry or run schema fallback on this exhausted model;
               // immediately rotate to the next model in uniqueModels (e.g. gemini-3.1-flash-lite, gemini-2.5-flash)
-              console.log(`[Dynamic AI Router] Model ${geminiModelName} reached quota (429). Rotating to alternative model...`);
+              modelsOutOfQuota++;
+              console.log(`[Dynamic AI Router] Model ${geminiModelName} reached quota (429) — ${modelsOutOfQuota}/${MAX_MODELS_OUT_OF_QUOTA}. Rotating to alternative model...`);
               break;
             }
 
@@ -1323,15 +1363,13 @@ export async function generateAiResponse(params: {
 
             if (isTransient) {
               modelFailedTransiently = true;
-              // Só vale repetir se ainda houver tempo para a espera E para outra
-              // tentativa: cada retentativa reenvia o documento inteiro ao provedor.
-              if (attempt < maxAttempts && remainingMs() > delay * 3) {
-                console.log(`[Dynamic AI Router] Transient 503 on ${geminiModelName}. Waiting ${delay}ms before retry...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-                delay *= 2;
-                continue;
-              }
-              // If retry failed, rotate to the next model
+              // Repetir o MESMO modelo que acabou de responder "sobrecarregado" foi
+              // medido e não ajuda: no log de produção a segunda tentativa no
+              // gemini-3.7-flash travou 47 s e morreu no abort, enquanto o modelo
+              // reserva — com o triplo de folga de limite — nunca chegou a ser
+              // chamado. Rotacionar na hora usa o mesmo tempo para tentar algo que
+              // pode de fato responder.
+              console.log(`[Dynamic AI Router] ${geminiModelName} sobrecarregado (503). Passando para o próximo modelo em vez de repetir.`);
               break;
             }
 
@@ -1357,7 +1395,7 @@ export async function generateAiResponse(params: {
                   if (systemInstruction) reqConfigNoSchema.systemInstruction = systemInstruction;
                   if (jsonMode) reqConfigNoSchema.responseMimeType = "application/json";
                   if (thinkingLevel) reqConfigNoSchema.thinkingConfig = { thinkingLevel };
-                  reqConfigNoSchema.httpOptions = { timeout: Math.max(5_000, remainingMs()) };
+                  reqConfigNoSchema.httpOptions = { timeout: Math.max(5_000, Math.min(TIMEOUT_POR_CHAMADA_MS, remainingMs())) };
 
                   const responseNoSchema = await customClient.models.generateContent({
                     model: geminiModelName,
@@ -1386,6 +1424,22 @@ export async function generateAiResponse(params: {
           modelsDownInARow++;
         }
       }
+
+      // Cota é da chave, não do modelo: trocar de modelo não resolve, e tentar
+      // outra chave do mesmo projeto também não.
+      if (quotaExhausted) break;
+    }
+    if (quotaExhausted || tetoDeChamadasAtingido) {
+      // No plano gratuito do Gemini o limite que aperta é o de REQUISIÇÕES POR
+      // MINUTO (5 no Flash, 15 no Flash Lite), não o diário. Dizer "ative o
+      // faturamento" diante de um 429 de RPM manda o usuário resolver a coisa
+      // errada — e foi exatamente o engano que levou a esta correção.
+      throw new Error(
+        `⚠️ O Gemini recusou por limite de taxa (429). No plano gratuito são poucas ` +
+        `requisições por minuto (5 no Flash, 15 no Flash Lite) — aguarde cerca de um ` +
+        `minuto e tente de novo. Se acontecer sempre, troque para o Flash Lite em ` +
+        `"IA & Modelos", que tem o triplo do limite, ou ative o faturamento no Google AI Studio.`
+      );
     }
     if (budgetExhausted) {
       throw new Error(
@@ -1993,7 +2047,13 @@ Tenha bastante atenção para **não errar os custos tributários e logísticos 
 O valor máximo estipulado no edital é o seu limite máximo de entrada, mas o lance ideal é aquele ajustado à sua planilha de custos! Recomendo manter uma margem bruta ideal entre 15% e 25% para cobrir outras despesas fiscais.`;
   }
 
-  return `Eu sou o Assessor Inteligente de Editais da plataforma. Devido a limites temporários na rede do Gemini (Status 429 - Quota Excedida), ativei meu **mecanismo local de apoio** para continuar auxiliando suas tomadas de decisão!
+  // O motivo real já vai no campo "reason" da resposta, logo acima deste texto.
+  // Este parágrafo afirmava "Status 429 - Quota Excedida" SEMPRE, inclusive
+  // quando a falha era chave inválida ou modelo indisponível — e a tela mostrava
+  // as duas coisas juntas, uma contradizendo a outra. Um diagnóstico errado
+  // impresso com confiança custou rodadas inteiras de investigação nesta
+  // plataforma; o texto genérico não repete isso.
+  return `Eu sou o Assessor Inteligente de Editais da plataforma. A IA não respondeu agora (o motivo está na linha acima), então ativei meu **mecanismo local de apoio** para continuar auxiliando suas tomadas de decisão.
 
 Se você deseja:
 1. **Verificar compatibilidade de modelo:** Vá na aba **Comparador de Produtos** e cadastre seus produtos.
@@ -2190,12 +2250,8 @@ export function registrarDiagnostico(fase: string, rota: string, detalhe: string
   }
 }
 
-// Marca que o módulo carregou. A ausência desta linha na tabela é a prova de
-// que a função não chega nem a iniciar — foi exatamente essa ausência que
-// provou que o backend anterior morria antes de executar qualquer código nosso.
-registrarDiagnostico(
-  "boot",
-  "",
-  `runtime=supabase-edge commit=${(process.env.COMMIT_SHA || "?").slice(0, 8)} deploy=${process.env.SB_EXECUTION_ID || "?"}`
-);
+// A marca de boot fica só em index.ts. Este módulo é importado por ele, então
+// duas marcas por partida fria diriam a mesma coisa duas vezes — e um sinal de
+// diagnóstico que se repete sem significar nada é o começo de um log que
+// ninguém lê.
 
