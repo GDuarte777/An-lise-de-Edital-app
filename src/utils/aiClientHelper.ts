@@ -26,7 +26,7 @@ export function getActiveAiConfig() {
     const deepseekKey = (localStorage.getItem("ai_deepseek_key") || localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
 
     if (geminiKey) {
-      return { provider: "gemini", apiKey: geminiKey, model: localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash" };
+      return { provider: "gemini", apiKey: geminiKey, model: localStorage.getItem("ai_gemini_model") || "gemini-3.8-flash" };
     }
     if (openaiKey) return { provider: "openai", apiKey: openaiKey, model: localStorage.getItem("ai_openai_model") || "gpt-4o" };
     if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey, model: localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5" };

@@ -19,7 +19,7 @@ export default function AiConfigTab() {
 
   // Credentials
   const [geminiKey, setGeminiKey] = useState("");
-  const [geminiModel, setGeminiModel] = useState("gemini-3.6-flash");
+  const [geminiModel, setGeminiModel] = useState("gemini-3.8-flash");
 
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-4o");
@@ -49,7 +49,7 @@ export default function AiConfigTab() {
       setActiveProvider(provider);
 
       setGeminiKey(localStorage.getItem("ai_gemini_key") || "");
-      setGeminiModel(localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash");
+      setGeminiModel(localStorage.getItem("ai_gemini_model") || "gemini-3.8-flash");
 
       setOpenaiKey(localStorage.getItem("ai_openai_key") || "");
       setOpenaiModel(localStorage.getItem("ai_openai_model") || "gpt-4o");
@@ -323,13 +323,17 @@ export default function AiConfigTab() {
                       onChange={(e) => setGeminiModel(e.target.value)}
                       className={selectClassName}
                     >
-                      <option value="gemini-3.7-flash">gemini-3.7-flash (Geração Flash Mais Recente)</option>
-                      <option value="gemini-3.6-flash">gemini-3.6-flash (Estável e Disponível - Recomendado)</option>
-                      <option value="gemini-3.5-flash">gemini-3.5-flash (Estável)</option>
-                      <option value="gemini-flash-latest">gemini-flash-latest (Última Versão Flash Estável)</option>
-                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Leve, Rápido e Econômico)</option>
-                      <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Leve)</option>
-                      <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Raciocínio Avançado)</option>
+                      {/* Só modelos que a API realmente serve hoje. A lista oferecia
+                          3.7, 3.6 e 3.5 — aposentados — e um deles vinha marcado como
+                          "Recomendado". Escolher um deles fazia o Google responder 503
+                          "sobrecarregado" (e não 404), então a indisponibilidade
+                          permanente parecia pico de demanda e o chat insistia nela até
+                          estourar o tempo. O rótulo agora traz o limite do plano
+                          gratuito, que é a informação que de fato decide a escolha. */}
+                      <option value="gemini-3.8-flash">gemini-3.8-flash (Recomendado — 5 req/min, 20/dia)</option>
+                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Leve e com folga — 15 req/min, 500/dia)</option>
+                      <option value="gemini-flash-latest">gemini-flash-latest (Aponta sempre para o Flash estável do momento)</option>
+                      <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Raciocínio avançado, mais lento)</option>
                     </select>
                   </div>
                 </div>

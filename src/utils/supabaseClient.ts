@@ -1469,7 +1469,7 @@ create table if not exists public.configuracoes_usuario (
   user_id text primary key,
   active_provider text not null default 'gemini',
   gemini_key text default '',
-  gemini_model text default 'gemini-3.7-flash',
+  gemini_model text default 'gemini-3.8-flash',
   openai_key text default '',
   openai_model text default 'gpt-4o',
   anthropic_key text default '',
@@ -1735,7 +1735,7 @@ export async function signOutWithSupabase(): Promise<void> {
 export async function callSupabaseGeminiEdgeFunction(
   prompt: string, 
   systemInstruction?: string, 
-  model = "gemini-3.7-flash", 
+  model = "gemini-3.8-flash", 
   jsonMode = false
 ): Promise<string> {
   const config = getSupabaseConfig();
@@ -1818,7 +1818,7 @@ export async function saveUserConfigToSupabase(config: {
       user_id: user.id,
       active_provider: config.activeProvider,
       gemini_key: config.geminiKey || "",
-      gemini_model: config.geminiModel || "gemini-3.6-flash",
+      gemini_model: config.geminiModel || "gemini-3.8-flash",
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",
