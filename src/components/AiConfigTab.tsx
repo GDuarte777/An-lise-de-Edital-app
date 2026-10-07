@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Cpu, Key, CheckCircle, RefreshCw, AlertTriangle, Sparkles, ExternalLink, ShieldCheck, Zap, Loader2, XCircle } from "lucide-react";
 import confetti from "canvas-confetti";
 import { saveUserConfigToSupabase } from "../utils/supabaseClient";
-import { apiFetch, readJsonResponse } from "../utils/aiClientHelper";
+import { apiFetch, readJsonResponse, chaveEstaCifrada } from "../utils/aiClientHelper";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
@@ -19,6 +19,15 @@ export default function AiConfigTab() {
 
   // Credentials
   const [geminiKey, setGeminiKey] = useState("");
+  /**
+   * Chaves que estão guardadas CIFRADAS e por isso aparecem em branco no campo.
+   *
+   * Sem esta marca, salvar a tela com o campo vazio apagaria a chave do usuário:
+   * o campo fica em branco porque o navegador não consegue decifrar, não porque
+   * a pessoa quis limpar. Com ela, campo vazio + chave cifrada = manter o que
+   * está gravado.
+   */
+  const [chavesCifradas, setChavesCifradas] = useState<Record<string, boolean>>({});
   const [geminiModel, setGeminiModel] = useState("gemini-3.8-flash");
 
   const [openaiKey, setOpenaiKey] = useState("");
@@ -44,20 +53,32 @@ export default function AiConfigTab() {
 
   // Load from localStorage on mount and when configurations are updated/loaded from database
   useEffect(() => {
+    const paraExibicao = (valor: string | null) =>
+      chaveEstaCifrada(valor) ? "" : (valor || "");
+    setChavesCifradas({
+      gemini: chaveEstaCifrada(localStorage.getItem("ai_gemini_key")),
+      openai: chaveEstaCifrada(localStorage.getItem("ai_openai_key")),
+      anthropic: chaveEstaCifrada(localStorage.getItem("ai_anthropic_key")),
+      deepseek: chaveEstaCifrada(localStorage.getItem("ai_deepseek_key")),
+    });
+
     const loadFromStorage = () => {
       const provider = localStorage.getItem("ai_active_provider") || "gemini";
       setActiveProvider(provider);
 
-      setGeminiKey(localStorage.getItem("ai_gemini_key") || "");
+      // A chave pode estar cifrada ("enc:v1:..."): mostrar o texto cifrado no
+      // campo faria o usuário achar que a chave dele foi corrompida, e qualquer
+      // "Salvar" por cima regravaria o cifrado como se fosse a chave.
+      setGeminiKey(paraExibicao(localStorage.getItem("ai_gemini_key")));
       setGeminiModel(localStorage.getItem("ai_gemini_model") || "gemini-3.8-flash");
 
-      setOpenaiKey(localStorage.getItem("ai_openai_key") || "");
+      setOpenaiKey(paraExibicao(localStorage.getItem("ai_openai_key")));
       setOpenaiModel(localStorage.getItem("ai_openai_model") || "gpt-4o");
 
-      setAnthropicKey(localStorage.getItem("ai_anthropic_key") || "");
+      setAnthropicKey(paraExibicao(localStorage.getItem("ai_anthropic_key")));
       setAnthropicModel(localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5");
 
-      setDeepseekKey(localStorage.getItem("ai_deepseek_key") || "");
+      setDeepseekKey(paraExibicao(localStorage.getItem("ai_deepseek_key")));
       setDeepseekModel(localStorage.getItem("ai_deepseek_model") || "deepseek-chat");
     };
 
@@ -91,24 +112,42 @@ export default function AiConfigTab() {
     }
   };
 
+  /**
+   * O que de fato gravar para um provedor.
+   *
+   * Campo preenchido = o usuário digitou, vale o que ele digitou. Campo vazio
+   * com chave cifrada guardada = o campo só está em branco porque o navegador
+   * não decifra; gravar "" aqui destruiria a chave dele.
+   */
+  const valorParaGravar = (digitado: string, provedor: string) => {
+    if (digitado && digitado.trim().length > 0) return digitado;
+    if (chavesCifradas[provedor]) return localStorage.getItem(`ai_${provedor}_key`) || "";
+    return digitado;
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setSaveSuccess(false);
 
+    const geminiParaGravar = valorParaGravar(geminiKey, "gemini");
+    const openaiParaGravar = valorParaGravar(openaiKey, "openai");
+    const anthropicParaGravar = valorParaGravar(anthropicKey, "anthropic");
+    const deepseekParaGravar = valorParaGravar(deepseekKey, "deepseek");
+
     try {
       localStorage.setItem("ai_active_provider", activeProvider);
 
-      localStorage.setItem("ai_gemini_key", geminiKey);
+      localStorage.setItem("ai_gemini_key", geminiParaGravar);
       localStorage.setItem("ai_gemini_model", geminiModel);
 
-      localStorage.setItem("ai_openai_key", openaiKey);
+      localStorage.setItem("ai_openai_key", openaiParaGravar);
       localStorage.setItem("ai_openai_model", openaiModel);
 
-      localStorage.setItem("ai_anthropic_key", anthropicKey);
+      localStorage.setItem("ai_anthropic_key", anthropicParaGravar);
       localStorage.setItem("ai_anthropic_model", anthropicModel);
 
-      localStorage.setItem("ai_deepseek_key", deepseekKey);
+      localStorage.setItem("ai_deepseek_key", deepseekParaGravar);
       localStorage.setItem("ai_deepseek_model", deepseekModel);
 
       // Force update standard env configs to support legacy route check
@@ -117,13 +156,13 @@ export default function AiConfigTab() {
       // Persist in user-specific cloud DB table
       saveUserConfigToSupabase({
         activeProvider,
-        geminiKey,
+        geminiKey: geminiParaGravar,
         geminiModel,
-        openaiKey,
+        openaiKey: openaiParaGravar,
         openaiModel,
-        anthropicKey,
+        anthropicKey: anthropicParaGravar,
         anthropicModel,
-        deepseekKey,
+        deepseekKey: deepseekParaGravar,
         deepseekModel
       }).catch((err) => console.warn("Erro ao sincronizar chaves com Supabase:", err));
 
@@ -143,11 +182,12 @@ export default function AiConfigTab() {
     try {
       // First save to localStorage
       localStorage.setItem("ai_active_provider", activeProvider);
-      localStorage.setItem(`ai_${activeProvider}_key`,
+      localStorage.setItem(`ai_${activeProvider}_key`, valorParaGravar(
         activeProvider === "gemini" ? geminiKey :
         activeProvider === "openai" ? openaiKey :
-        activeProvider === "anthropic" ? anthropicKey : deepseekKey
-      );
+        activeProvider === "anthropic" ? anthropicKey : deepseekKey,
+        activeProvider
+      ));
       localStorage.setItem(`ai_${activeProvider}_model`,
         activeProvider === "gemini" ? geminiModel :
         activeProvider === "openai" ? openaiModel :
@@ -308,7 +348,7 @@ export default function AiConfigTab() {
                       </div>
                       <Input
                         type="password"
-                        placeholder="AIzaSy..."
+                        placeholder={chavesCifradas.gemini ? "•••••••• chave salva e criptografada no servidor" : "AIzaSy... ou AQ...."}
                         value={geminiKey}
                         onChange={(e) => setGeminiKey(e.target.value)}
                         className="pl-9 text-xs font-mono"

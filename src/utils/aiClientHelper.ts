@@ -41,11 +41,26 @@ export function getActiveAiConfig() {
  * Validates if an API key has the correct format for the given provider.
  * Returns null if valid, or an error message string if invalid.
  */
+/** Prefixo das chaves cifradas em repouso (ver src/utils/segredos.ts). */
+export const PREFIXO_CHAVE_CIFRADA = "enc:v1:";
+
+/** A chave está cifrada: só o servidor consegue lê-la, e isso é esperado. */
+export function chaveEstaCifrada(valor: string | undefined | null): boolean {
+  return String(valor || "").startsWith(PREFIXO_CHAVE_CIFRADA);
+}
+
 export function validateApiKeyFormat(apiKey: string, provider: string): string | null {
   const key = (apiKey || "").trim();
   if (!key || key.length < 10) {
     return `Chave de API não configurada. Acesse "IA & Modelos" no menu de Configurações e insira sua chave de API do ${provider === "gemini" ? "Google AI Studio" : provider}.`;
   }
+
+  // Uma chave cifrada É uma chave configurada: com AI_KEYS_ENCRYPTION_KEY ligada,
+  // o banco guarda "enc:v1:..." e o navegador não tem como decifrar — a chave
+  // mestra é só do servidor, que decifra ao receber. Reprovar aqui bloquearia a
+  // análise de edital antes de sair do navegador, dizendo que a chave do usuário
+  // "parece inválida" quando ela está certa e protegida.
+  if (chaveEstaCifrada(key)) return null;
 
   // O Google emite chaves do Gemini em dois formatos:
   //  - "AIza..."  → chave de API clássica

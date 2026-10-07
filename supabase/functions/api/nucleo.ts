@@ -20,6 +20,8 @@ import { GoogleGenAI, Type } from "npm:@google/genai@2.8.0";
 import {
   derivarChaveMestra,
   descriptografarConfiguracao,
+  descriptografarSegredo,
+  estaCriptografado,
 } from "./segredos.ts";
 
 export { GoogleGenAI, Type, Buffer, process, fs, path };
@@ -281,6 +283,30 @@ export function describeAiFailure(error: any): string {
 // Helper: resolve the active AI config for a user from Supabase, payload, or server environment
 export async function resolveAiConfig(authHeader: string | undefined, clientAiConfig?: any): Promise<{ provider: string; apiKey: string; model: string } | null> {
   console.log(`[AI Config] resolveAiConfig called. clientAiConfig present: ${!!clientAiConfig}, apiKey length: ${clientAiConfig?.apiKey?.length || 0}`);
+
+  /**
+   * O cliente pode mandar a chave CIFRADA em vez da chave de API.
+   *
+   * Com AI_KEYS_ENCRYPTION_KEY ligada, /api/user-config passou a gravar
+   * "enc:v1:..." na tabela. O frontend hidrata o localStorage lendo essa tabela
+   * direto pelo PostgREST e NÃO tem como decifrar — a chave mestra é só do
+   * servidor. Resultado: o navegador passou a enviar o texto cifrado como se
+   * fosse a chave, e o Google respondia "API key not valid", em toda mensagem.
+   *
+   * Decifrar aqui é a correção certa, e não só um remendo: o servidor é o único
+   * que tem a chave mestra, e qualquer caminho que traga um valor cifrado — este
+   * cliente, um cliente antigo em cache, outra integração — passa a funcionar.
+   */
+  if (clientAiConfig?.apiKey && estaCriptografado(clientAiConfig.apiKey)) {
+    const decifrada = descriptografarSegredo(String(clientAiConfig.apiKey), CHAVE_MESTRA_IA);
+    if (decifrada && decifrada.trim().length > 10) {
+      console.log("[AI Config] Chave recebida cifrada do cliente; decifrada no servidor.");
+      clientAiConfig = { ...clientAiConfig, apiKey: decifrada.trim() };
+    } else {
+      console.warn("[AI Config] Chave cifrada do cliente não pôde ser decifrada; seguindo para a configuração do banco.");
+      clientAiConfig = { ...clientAiConfig, apiKey: "" };
+    }
+  }
 
   // 1. If client sent a valid aiConfig (with a real key), trust it immediately
   if (clientAiConfig?.apiKey && clientAiConfig.apiKey.trim().length > 10) {
@@ -2021,7 +2047,13 @@ Tenha bastante atenção para **não errar os custos tributários e logísticos 
 O valor máximo estipulado no edital é o seu limite máximo de entrada, mas o lance ideal é aquele ajustado à sua planilha de custos! Recomendo manter uma margem bruta ideal entre 15% e 25% para cobrir outras despesas fiscais.`;
   }
 
-  return `Eu sou o Assessor Inteligente de Editais da plataforma. Devido a limites temporários na rede do Gemini (Status 429 - Quota Excedida), ativei meu **mecanismo local de apoio** para continuar auxiliando suas tomadas de decisão!
+  // O motivo real já vai no campo "reason" da resposta, logo acima deste texto.
+  // Este parágrafo afirmava "Status 429 - Quota Excedida" SEMPRE, inclusive
+  // quando a falha era chave inválida ou modelo indisponível — e a tela mostrava
+  // as duas coisas juntas, uma contradizendo a outra. Um diagnóstico errado
+  // impresso com confiança custou rodadas inteiras de investigação nesta
+  // plataforma; o texto genérico não repete isso.
+  return `Eu sou o Assessor Inteligente de Editais da plataforma. A IA não respondeu agora (o motivo está na linha acima), então ativei meu **mecanismo local de apoio** para continuar auxiliando suas tomadas de decisão.
 
 Se você deseja:
 1. **Verificar compatibilidade de modelo:** Vá na aba **Comparador de Produtos** e cadastre seus produtos.
