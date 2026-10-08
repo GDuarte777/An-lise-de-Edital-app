@@ -1388,6 +1388,214 @@ export async function saveLanceBotConfigToSupabase(config: any): Promise<{ succe
 }
 
 // Full PostgreSQL SQL Migration script to create all required tables in Supabase with 1-click
+// 14. Bloco de Notas — pastas (pastas_notas) e notas (notas_bloco)
+//
+// Como no resto da plataforma, o par fetch devolve `{ ok, rows }`: "o banco
+// respondeu e está vazio" e "não deu para falar com o banco" pedem reações
+// opostas, e enquanto os dois eram o mesmo `[]` um erro de rede apagava o
+// cache local — foi exatamente o que fez disputas marcadas à mão
+// desaparecerem do calendário.
+
+export function mapPastaNotaFromDb(item: any) {
+  return {
+    id: item.id,
+    nome: item.nome || "",
+    cor: item.cor || "#6366f1",
+    posicao: Number(item.posicao) || 0,
+  };
+}
+
+export async function fetchPastasNotasComStatus(): Promise<{ ok: boolean; rows: any[] }> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("pastas_notas")) return { ok: false, rows: [] };
+  try {
+    const user = await getActiveUser();
+    const userId = user?.id || getGuestUserId();
+
+    const { data, error } = await client
+      .from("pastas_notas")
+      .select("*")
+      .eq("user_id", userId)
+      .order("posicao", { ascending: true });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("pastas_notas");
+        return { ok: false, rows: [] };
+      }
+      console.warn("fetchPastasNotasComStatus error:", error.message);
+      return { ok: false, rows: [] };
+    }
+
+    return { ok: true, rows: (data || []).map(mapPastaNotaFromDb) };
+  } catch (err: any) {
+    if (isTableMissingError(err)) markTableMissing("pastas_notas");
+    return { ok: false, rows: [] };
+  }
+}
+
+export async function savePastaNotaToSupabase(item: {
+  id: string;
+  nome: string;
+  cor: string;
+  posicao: number;
+}): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  if (isTableMissing("pastas_notas")) {
+    return { success: false, message: "Tabela pastas_notas não existe no Supabase." };
+  }
+
+  try {
+    const user = await getActiveUser();
+    const userId = user?.id || getGuestUserId();
+
+    const record = {
+      id: ensureValidUuid(item.id),
+      user_id: userId,
+      nome: String(item.nome || "").trim(),
+      cor: String(item.cor || "#6366f1").trim(),
+      posicao: Number(item.posicao) || 0,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await client.from("pastas_notas").upsert([record], { onConflict: "id" });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("pastas_notas");
+        return { success: false, message: "Tabela pastas_notas não criada no banco." };
+      }
+      return { success: false, message: error.message };
+    }
+    return { success: true, message: "Pasta salva no Supabase." };
+  } catch (err: any) {
+    if (isTableMissingError(err)) markTableMissing("pastas_notas");
+    return { success: false, message: err?.message || "Erro de conexão" };
+  }
+}
+
+export async function deletePastaNotaFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("pastas_notas")) return false;
+  try {
+    const user = await getActiveUser();
+    const userId = user?.id || getGuestUserId();
+
+    // As notas que estavam na pasta NÃO são apagadas: voltam para a raiz. Quem
+    // clica em "excluir pasta" está organizando, não jogando texto fora.
+    await client.from("notas_bloco").update({ pasta_id: "" }).eq("pasta_id", id).eq("user_id", userId);
+
+    const { error } = await client.from("pastas_notas").delete().eq("id", id).eq("user_id", userId);
+    if (error) {
+      if (isTableMissingError(error)) markTableMissing("pastas_notas");
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function mapNotaFromDb(item: any) {
+  return {
+    id: item.id,
+    pastaId: item.pasta_id || "",
+    titulo: item.titulo || "",
+    conteudo: item.conteudo || "",
+    fixada: Boolean(item.fixada),
+    criadaEm: item.criada_em || item.updated_at || "",
+    atualizadaEm: item.atualizada_em || item.updated_at || "",
+  };
+}
+
+export async function fetchNotasComStatus(): Promise<{ ok: boolean; rows: any[] }> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("notas_bloco")) return { ok: false, rows: [] };
+  try {
+    const user = await getActiveUser();
+    const userId = user?.id || getGuestUserId();
+
+    const { data, error } = await client
+      .from("notas_bloco")
+      .select("*")
+      .eq("user_id", userId)
+      .order("atualizada_em", { ascending: false });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("notas_bloco");
+        return { ok: false, rows: [] };
+      }
+      console.warn("fetchNotasComStatus error:", error.message);
+      return { ok: false, rows: [] };
+    }
+
+    return { ok: true, rows: (data || []).map(mapNotaFromDb) };
+  } catch (err: any) {
+    if (isTableMissingError(err)) markTableMissing("notas_bloco");
+    return { ok: false, rows: [] };
+  }
+}
+
+export async function saveNotaToSupabase(item: any): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  if (isTableMissing("notas_bloco")) {
+    return { success: false, message: "Tabela notas_bloco não existe no Supabase." };
+  }
+
+  try {
+    const user = await getActiveUser();
+    const userId = user?.id || getGuestUserId();
+    const agora = new Date().toISOString();
+
+    const record = {
+      id: ensureValidUuid(item.id),
+      user_id: userId,
+      pasta_id: String(item.pastaId || ""),
+      titulo: String(item.titulo || ""),
+      conteudo: String(item.conteudo || ""),
+      fixada: Boolean(item.fixada),
+      criada_em: item.criadaEm || agora,
+      atualizada_em: item.atualizadaEm || agora,
+      updated_at: agora,
+    };
+
+    const { error } = await client.from("notas_bloco").upsert([record], { onConflict: "id" });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("notas_bloco");
+        return { success: false, message: "Tabela notas_bloco não criada no banco." };
+      }
+      return { success: false, message: error.message };
+    }
+    return { success: true, message: "Nota salva no Supabase." };
+  } catch (err: any) {
+    if (isTableMissingError(err)) markTableMissing("notas_bloco");
+    return { success: false, message: err?.message || "Erro de conexão" };
+  }
+}
+
+export async function deleteNotaFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("notas_bloco")) return false;
+  try {
+    const user = await getActiveUser();
+    const userId = user?.id || getGuestUserId();
+
+    const { error } = await client.from("notas_bloco").delete().eq("id", id).eq("user_id", userId);
+    if (error) {
+      if (isTableMissingError(error)) markTableMissing("notas_bloco");
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getSupabaseFullSchemaSQL(): string {
   return `-- ==============================================================================
 -- HORASIS - ESTRUTURA COMPLETA DO BANCO DE DADOS SUPABASE (PostgreSQL)
@@ -1566,7 +1774,34 @@ create table if not exists public.lancebot_config (
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- 13. Habilitar RLS e Políticas Permissivas para Aplicação e Usuários
+-- 13. Bloco de Notas: pastas e notas
+create table if not exists public.pastas_notas (
+  id uuid primary key default uuid_generate_v4(),
+  user_id text not null,
+  nome text not null default '',
+  cor text not null default '#6366f1',
+  posicao numeric default 0,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+create table if not exists public.notas_bloco (
+  id uuid primary key default uuid_generate_v4(),
+  user_id text not null,
+  pasta_id text default '',
+  titulo text default '',
+  conteudo text default '',
+  fixada boolean default false,
+  criada_em text default '',
+  atualizada_em text default '',
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- A lista do bloco abre filtrando por usuário e ordenando pela última edição.
+create index if not exists notas_bloco_user_atualizada_idx
+  on public.notas_bloco (user_id, atualizada_em desc);
+create index if not exists notas_bloco_pasta_idx on public.notas_bloco (user_id, pasta_id);
+
+-- 14. Habilitar RLS e Políticas Permissivas para Aplicação e Usuários
 alter table public.status_disputas_usuario enable row level security;
 alter table public.planilhas_disputas enable row level security;
 alter table public.editais_analisados enable row level security;
@@ -1579,6 +1814,8 @@ alter table public.dados_empresa enable row level security;
 alter table public.simulacoes_precos enable row level security;
 alter table public.comparador_produtos enable row level security;
 alter table public.lancebot_config enable row level security;
+alter table public.pastas_notas enable row level security;
+alter table public.notas_bloco enable row level security;
 
 -- Políticas de Acesso
 -- ⚠️ Cada linha pertence a um usuário e só pode ser lida/escrita por ele.
@@ -1655,6 +1892,16 @@ create policy "Acesso proprio comparador_produtos" on public.comparador_produtos
 drop policy if exists "Permitir tudo lancebot_config" on public.lancebot_config;
 drop policy if exists "Acesso proprio lancebot_config" on public.lancebot_config;
 create policy "Acesso proprio lancebot_config" on public.lancebot_config
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+
+drop policy if exists "Acesso proprio pastas_notas" on public.pastas_notas;
+create policy "Acesso proprio pastas_notas" on public.pastas_notas
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+
+drop policy if exists "Acesso proprio notas_bloco" on public.notas_bloco;
+create policy "Acesso proprio notas_bloco" on public.notas_bloco
   for all using (auth.uid()::text = user_id::text)
   with check (auth.uid()::text = user_id::text);
 `;
