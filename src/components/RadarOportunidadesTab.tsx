@@ -234,7 +234,10 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
           const ufSigla = item.unidadeOrgao?.ufSigla || item.uf || (selectedUfs.length === 1 ? selectedUfs[0] : "BR");
           const municipioNome = item.unidadeOrgao?.municipioNome || "Município Atendido";
           const unidadeNome = item.unidadeOrgao?.nomeUnidade || "Setor de Licitações e Compras";
-          const uasgFormatted = item.uasg || (item.unidadeOrgao?.codigoUnidade ? `UASG ${item.unidadeOrgao.codigoUnidade}` : `UASG 925001`);
+          // Sem código de unidade no registro do PNCP, o campo fica vazio. O
+          // fallback anterior escrevia "UASG 925001" — um código real, de uma
+          // unidade que não tem relação nenhuma com a licitação listada.
+          const uasgFormatted = item.uasg || (item.unidadeOrgao?.codigoUnidade ? `UASG ${item.unidadeOrgao.codigoUnidade}` : "");
           const desc = item.objetoCompra || item.objeto || "Objeto de aquisição ou prestação de serviço público.";
 
           const rawVal = typeof item.valorTotalEstimado === "number" ? item.valorTotalEstimado : 0;

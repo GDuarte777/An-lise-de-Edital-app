@@ -8,6 +8,8 @@
 // ═══════════════════════════════════════════════════════════════════════
 import type { AplicativoExpresso } from "./expresso.ts";
 import { titularConversa } from "./tituloConversa.ts";
+import { montarAcervo } from "./acervo.ts";
+import { normalizarCodigoUasg, extrairCodigoUasg } from "./identificacaoEdital.ts";
 import {
   Buffer,
   CHAVE_MESTRA_IA,
@@ -1265,6 +1267,8 @@ REGRAS:
                   orgaoComprador: { type: Type.STRING, description: "Órgão comprador e Unidade Gestora" },
                   modalidade: { type: Type.STRING, description: "Modalidade do processo (eg. Pregão Eletrônico, Concorrência)" },
                   identificacaoNumerica: { type: Type.STRING, description: "Número do Processo ou Edital / busca no portal" },
+                  codigoUASG: { type: Type.STRING, description: "SOMENTE o código numérico da UASG / Unidade Gestora / Unidade Compradora, de 4 a 6 dígitos (ex: 927374). NÃO é o número do edital nem do processo, e NUNCA contém barra. Se o edital não trouxer esse código, devolva string vazia." },
+                  numeroEdital: { type: Type.STRING, description: "Número do edital/licitação com o ano, no formato NNN/AAAA (ex: 44/2026). É diferente do código da UASG. Se não houver, devolva string vazia." },
                   dataHoraSessao: { type: Type.STRING, description: "Data, horário e fuso da sessão de disputa/lances" },
                   idContratacaoPNCP: { type: Type.STRING, description: "Id contratação PNCP se identificado (ex: 79151312000156-1-000501/2026)" },
                   linkPNCP: { type: Type.STRING, description: "URL ou link direto da licitação/edital no Portal PNCP (ex: https://pncp.gov.br/app/editais/79151312000156/2026/000501)" }
@@ -1441,8 +1445,25 @@ REGRAS:
         // muda o entendimento do usuário sobre o rito do certame.
         modalidade: textoOuNulo(ic.modalidade) || NAO_IDENTIFICADO,
         identificacaoNumerica: textoOuNulo(ic.identificacaoNumerica) || NAO_IDENTIFICADO,
+        // A UASG passa por validação em vez de ser aceita como veio: o modelo,
+        // ao não achar o código, tende a repetir ali o número do processo — que
+        // é justamente como "163/2026" acabou no campo da unidade na planilha.
+        // Valor reprovado vira string vazia, nunca NAO_IDENTIFICADO: a tela
+        // mostra "—", e um campo vazio não convida ninguém a preenchê-lo de
+        // cabeça.
+        codigoUASG: normalizarCodigoUasg(textoOuNulo(ic.codigoUASG)),
+        numeroEdital: textoOuNulo(ic.numeroEdital) || "",
         dataHoraSessao: textoOuNulo(ic.dataHoraSessao) || NAO_IDENTIFICADO
       };
+
+      // O edital traz o código mesmo quando o modelo não o devolve separado.
+      if (!parsedData.identificacaoCertame.codigoUASG) {
+        parsedData.identificacaoCertame.codigoUASG = extrairCodigoUasg(
+          [parsedData.identificacaoCertame.orgaoComprador, parsedData.rawText, parsedData.reportMarkdown]
+            .filter(Boolean)
+            .join(" ")
+        );
+      }
 
       const et = objetoOuNulo(parsedData.especificacoesTecnicas);
       parsedData.especificacoesTecnicas = {
@@ -1566,6 +1587,19 @@ REGRAS:
             if (numeroOficial) {
               ident.identificacaoNumerica = `${modalidadeOficial || "Contratação"} nº ${numeroOficial}/${oficial.anoCompra || alvoPncp.ano}`;
               camposOficiais.push("número do processo");
+            }
+
+            // O PNCP publica o código da unidade compradora. Sendo dado
+            // oficial do órgão, ele vale mais do que qualquer leitura do PDF e
+            // sobrepõe o que o modelo tiver devolvido.
+            const unidadeOficial = normalizarCodigoUasg(oficial.unidadeOrgao?.codigoUnidade);
+            if (unidadeOficial) {
+              ident.codigoUASG = unidadeOficial;
+              camposOficiais.push("código da unidade (UASG)");
+            }
+
+            if (numeroOficial && oficial.anoCompra) {
+              ident.numeroEdital = `${numeroOficial}/${oficial.anoCompra}`;
             }
 
             if (oficial.dataAberturaProposta) {
@@ -2354,6 +2388,12 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
         };
       });
 
+      // O acervo é lido com o JWT do próprio usuário, então o RLS continua
+      // valendo: cada um enxerga apenas o que é seu. Falha na leitura não
+      // derruba o chat — o contexto passa a dizer que não deu para consultar,
+      // o que é melhor do que o modelo responder de memória.
+      const acervo = await montarAcervo(req.headers.authorization);
+
       // In the system instruction (or prepended context), we provide info about the company certs and active edital analysis if present!
       const contextPrefix = `
 Você é a HORASIS AI, a Assessora e Consultora Inteligente de Licitações, Pregões Eletrônicos e Cotações de Mercado da plataforma HORASIS.
@@ -2374,8 +2414,11 @@ Sua missão é dar respostas ultra-claras, diretas, resumidas e perfeitamente ex
      • **Lucro Líquido Real:** **R$ 202,00 por mês** (Lucro Anual: R$ 2.424,00)
 
 3. **REGRAS SOBRE EDITAIS E DOCUMENTOS ANEXOS**:
-   - Só analise, mencione ou tome como base um edital se o usuário tiver explicitamente SELECIONADO um edital no Foco do Chat ou se tiver enviado um arquivo/documento em anexo.
-   - Se NENHUM edital estiver selecionado e nenhum anexo for enviado na mensagem, responda a qualquer dúvida do usuário de forma totalmente geral, direta e útil, sem inventar nem assumir nenhum edital prévio.
+   - Para ANALISAR um edital em profundidade (itens, valores, exigências de habilitação, pegadinhas), use apenas o edital SELECIONADO no Foco do Chat ou um arquivo enviado em anexo. Nunca analise de memória um edital que não esteja ali.
+   - Para responder O QUE EXISTE NA PLATAFORMA — se um edital já foi analisado, qual o órgão, a UASG, o número, a data da sessão, o que está na planilha de disputas — use o ACERVO abaixo. Ele é a lista real e atual do usuário.
+   - O acervo lista SOMENTE o que existe hoje. Registro apagado não aparece nele, e portanto não existe mais: nunca mencione um edital que não esteja na lista.
+   - Se o usuário perguntar por um edital, UASG ou número que NÃO está no acervo, responda com clareza que não há registro dele na plataforma. Não suponha, não aproxime e não ofereça um parecido como se fosse o procurado.
+   - Ao confirmar que um edital existe, cite os dados do acervo (órgão, UASG, número, data da sessão) para o usuário reconhecer qual é.
 
 4. **PESQUISA AUTÔNOMA NA INTERNET (WEB SEARCH) EM TEMPO REAL**:
    - Você possui autonomia e ferramenta ativa de pesquisa no Google em tempo real.
@@ -2391,6 +2434,9 @@ ${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyD
 
 Edital Selecionado pelo Usuário nesta Conversa:
 ${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum edital selecionado pelo usuário para esta conversa."}
+
+═══ ACERVO DA PLATAFORMA (dados reais deste usuário, somente registros existentes) ═══
+${acervo.leu ? acervo.texto : "Não foi possível ler o acervo nesta requisição. Se o usuário perguntar o que existe na plataforma, diga que não conseguiu consultar agora — não responda de memória nem suponha."}
 `;
 
       const tools = ferramentasDeBusca();

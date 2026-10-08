@@ -13,6 +13,7 @@ const raiz = resolve(__dirname, "..");
 const copias = [
   ["src/utils/segredos.ts", "supabase/functions/api/segredos.ts"],
   ["src/utils/pncpQuery.ts", "supabase/functions/api/pncpQuery.ts"],
+  ["src/utils/identificacaoEdital.ts", "supabase/functions/api/identificacaoEdital.ts"],
 ] as const;
 
 describe("cópias compartilhadas com a Edge Function", () => {
