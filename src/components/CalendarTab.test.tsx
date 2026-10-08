@@ -156,6 +156,46 @@ describe("CalendarTab — marcar disputa à mão", () => {
   });
 });
 
+describe("CalendarTab — falar com a IA", () => {
+  const comData = {
+    id: "chat-1",
+    orgao: "Prefeitura do Chat",
+    uasgUndCompradora: "",
+    numeroLicitacao: "PE 7/2026",
+    portal: "",
+    produtoItem: "Objeto",
+    quantidade: 1,
+    unidadeMedida: "Unidade",
+    valorEstimadoItem: 0,
+    nossoValorAlvo: 0,
+    valorMinimoPiso: 0,
+    dataHoraDisputa: `${DATA_NO_MES} 11:00`,
+    status: "Agendada",
+    observacoes: "",
+    linkPNCP: "",
+  };
+
+  it("dispara o evento que abre o chat com a disputa clicada", async () => {
+    banco.linhas = [comData];
+    const recebidos: any[] = [];
+    const ouvinte = (e: any) => recebidos.push(e.detail);
+    window.addEventListener("aip_abrir_chat_disputa", ouvinte);
+
+    try {
+      render(<CalendarTab />);
+      fireEvent.click(await screen.findByTitle(/Ver disputas deste dia/i));
+      const dialogo = await screen.findByRole("dialog");
+      fireEvent.click(within(dialogo).getByRole("button", { name: /Falar com a IA/i }));
+
+      expect(recebidos).toHaveLength(1);
+      expect(recebidos[0].disputa.id).toBe("chat-1");
+      expect(recebidos[0].disputa.orgao).toBe("Prefeitura do Chat");
+    } finally {
+      window.removeEventListener("aip_abrir_chat_disputa", ouvinte);
+    }
+  });
+});
+
 describe("CalendarTab — disputa existente", () => {
   const existente = {
     id: "abc",
