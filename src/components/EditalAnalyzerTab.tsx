@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { normalizarCodigoUasg, extrairCodigoUasg } from "../utils/identificacaoEdital";
 import { EditalAnalysis, CompanyData, SyncItem, Certificate } from "../types";
 import { 
   FileUp, FileText, CheckCircle2, AlertTriangle, Clock, ArrowRight, Loader2, Play, 
@@ -155,26 +156,26 @@ export function buildPncpEditalUrl(str: string): string | null {
 export function getUasg(edital: EditalAnalysis | null): string {
   if (!edital) return "Não informada";
 
-  const explicitUasg = (edital as any).uasg || (edital as any).uasgUndCompradora || (edital.identificacaoCertame as any)?.uasg || (edital.identificacaoCertame as any)?.uasgUndCompradora;
-  if (explicitUasg && typeof explicitUasg === "string" && explicitUasg.trim().length > 0) {
-    return explicitUasg.trim();
-  }
+  const ic: any = edital.identificacaoCertame || {};
+
+  // Cada candidato passa pela validação: um valor com barra é número de
+  // processo, não UASG. identificacaoNumerica NÃO entra nesta lista — era por
+  // ela que o número do processo chegava ao campo da unidade.
+  const candidato =
+    normalizarCodigoUasg(ic.codigoUASG) ||
+    normalizarCodigoUasg(ic.uasg) ||
+    normalizarCodigoUasg(ic.uasgUndCompradora) ||
+    normalizarCodigoUasg((edital as any).uasg) ||
+    normalizarCodigoUasg((edital as any).uasgUndCompradora);
+  if (candidato) return candidato;
 
   const combinedText = [
-    edital.identificacaoCertame?.orgaoComprador || "",
-    edital.identificacaoCertame?.identificacaoNumerica || "",
+    ic.orgaoComprador || "",
     edital.rawText || "",
     edital.reportMarkdown || ""
   ].join(" ");
 
-  const uasgMatch = combinedText.match(/(?:UASG|Unidade\s+Compradora|Unidade\s+Gestora|Código\s+Unidade|Und\.?\s*Compradora)[:\s]*(\d{5,6}\b[^\n,;]*)/i)
-    || combinedText.match(/\b(\d{5,6})\s*-\s*[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ\s]{3,}/i);
-
-  if (uasgMatch) {
-    return uasgMatch[1].trim();
-  }
-
-  return "Não informada";
+  return extrairCodigoUasg(combinedText) || "Não informada";
 }
 
 export function getIdContratacaoPNCP(edital: EditalAnalysis | null): string {
@@ -1088,7 +1089,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           const disputaRow = {
             id: generateUUID(),
             orgao: iden.orgaoComprador || (analysisResult.descricaoProduto ? analysisResult.descricaoProduto.slice(0, 50) : "Órgão do Edital"),
-            uasgUndCompradora: iden.codigoUASG || iden.uasg || iden.identificacaoNumerica || "",
+            uasgUndCompradora: normalizarCodigoUasg(iden.codigoUASG) || normalizarCodigoUasg(iden.uasg),
             numeroLicitacao: iden.numeroLicitacao || iden.identificacaoNumerica || "",
             portal: iden.portalEletronico || "Compras.gov.br",
             produtoItem: analysisResult.descricaoProduto || "Objeto da Licitação",

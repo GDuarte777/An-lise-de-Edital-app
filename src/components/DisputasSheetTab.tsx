@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { normalizarCodigoUasg, extrairCodigoUasg, extrairNumeroEdital } from "../utils/identificacaoEdital";
 import {
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
   CheckCircle, Calendar, FileSpreadsheet, ArrowUpDown,
@@ -92,19 +93,40 @@ function extractEditalFields(editalObj: EditalAnalysis, fileNameFallback?: strin
   const fin: any = editalObj.viabilidadeFinanceira || {};
   const editalAny: any = editalObj;
 
-  const orgao = iden.orgaoComprador || editalAny.orgao || (fileNameFallback ? fileNameFallback.replace(/\.[^/.]+$/, "") : "Órgão do Edital Analisado");
+  // ⚠️ Campo que o edital não trouxe fica VAZIO. A tabela exibe "—" para vazio,
+  // e isso diz a verdade. Esta função preenchia tudo por suposição — "UASG
+  // 090012", "PE Edital/2026", "Órgão do Edital Analisado", quantidade 1,
+  // "Compras.gov.br", a data de hoje às 09:00 como sessão e "Favorável" como
+  // parecer — e cada um desses valores chegava à planilha com a mesma aparência
+  // de dado conferido. Numa plataforma de licitação isso não é estética: uma
+  // data de sessão inventada faz perder a disputa, e um parecer "Favorável"
+  // inventado faz entrar numa licitação ruim.
+  const orgao = iden.orgaoComprador || editalAny.orgao || (fileNameFallback ? fileNameFallback.replace(/\.[^/.]+$/, "") : "");
 
-  const uasg = iden.codigoUASG || iden.uasg || iden.identificacaoNumerica || editalAny.uasg || "UASG 090012";
+  // A UASG é o código da unidade gestora, NUNCA o número do processo. O
+  // fallback para identificacaoNumerica era o defeito relatado: a planilha
+  // mostrava "163/2026" nos dois campos, UASG e Nº Licitação.
+  const uasg =
+    normalizarCodigoUasg(iden.codigoUASG) ||
+    normalizarCodigoUasg(iden.uasg) ||
+    normalizarCodigoUasg(editalAny.uasg) ||
+    extrairCodigoUasg([iden.orgaoComprador, editalObj.rawText, editalObj.reportMarkdown].filter(Boolean).join(" "));
 
-  const numeroLicitacao = iden.numeroLicitacao || iden.identificacaoNumerica || iden.modalidade || "PE Edital/2026";
+  const numeroLicitacao =
+    iden.numeroEdital ||
+    iden.numeroLicitacao ||
+    iden.identificacaoNumerica ||
+    extrairNumeroEdital([editalObj.rawText, editalObj.reportMarkdown].filter(Boolean).join(" "));
 
-  const portal = iden.portalEletronico || iden.portal || "Compras.gov.br";
+  const portal = iden.portalEletronico || iden.portal || "";
 
   const firstItem = editalObj.itensEdital?.[0] || editalAny.itens?.[0];
-  const produtoItem = firstItem?.descricao || editalObj.descricaoProduto || editalAny.objeto || "Objeto da licitação analisada";
+  const produtoItem = firstItem?.descricao || editalObj.descricaoProduto || editalAny.objeto || "";
 
-  const quantidade = Number(firstItem?.quantidade) || 1;
-  const unidadeMedida = firstItem?.unidade || "Unidade";
+  // Quantidade ilegível vira 0, não 1: "1" é uma quantidade plausível e passa
+  // despercebida na conferência, enquanto 0 salta aos olhos.
+  const quantidade = Number(firstItem?.quantidade) || 0;
+  const unidadeMedida = firstItem?.unidade || "";
 
   const rawValEstimado = fin.valorEstimado || fin.valorEstimadoTotal || firstItem?.valorEstimado || firstItem?.valorUnitarioEstimado || editalAny.valorEstimado || 0;
   const valorEstimadoItem = parseBRLNumber(rawValEstimado);
@@ -112,12 +134,16 @@ function extractEditalFields(editalObj: EditalAnalysis, fileNameFallback?: strin
   const nossoValorAlvo = fin.nossoValorSugerido ? parseBRLNumber(fin.nossoValorSugerido) : (valorEstimadoItem > 0 ? Number((valorEstimadoItem * 0.90).toFixed(2)) : 0);
   const valorMinimoPiso = fin.precoPisoMinimo ? parseBRLNumber(fin.precoPisoMinimo) : (valorEstimadoItem > 0 ? Number((valorEstimadoItem * 0.82).toFixed(2)) : 0);
 
-  const dataHoraDisputa = iden.dataHoraSessao || iden.dataAbertura || iden.dataSessao || new Date().toLocaleDateString("pt-BR") + " 09:00";
+  // Sem data no edital, o campo fica vazio. Antes caía na data de HOJE às
+  // 09:00 — uma sessão que não existe, no calendário e na planilha.
+  const dataHoraDisputa = iden.dataHoraSessao || iden.dataAbertura || iden.dataSessao || "";
 
   const linkPNCP = iden.linkPNCP || editalObj.linkPNCP || editalAny.linkPNCP || (iden.idContratacaoPNCP ? `https://pncp.gov.br/app/editais/${iden.idContratacaoPNCP}` : editalAny.idContratacaoPNCP ? `https://pncp.gov.br/app/editais/${editalAny.idContratacaoPNCP}` : "");
 
-  const veredito = editalObj.parecerFinal?.veredito || (editalObj.parecerFinal as any)?.recomendacao || "Favorável";
-  const observacoes = (editalObj as any).resumoExecutivo || `Extraído de análise do edital. Veredito: ${veredito}`;
+  const veredito = editalObj.parecerFinal?.veredito || (editalObj.parecerFinal as any)?.recomendacao || "";
+  const observacoes =
+    (editalObj as any).resumoExecutivo ||
+    (veredito ? `Extraído de análise do edital. Veredito: ${veredito}` : "Extraído de análise do edital.");
 
   return {
     orgao,
@@ -937,13 +963,16 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     const cleanName = fileName.replace(/\.[^/.]+$/, "");
     setFormData(prev => ({
       ...prev,
-      orgao: prev.orgao || `Órgão do Edital (${cleanName})`,
-      uasgUndCompradora: prev.uasgUndCompradora || "UASG 090012",
-      numeroLicitacao: prev.numeroLicitacao || "PE " + cleanName.slice(-6),
-      produtoItem: prev.produtoItem || `Fornecimento / Serviço referente ao arquivo ${fileName}`,
-      observacoes: `Anexo cadastrado (${fileName}). Verifique os valores específicos no edital.`
+      // Só o que o NOME DO ARQUIVO realmente diz. Um número de UASG e um
+      // "PE <seis últimos caracteres do nome>" tirados daqui não são extração:
+      // são invenção com cara de campo preenchido.
+      orgao: prev.orgao || "",
+      uasgUndCompradora: prev.uasgUndCompradora || "",
+      numeroLicitacao: prev.numeroLicitacao || extrairNumeroEdital(cleanName),
+      produtoItem: prev.produtoItem || "",
+      observacoes: `Anexo cadastrado (${fileName}). A leitura automática não preencheu os campos — confira no edital.`
     }));
-    showToast(`Campos preenchidos a partir do anexo ${fileName}!`, "info");
+    showToast(`Anexo ${fileName} registrado. Preencha os campos conferindo no edital.`, "info");
   };
 
   // Save Modal Form
@@ -968,9 +997,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       const newRow: DisputaRow = {
         id: generateUUID(),
         orgao: formData.orgao || "",
-        uasgUndCompradora: formData.uasgUndCompradora || "S/N",
-        numeroLicitacao: formData.numeroLicitacao || "S/N",
-        portal: formData.portal || "Compras.gov.br",
+        uasgUndCompradora: normalizarCodigoUasg(formData.uasgUndCompradora),
+        numeroLicitacao: formData.numeroLicitacao || "",
+        portal: formData.portal || "",
         produtoItem: formData.produtoItem || "",
         quantidade: Number(formData.quantidade) || 1,
         unidadeMedida: formData.unidadeMedida || "Unidade",
