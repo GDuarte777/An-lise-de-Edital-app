@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import {
   FileText, ShieldCheck, FolderGit, FileSpreadsheet, CloudLightning,
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser, CalendarDays, ClipboardCheck
+  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser, CalendarDays, ClipboardCheck,
+  NotebookPen
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
@@ -17,6 +18,7 @@ import PricingCalculatorTab from "./components/PricingCalculatorTab";
 import ProductComparatorTab from "./components/ProductComparatorTab";
 import LanceBotTab from "./components/LanceBotTab";
 import CompetitorAnalyzerTab from "./components/CompetitorAnalyzerTab";
+import NotepadTab from "./components/NotepadTab";
 import AiConfigTab from "./components/AiConfigTab";
 import FloatingAiChat from "./components/FloatingAiChat";
 import DocPreviewModal from "./components/DocPreviewModal";
@@ -85,7 +87,7 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
   bankDetails: ""
 };
 
-type TabId = "analyzer" | "radar" | "disputasSheet" | "calendar" | "habilitacao" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
+type TabId = "analyzer" | "radar" | "disputasSheet" | "calendar" | "habilitacao" | "createDoc" | "documents" | "notepad" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
 
 const CORE_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
   { id: "analyzer", label: "Análise de Edital", icon: FileText },
@@ -98,6 +100,7 @@ const OPERATIONS_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
   { id: "habilitacao", label: "Checklist de Habilitação", icon: ClipboardCheck },
   { id: "createDoc", label: "Criar Documentos", icon: FileEdit },
   { id: "documents", label: "Gestão de Certidões", icon: ListTodo },
+  { id: "notepad", label: "Bloco de Notas", icon: NotebookPen },
   { id: "calculator", label: "Calculadora de Preços", icon: Calculator },
   { id: "comparator", label: "Comparador de Produtos", icon: Sparkles },
   { id: "bot", label: "Robô de Lances", icon: Cpu },
@@ -112,6 +115,7 @@ const TAB_LABELS: Record<TabId, string> = {
   habilitacao: "Checklist de Habilitação",
   createDoc: "Criar Documentos",
   documents: "Gestão de Certidões",
+  notepad: "Bloco de Notas",
   calculator: "Calculadora de Preços",
   comparator: "Comparador de Produtos",
   bot: "Robô de Lances",
@@ -837,6 +841,8 @@ export default function App() {
                   setCompanyData={setCompanyData}
                   activeEdital={activeEdital}
                 />
+              ) : activeTab === "notepad" ? (
+                <NotepadTab />
               ) : activeTab === "calculator" ? (
                 <PricingCalculatorTab
                   companyData={companyData}

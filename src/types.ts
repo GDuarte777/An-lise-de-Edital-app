@@ -170,3 +170,22 @@ export interface DisputaRow {
   observacoes?: string; // Anotações / Estratégia
   linkPNCP?: string; // Link direto do edital/contratação no PNCP
 }
+
+// Bloco de Notas — pastas e notas são texto do próprio usuário, sem nada
+// derivado de edital. Ver src/utils/notas.ts para as regras de organização.
+export interface PastaNotas {
+  id: string;
+  nome: string;
+  cor: string; // hex, ex: "#6366f1"
+  posicao: number;
+}
+
+export interface Nota {
+  id: string;
+  pastaId: string; // "" = sem pasta (raiz do bloco)
+  titulo: string;
+  conteudo: string;
+  fixada: boolean;
+  criadaEm: string; // ISO
+  atualizadaEm: string; // ISO
+}
