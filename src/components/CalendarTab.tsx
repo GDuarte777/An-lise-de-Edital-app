@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Filter, Landmark, AlertCircle, CalendarPlus,
-  Plus, Pencil, Trash2, Link2
+  Plus, Pencil, Trash2, Link2, MessageSquarePlus
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, DisputaStatusType } from "../types";
 import {
@@ -12,6 +12,7 @@ import {
   deleteDisputaFromSupabase,
   generateUUID
 } from "../utils/supabaseClient";
+import { abrirChatDaDisputa } from "../utils/chatDisputa";
 import {
   validarDisputaManual,
   criarDisputaManual,
@@ -620,7 +621,20 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
                   </a>
                 )}
 
-                <div className="flex items-center justify-end gap-1 border-t border-border pt-1.5">
+                <div className="flex flex-wrap items-center justify-end gap-1 border-t border-border pt-1.5">
+                  {/* Os dados da disputa já estão nesta linha; sem isto, falar
+                      dela com a IA exigia redigitar órgão, pregão, data e valores. */}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-[11px] text-primary hover:bg-primary/10 hover:text-primary"
+                    onClick={() => { setSelectedDay(null); abrirChatDaDisputa(row); }}
+                    title="Abrir um chat da IA já com os dados desta disputa"
+                  >
+                    <MessageSquarePlus className="h-3 w-3" />
+                    Falar com a IA
+                  </Button>
                   <Button
                     type="button"
                     variant="ghost"

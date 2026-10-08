@@ -3,10 +3,11 @@ import {
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
   CheckCircle, Calendar, FileSpreadsheet, ArrowUpDown,
   Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database,
-  Kanban, Palette, GripVertical, Pencil, MoreHorizontal
+  Kanban, Palette, GripVertical, Pencil, MoreHorizontal, MessageSquarePlus
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
+import { abrirChatDaDisputa } from "../utils/chatDisputa";
 import { getContrastTextColor } from "../utils/disputaDates";
 import { useEditalHistory } from "../utils/editalHistory";
 import DisputaDateTag from "./DisputaDateTag";
@@ -2192,6 +2193,26 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
             {/* Modal Footer (Always visible & fixed at bottom) */}
             <div className="p-3.5 sm:p-4 border-t border-border bg-muted shrink-0 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3">
+              {/* Só na edição: numa disputa ainda não cadastrada não há do que
+                  falar. Fecha o modal antes de abrir o chat — o overlay está em
+                  z-[9999] e o painel do chat em z-50, então o chat abriria atrás
+                  dele e o usuário não veria nada acontecer. */}
+              {editingRow && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:mr-auto sm:w-auto gap-1.5 text-primary"
+                  onClick={() => {
+                    const disputa = { ...editingRow, ...formData } as DisputaRow;
+                    setIsModalOpen(false);
+                    abrirChatDaDisputa(disputa);
+                  }}
+                  title="Abrir um chat da IA já com os dados desta disputa"
+                >
+                  <MessageSquarePlus className="w-3.5 h-3.5" />
+                  Falar com a IA
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="outline"

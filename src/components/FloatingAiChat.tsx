@@ -9,6 +9,11 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
+import {
+  EVENTO_CHAT_DISPUTA,
+  idSessaoDaDisputa,
+  criarSessaoDaDisputa
+} from "../utils/chatDisputa";
 import { addSyncedItem } from "../utils/googleSync";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -203,6 +208,49 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
     window.addEventListener("aip_edital_analyzed", handleEditalAnalyzed);
     return () => window.removeEventListener("aip_edital_analyzed", handleEditalAnalyzed);
   }, [activeSessionId]);
+
+  // O calendário e a Planilha pedem, pelo evento, para conversar sobre uma
+  // disputa específica. A conversa nasce já com os dados daquela linha, em vez
+  // de o usuário ter de redigitar órgão, pregão, data e valores no chat.
+  useEffect(() => {
+    const handleAbrirChatDisputa = (e: any) => {
+      const disputa = e?.detail?.disputa;
+      if (!disputa?.id) return;
+
+      const idSessao = idSessaoDaDisputa(disputa.id);
+
+      // Lê a lista atual do ref, e não do estado capturado no render: o mesmo
+      // motivo pelo qual a exclusão de canais usa sessionsRef. A decisão fica
+      // fora do updater do setSessions, que precisa ser puro — em StrictMode o
+      // React o invoca duas vezes, e um efeito colateral ali dispararia dobrado.
+      const atuais = sessionsRef.current;
+      const jaExiste = atuais.some(s => s.id === idSessao);
+
+      if (!jaExiste) {
+        if (atuais.length >= MAX_CHATS_PER_USER) {
+          setChatLimitModal({
+            show: true,
+            reason: "chat_count",
+            currentCount: atuais.length,
+            maxCount: MAX_CHATS_PER_USER
+          });
+          return;
+        }
+
+        const nova = criarSessaoDaDisputa(disputa);
+        const proximas = [...atuais, nova];
+        sessionsRef.current = proximas;
+        setSessions(proximas);
+      }
+
+      setActiveSessionId(idSessao);
+      setIsOpen(true);
+      setShowSidebarMobile(false);
+    };
+
+    window.addEventListener(EVENTO_CHAT_DISPUTA, handleAbrirChatDisputa);
+    return () => window.removeEventListener(EVENTO_CHAT_DISPUTA, handleAbrirChatDisputa);
+  }, []);
 
   // Click outside to close the custom selector dropdown
   useEffect(() => {
