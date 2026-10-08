@@ -8,6 +8,7 @@ import {
 import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { abrirChatDaDisputa } from "../utils/chatDisputa";
+import { valorDoCartao } from "../utils/disputaCartao";
 import { getContrastTextColor } from "../utils/disputaDates";
 import { useEditalHistory } from "../utils/editalHistory";
 import DisputaDateTag from "./DisputaDateTag";
@@ -1708,8 +1709,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           <p className="line-clamp-2 text-[10.5px] text-muted-foreground">{row.produtoItem}</p>
                         )}
                         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pt-0.5">
-                          <span className="font-mono text-[10px] font-bold">
-                            {row.nossoValorAlvo > 0 ? formatBRL(row.nossoValorAlvo) : "—"}
+                          <span className="font-mono text-[10px] font-bold" title={valorDoCartao(row).titulo}>
+                            {valorDoCartao(row).texto}
                           </span>
                           {row.dataHoraDisputa && (
                             <span className="flex items-center gap-1 text-[10px]">
