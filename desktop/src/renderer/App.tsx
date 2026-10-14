@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import Painel from "./painel/Painel.js";
+import { criarDemonstracao } from "./painel/demonstracao.js";
+import type { FontePainel } from "../compartilhado/painel.js";
 import type { ApiLanceBot, Calibracao, ConferenciaSala, Disputa, Usuario } from "../preload/index.js";
 
 declare global {
@@ -134,6 +137,10 @@ function Portao({ aoEntrar, avisoInicial }: { aoEntrar: (u: Usuario) => void; av
 /* ----------------------------------------------------------------- Cockpit */
 
 function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) {
+  // O painel de disputa é a tela do produto; o cockpit abaixo continua sendo o
+  // diagnóstico de sessão e calibração. Hoje a fonte é a demonstração — quando o
+  // cliente STOMP entrar, só esta linha muda.
+  const [fontePainel, setFontePainel] = useState<FontePainel | null>(null);
   const [conectado, setConectado] = useState(false);
   const [calib, setCalib] = useState<Calibracao | null>(null);
   const [disputas, setDisputas] = useState<Disputa[]>([]);
@@ -270,6 +277,18 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const emLances = disputas.filter((d) => d.emFaseDeLances);
   const visiveis = soEmLances ? emLances : disputas;
 
+  if (fontePainel) {
+    return (
+      <Painel
+        fonte={fontePainel}
+        aoVoltar={() => {
+          fontePainel.encerrar();
+          setFontePainel(null);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -278,6 +297,9 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
           LanceBot
         </div>
         <div className="row tight">
+          <button className="btn primary" onClick={() => setFontePainel(criarDemonstracao())}>
+            Abrir painel de disputa
+          </button>
           <EstadoPill estado={estadoRobo} />
           <span className="faint">{usuario.email}</span>
           <button
