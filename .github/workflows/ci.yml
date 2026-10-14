@@ -1,0 +1,56 @@
+name: CI
+
+# Verifica o aplicativo web a cada push e pull request.
+#
+# Até aqui o único workflow do repositório era o build do LanceBot desktop, então
+# nada impedia que uma alteração quebrasse a tipagem ou o build da aplicação
+# principal e só fosse descoberta no deploy da Vercel.
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+  workflow_dispatch:
+
+# Um push novo cancela a verificação ainda em andamento do mesmo branch:
+# só o último commit interessa.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verificar:
+    name: Tipos, testes e build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificar tipos do frontend
+        run: npm run lint
+
+      # O backend roda no Deno, no Supabase, e não há Deno neste runner. Os
+      # tipos em tipos/edge-shims.d.ts permitem conferi-lo com o mesmo tsc do
+      # resto do projeto — sem isso, o único lugar onde um erro de tipo no
+      # backend apareceria seria a produção.
+      - name: Verificar tipos do backend (Supabase)
+        run: npm run typecheck:edge
+
+      - name: Rodar testes
+        run: npm test
+
+      # O build cobre o que a checagem de tipos não pega: import quebrado e
+      # asset ausente. A Vercel publica só o resultado disto — o backend vai
+      # para o Supabase pelo workflow deploy-supabase.yml.
+      - name: Build de produção
+        run: npm run build

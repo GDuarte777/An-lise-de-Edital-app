@@ -6,13 +6,14 @@ import {
 } from "lucide-react";
 import { EditalAnalysis } from "../types";
 import { addSyncedItem } from "../utils/googleSync";
-import { apiFetch, formatAiError } from "../utils/aiClientHelper";
+import { apiFetch, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import {
   fetchSimulacoesFromSupabase,
   saveSimulacaoToSupabase,
   deleteSimulacaoFromSupabase,
   subscribeToSupabaseTable
 } from "../utils/supabaseClient";
+import { useEditalHistory } from "../utils/editalHistory";
 import confetti from "canvas-confetti";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -182,15 +183,8 @@ function parseEditalPriceAndQty(descricao: string, valorEstimado: string) {
 }
 
 export default function PricingCalculatorTab({ companyData, activeEdital }: PricingCalculatorTabProps) {
-  // Histórico de Editais analisados
-  const [history, setHistory] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem("aip_edital_history");
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
+  // Histórico de Editais analisados — lista compartilhada com o resto da plataforma
+  const history = useEditalHistory();
 
   // Lista de simulações (Supabase com fallback Local e Realtime)
   const [simulations, setSimulations] = useState<PriceSimulation[]>(() => {
@@ -350,7 +344,7 @@ Estrutura JSON esperada:
         }
       });
 
-      const resData = await res.json();
+      const resData = await readJsonResponse(res);
       const rawReply = resData.reply || "";
       const parsed = parseAiJson(rawReply);
       if (parsed) {
@@ -413,7 +407,7 @@ Responda em formato JSON:
         }
       });
 
-      const resData = await res.json();
+      const resData = await readJsonResponse(res);
       const rawReply = resData.reply || "";
       const parsed = parseAiJson(rawReply);
       if (parsed) {
@@ -463,7 +457,7 @@ Retorne o JSON no seguinte formato:
         }
       });
 
-      const resData = await res.json();
+      const resData = await readJsonResponse(res);
       const rawReply = resData.reply || "";
       const parsed = parseAiJson(rawReply);
       if (parsed) {
@@ -563,16 +557,6 @@ Retorne o JSON no seguinte formato:
       setSimulationTitle(`Simulação - ${activeEdital.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Pregão"}`);
     }
   }, [activeEdital]);
-
-  // Fetch updated history just in case
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("aip_edital_history");
-      if (saved) {
-        setHistory(JSON.parse(saved));
-      }
-    } catch (e) {}
-  }, []);
 
   // Sync to localstorage whenever simulations change
   useEffect(() => {

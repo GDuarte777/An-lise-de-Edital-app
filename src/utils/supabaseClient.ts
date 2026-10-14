@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { urlDaApi, cabecalhosDaApi } from "./apiBase";
 
 // Helper to get Supabase credentials from Env or LocalStorage for maximum ease of use
 export interface SupabaseConfig {
@@ -348,9 +349,15 @@ export function subscribeToSupabaseTable(
 }
 
 // 1. Editais Analisados (editais_analisados)
-export async function fetchEditaisFromSupabase(): Promise<any[]> {
+//
+// Retorna { ok } separado das linhas porque "o banco respondeu e está vazio" e
+// "não deu para falar com o banco" exigem reações opostas: no primeiro caso o
+// histórico local deve ser esvaziado, no segundo ele precisa ser preservado.
+// Enquanto os dois casos eram o mesmo `[]`, um erro de rede fazia o app tratar
+// o histórico como vazio — ou manter para sempre itens já apagados.
+export async function fetchEditaisFromSupabase(): Promise<{ ok: boolean; rows: any[] }> {
   const client = getSupabaseClient();
-  if (!client) return [];
+  if (!client) return { ok: false, rows: [] };
   try {
     const { data, error } = await client
       .from("editais_analisados")
@@ -358,16 +365,16 @@ export async function fetchEditaisFromSupabase(): Promise<any[]> {
       .order("updated_at", { ascending: false });
     if (error) {
       console.warn("fetchEditaisFromSupabase error:", error.message);
-      return [];
+      return { ok: false, rows: [] };
     }
-    return data || [];
+    return { ok: true, rows: data || [] };
   } catch (err: any) {
     if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
       console.warn("fetchEditaisFromSupabase network warning:", err?.message || err);
     } else {
       console.warn("fetchEditaisFromSupabase error:", err?.message || err);
     }
-    return [];
+    return { ok: false, rows: [] };
   }
 }
 
@@ -403,30 +410,26 @@ export async function saveEditalToSupabase(item: { id: string; title: string; da
   }
 }
 
+// Só devolve true quando o banco confirma que a linha saiu de lá. Um DELETE que
+// não casa com nenhuma linha (RLS barrou, user_id de outro usuário, id que não
+// existe) NÃO é erro no PostgREST — antes isso passava por sucesso e o edital
+// "apagado" voltava na próxima sincronização. O `.select()` devolve as linhas
+// efetivamente removidas, que é a única confirmação confiável.
 export async function deleteEditalFromSupabase(id: string): Promise<boolean> {
   const client = getSupabaseClient();
   if (!client) return false;
   try {
-    const user = await getActiveUser();
-    const guestId = getGuestUserId();
-    const userId = user?.id || guestId;
-
-    await client
+    const { data, error } = await client
       .from("editais_analisados")
       .delete()
       .eq("id", id)
-      .or(`user_id.eq.${userId},user_id.eq.${guestId},user_id.is.null`);
-
-    const { error } = await client
-      .from("editais_analisados")
-      .delete()
-      .eq("id", id);
+      .select("id");
 
     if (error) {
-      await client.from("analises_editais").delete().eq("id", id);
-      await client.from("editais").delete().eq("id", id);
+      console.warn("deleteEditalFromSupabase error:", error.message);
+      return false;
     }
-    return true;
+    return Array.isArray(data) && data.length > 0;
   } catch (err: any) {
     console.warn("deleteEditalFromSupabase exception:", err?.message || err);
     return false;
@@ -458,6 +461,8 @@ export async function fetchCertificatesFromSupabase(): Promise<any[]> {
       notes: item.notes,
       fileUploaded: item.file_uploaded,
       fileName: item.file_name,
+      fileBase64: item.file_base64,
+      fileMimeType: item.file_mime_type,
       documentMatchesRow: item.document_matches_row,
       validationFeedback: item.validation_feedback
     }));
@@ -483,6 +488,8 @@ export async function saveCertificateToSupabase(item: any): Promise<{ success: b
       notes: item.notes || "",
       file_uploaded: !!item.fileUploaded,
       file_name: item.fileName || "",
+      file_base64: item.fileBase64 || null,
+      file_mime_type: item.fileMimeType || null,
       document_matches_row: item.documentMatchesRow === false ? false : true,
       validation_feedback: item.validationFeedback || "",
       updated_at: new Date().toISOString()
@@ -639,9 +646,9 @@ export async function fetchChatSessionsFromSupabase(): Promise<any[] | null> {
       console.warn(`[Chat] Found ${allSessions.length} sessions in DB (limit: ${MAX_CHAT_SESSIONS_IN_DB}). Purging excess...`);
       const toDelete = allSessions.slice(MAX_CHAT_SESSIONS_IN_DB);
       for (const s of toDelete) {
-        client.from("sessoes_chat").delete().eq("id", s.id).eq("user_id", user.id)
-          .then(() => {})
-          .catch(() => {});
+        void Promise.resolve(
+          client.from("sessoes_chat").delete().eq("id", s.id).eq("user_id", user.id)
+        ).catch(() => {});
       }
     }
 
@@ -1006,20 +1013,12 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
       error = res.error;
     }
 
-    // Attempt 3: Retry without user_id if foreign key or auth policy fails
-    if (error && (
-      error.message.includes("user_id") || 
-      error.message.includes("foreign key") || 
-      error.message.includes("fkey") || 
-      error.message.includes("violates") ||
-      error.code === "23503"
-    )) {
-      delete record.user_id;
-      const res = await client.from("planilhas_disputas").upsert([record], { onConflict: "id" });
-      error = res.error;
-    }
+    // Não existe mais uma tentativa "sem user_id": ela só funcionava enquanto a
+    // política da tabela era permissiva, e gravava linhas sem dono — que a RLS
+    // atual rejeita e que ninguém conseguiria ler depois. Um erro de permissão
+    // aqui é informação real e deve chegar ao chamador, não ser mascarado.
 
-    // Attempt 4: Insert / update fallback
+    // Attempt 3: Insert / update fallback
     if (error && (error.message.includes("onConflict") || error.code === "42703")) {
       const insertRes = await client.from("planilhas_disputas").insert([record]);
       if (insertRes.error) {
@@ -1068,6 +1067,91 @@ export async function deleteDisputaFromSupabase(id: string): Promise<boolean> {
       await client.from("planilhas_disputas").delete().eq("id", id);
     }
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// 6b. Tipos de Status de Disputas do Usuário (status_disputas_usuario)
+// Cada usuário tem sua própria lista de status (cor + rótulo), usada tanto
+// nos seletores de status quanto nas colunas do quadro Kanban.
+export async function fetchStatusDisputasFromSupabase(): Promise<any[]> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("status_disputas_usuario")) return [];
+  try {
+    const { data, error } = await client
+      .from("status_disputas_usuario")
+      .select("*")
+      .order("position", { ascending: true });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("status_disputas_usuario");
+      }
+      return [];
+    }
+
+    return (data || []).map((item: any) => ({
+      id: item.id,
+      label: item.label,
+      color: item.color || "#64748b",
+      position: Number(item.position) || 0
+    }));
+  } catch (err: any) {
+    if (isTableMissingError(err)) {
+      markTableMissing("status_disputas_usuario");
+    }
+    return [];
+  }
+}
+
+export async function saveStatusDisputaToSupabase(item: { id: string; label: string; color: string; position: number }): Promise<{ success: boolean; message: string }> {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: "Supabase não configurado." };
+  if (isTableMissing("status_disputas_usuario")) {
+    return { success: false, message: "Tabela status_disputas_usuario não existe no Supabase." };
+  }
+  try {
+    const user = await getActiveUser();
+    if (!user?.id) return { success: false, message: "Usuário não autenticado." };
+
+    const record = {
+      id: item.id,
+      user_id: user.id,
+      label: String(item.label || "").trim(),
+      color: String(item.color || "#64748b").trim(),
+      position: Number(item.position) || 0,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await client
+      .from("status_disputas_usuario")
+      .upsert([record], { onConflict: "id" });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("status_disputas_usuario");
+      }
+      return { success: false, message: error.message };
+    }
+    return { success: true, message: "Status salvo com sucesso!" };
+  } catch (err: any) {
+    if (isTableMissingError(err)) {
+      markTableMissing("status_disputas_usuario");
+    }
+    return { success: false, message: err?.message || "Erro de conexão" };
+  }
+}
+
+export async function deleteStatusDisputaFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("status_disputas_usuario")) return false;
+  try {
+    const { error } = await client
+      .from("status_disputas_usuario")
+      .delete()
+      .eq("id", id);
+    return !error;
   } catch {
     return false;
   }
@@ -1312,6 +1396,16 @@ create table if not exists public.planilhas_disputas (
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- 2b. Tabela de Tipos de Status de Disputas do Usuário (Kanban)
+create table if not exists public.status_disputas_usuario (
+  id text primary key,
+  user_id text not null,
+  label text not null,
+  color text not null default '#64748b',
+  position numeric default 0,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 -- 3. Tabela de Editais Analisados
 create table if not exists public.editais_analisados (
   id text primary key,
@@ -1451,6 +1545,7 @@ create table if not exists public.lancebot_config (
 );
 
 -- 13. Habilitar RLS e Políticas Permissivas para Aplicação e Usuários
+alter table public.status_disputas_usuario enable row level security;
 alter table public.planilhas_disputas enable row level security;
 alter table public.editais_analisados enable row level security;
 alter table public.documentos_sincronizados enable row level security;
@@ -1464,38 +1559,82 @@ alter table public.comparador_produtos enable row level security;
 alter table public.lancebot_config enable row level security;
 
 -- Políticas de Acesso
+-- ⚠️ Cada linha pertence a um usuário e só pode ser lida/escrita por ele.
+-- Políticas permissivas (using (true)) deixariam qualquer portador da chave
+-- publicável ler a tabela inteira — incluindo as chaves de API em
+-- configuracoes_usuario. O cast para text mantém a comparação válida tanto
+-- para colunas user_id uuid quanto text.
+drop policy if exists "Permitir tudo status_disputas_usuario" on public.status_disputas_usuario;
+drop policy if exists "Acesso proprio status_disputas_usuario" on public.status_disputas_usuario;
+create policy "Acesso proprio status_disputas_usuario" on public.status_disputas_usuario
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
+
 drop policy if exists "Permitir tudo planilhas_disputas" on public.planilhas_disputas;
-create policy "Permitir tudo planilhas_disputas" on public.planilhas_disputas for all using (true) with check (true);
+drop policy if exists "Acesso proprio planilhas_disputas" on public.planilhas_disputas;
+create policy "Acesso proprio planilhas_disputas" on public.planilhas_disputas
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo editais_analisados" on public.editais_analisados;
-create policy "Permitir tudo editais_analisados" on public.editais_analisados for all using (true) with check (true);
+drop policy if exists "Acesso proprio editais_analisados" on public.editais_analisados;
+create policy "Acesso proprio editais_analisados" on public.editais_analisados
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo documentos_sincronizados" on public.documentos_sincronizados;
-create policy "Permitir tudo documentos_sincronizados" on public.documentos_sincronizados for all using (true) with check (true);
+drop policy if exists "Acesso proprio documentos_sincronizados" on public.documentos_sincronizados;
+create policy "Acesso proprio documentos_sincronizados" on public.documentos_sincronizados
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo certidoes_fiscais" on public.certidoes_fiscais;
-create policy "Permitir tudo certidoes_fiscais" on public.certidoes_fiscais for all using (true) with check (true);
+drop policy if exists "Acesso proprio certidoes_fiscais" on public.certidoes_fiscais;
+create policy "Acesso proprio certidoes_fiscais" on public.certidoes_fiscais
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo historico_concorrentes" on public.historico_concorrentes;
-create policy "Permitir tudo historico_concorrentes" on public.historico_concorrentes for all using (true) with check (true);
+drop policy if exists "Acesso proprio historico_concorrentes" on public.historico_concorrentes;
+create policy "Acesso proprio historico_concorrentes" on public.historico_concorrentes
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo sessoes_chat" on public.sessoes_chat;
-create policy "Permitir tudo sessoes_chat" on public.sessoes_chat for all using (true) with check (true);
+drop policy if exists "Acesso proprio sessoes_chat" on public.sessoes_chat;
+create policy "Acesso proprio sessoes_chat" on public.sessoes_chat
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo configuracoes_usuario" on public.configuracoes_usuario;
-create policy "Permitir tudo configuracoes_usuario" on public.configuracoes_usuario for all using (true) with check (true);
+drop policy if exists "Acesso proprio configuracoes_usuario" on public.configuracoes_usuario;
+create policy "Acesso proprio configuracoes_usuario" on public.configuracoes_usuario
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo dados_empresa" on public.dados_empresa;
-create policy "Permitir tudo dados_empresa" on public.dados_empresa for all using (true) with check (true);
+drop policy if exists "Acesso proprio dados_empresa" on public.dados_empresa;
+create policy "Acesso proprio dados_empresa" on public.dados_empresa
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo simulacoes_precos" on public.simulacoes_precos;
-create policy "Permitir tudo simulacoes_precos" on public.simulacoes_precos for all using (true) with check (true);
+drop policy if exists "Acesso proprio simulacoes_precos" on public.simulacoes_precos;
+create policy "Acesso proprio simulacoes_precos" on public.simulacoes_precos
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo comparador_produtos" on public.comparador_produtos;
-create policy "Permitir tudo comparador_produtos" on public.comparador_produtos for all using (true) with check (true);
+drop policy if exists "Acesso proprio comparador_produtos" on public.comparador_produtos;
+create policy "Acesso proprio comparador_produtos" on public.comparador_produtos
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo lancebot_config" on public.lancebot_config;
-create policy "Permitir tudo lancebot_config" on public.lancebot_config for all using (true) with check (true);
+drop policy if exists "Acesso proprio lancebot_config" on public.lancebot_config;
+create policy "Acesso proprio lancebot_config" on public.lancebot_config
+  for all using (auth.uid()::text = user_id::text)
+  with check (auth.uid()::text = user_id::text);
 `;
 }
 
@@ -1679,7 +1818,7 @@ export async function saveUserConfigToSupabase(config: {
       user_id: user.id,
       active_provider: config.activeProvider,
       gemini_key: config.geminiKey || "",
-      gemini_model: (config.geminiModel === "gemini-3.6-flash" || !config.geminiModel) ? "gemini-3.7-flash" : config.geminiModel,
+      gemini_model: config.geminiModel || "gemini-3.6-flash",
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",
@@ -1688,6 +1827,46 @@ export async function saveUserConfigToSupabase(config: {
       deepseek_model: config.deepseekModel || "deepseek-chat",
       updated_at: new Date().toISOString()
     };
+
+    // Grava pelo servidor, que cifra as chaves de API antes de escrever.
+    // A gravação direta daqui deixava a credencial em texto puro na tabela,
+    // legível por qualquer um com acesso ao banco ou a um backup.
+    const { data: sessao } = await client.auth.getSession();
+    const token = sessao?.session?.access_token;
+
+    if (token) {
+      try {
+        const resp = await fetch(urlDaApi("/api/user-config"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...cabecalhosDaApi() },
+          body: JSON.stringify(record)
+        });
+
+        if (resp.ok) {
+          const json = await resp.json().catch(() => ({}));
+          return {
+            success: true,
+            message: json?.criptografado
+              ? "Configurações salvas e chaves criptografadas no banco."
+              : "Configurações de chaves salvas com sucesso no Supabase!"
+          };
+        }
+
+        // 404 é o app rodando numa versão do servidor sem esta rota ainda.
+        // Qualquer outro erro é real e não deve ser mascarado por um fallback
+        // que grava em texto puro sem o usuário saber.
+        if (resp.status !== 404) {
+          const json = await resp.json().catch(() => ({}));
+          throw new Error(json?.error || `Falha ao salvar (HTTP ${resp.status}).`);
+        }
+      } catch (erroServidor: any) {
+        // Só cai para a gravação direta quando o servidor não respondeu; um
+        // erro vindo dele já é definitivo.
+        if (erroServidor?.message && !/fetch|network|Failed to fetch/i.test(erroServidor.message)) {
+          throw erroServidor;
+        }
+      }
+    }
 
     const { error } = await client
       .from("configuracoes_usuario")

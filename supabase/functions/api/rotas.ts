@@ -1,0 +1,2479 @@
+// ═══════════════════════════════════════════════════════════════════════
+// ROTAS DA API — Supabase Edge Function (Deno)
+//
+// Todas as rotas /api/* da plataforma. O corpo de cada rota é o mesmo que
+// rodava no servidor Express: a camada de compatibilidade em expresso.ts
+// oferece req/res com a mesma forma, então a regra de negócio atravessou a
+// migração sem ser reescrita.
+// ═══════════════════════════════════════════════════════════════════════
+import type { AplicativoExpresso } from "./expresso.ts";
+import {
+  Buffer,
+  CHAVE_MESTRA_IA,
+  GoogleGenAI,
+  Type,
+  cleanAndParseJson,
+  cleanupAttachmentResources,
+  collectUniqueFiles,
+  compareProductsLocally,
+  describeAiFailure,
+  extractPdfText,
+  generateAiResponse,
+  generateChatLocally,
+  generateDocumentLocally,
+  getAiClientForConfig,
+  getUserIdFromJwt,
+  parseCertificateLocally,
+  parseEditalLocally,
+  fs,
+  path,
+  process,
+  processFileAttachmentAsync,
+  resolveAiConfig
+} from "./nucleo.ts";
+import {
+  CAMPOS_SECRETOS,
+  criptografarConfiguracao,
+  mascararSegredo
+} from "./segredos.ts";
+import {
+  PNCP_MODALIDADES,
+  PNCP_MODALIDADES_POR_RELEVANCIA,
+  PNCP_ORCAMENTO_PADRAO_MS,
+  PNCP_TIMEOUT_PADRAO_MS,
+  chaveContratacao,
+  formatarDataPncp,
+  montarQueryContratacoes,
+  parseNumeroControlePNCP,
+  temProximaPagina
+} from "./pncpQuery.ts";
+import type { EndpointContratacao } from "./pncpQuery.ts";
+
+export function registrarRotas(app: AplicativoExpresso): void {
+  app.get("/api/health", (req, res) => {
+    res.json({
+      status: "ok",
+      mode: process.env.NODE_ENV || "development",
+      // Deixa visível, sem precisar abrir o banco, se as chaves de API dos
+      // usuários estão cifradas em repouso.
+      chavesIaCriptografadas: Boolean(CHAVE_MESTRA_IA),
+      // Responde sem ambiguidade o que está de fato no ar. Durante semanas a
+      // pergunta "o deploy chegou a subir?" não teve resposta, e cada correção
+      // virou palpite. COMMIT_SHA é gravado pelo workflow de publicação.
+      commit: (process.env.COMMIT_SHA || "desconhecido").slice(0, 8),
+      backend: "supabase-edge-function",
+      regiao: process.env.SB_REGION || "supabase",
+      deploy: process.env.SB_EXECUTION_ID || "?"
+    });
+  });
+
+  /**
+   * Grava a configuração de IA do usuário com as chaves CIFRADAS.
+   *
+   * O cliente gravava direto no Supabase, o que deixava as chaves de API em
+   * texto puro na tabela — legível por qualquer um com acesso ao banco, a um
+   * backup ou a uma service key vazada. A gravação passa por aqui para que a
+   * cifragem aconteça no servidor, único lugar que tem a chave mestra.
+   *
+   * A escrita continua usando o JWT do usuário, então o RLS segue valendo: o
+   * servidor não ganha poder de escrever na linha de outra pessoa.
+   */
+  app.post("/api/user-config", async (req, res): Promise<any> => {
+    try {
+      const authHeader = String(req.headers.authorization || "");
+      if (!authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Faça login para salvar suas configurações de IA." });
+      }
+
+      const token = authHeader.slice(7);
+      const userId = getUserIdFromJwt(token);
+      if (!userId) {
+        return res.status(401).json({ error: "Sessão inválida. Entre novamente." });
+      }
+
+      // SUPABASE_URL/SUPABASE_ANON_KEY são injetados pela própria plataforma na
+      // Edge Function; as VITE_* só existiam no servidor Node e ficam como
+      // alternativa para quem rodar o backend fora do Supabase.
+      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabaseAnonKey) {
+        return res.status(503).json({ error: "Supabase não está configurado neste servidor." });
+      }
+
+      const corpo = req.body || {};
+      // Lista explícita: um campo inesperado no corpo não vira coluna gravada.
+      const permitidos = [
+        "active_provider",
+        "gemini_key", "gemini_model",
+        "openai_key", "openai_model",
+        "anthropic_key", "anthropic_model",
+        "deepseek_key", "deepseek_model"
+      ];
+
+      const linha: Record<string, any> = { user_id: userId, updated_at: new Date().toISOString() };
+      for (const campo of permitidos) {
+        if (corpo[campo] !== undefined) linha[campo] = corpo[campo];
+      }
+
+      const cifrada = criptografarConfiguracao(linha, CHAVE_MESTRA_IA);
+
+      const resp = await fetch(`${supabaseUrl}/rest/v1/configuracoes_usuario`, {
+        method: "POST",
+        headers: {
+          "apikey": supabaseAnonKey,
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Prefer": "resolution=merge-duplicates,return=minimal"
+        },
+        body: JSON.stringify(cifrada)
+      });
+
+      if (!resp.ok) {
+        const detalhe = await resp.text().catch(() => "");
+        console.error("[user-config] Supabase recusou a gravação:", resp.status, detalhe.slice(0, 300));
+        return res.status(502).json({ error: `Não foi possível salvar no banco (HTTP ${resp.status}).` });
+      }
+
+      // A resposta devolve só o mascarado: chave de API é credencial, e uma vez
+      // gravada não há motivo para a plataforma entregá-la de volta ao navegador.
+      const mascaradas: Record<string, string> = {};
+      for (const campo of CAMPOS_SECRETOS) {
+        if (typeof linha[campo] === "string") mascaradas[campo] = mascararSegredo(linha[campo]);
+      }
+
+      return res.json({ success: true, criptografado: Boolean(CHAVE_MESTRA_IA), chaves: mascaradas });
+    } catch (error: any) {
+      console.error("[user-config] Erro ao salvar configuração:", error?.message || error);
+      return res.status(500).json({ error: `Erro ao salvar configuração: ${error?.message || "desconhecido"}` });
+    }
+  });
+
+  // API Route: Chunked Upload Init
+  app.post("/api/upload-chunk/init", (req, res): any => {
+    try {
+      const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const uploadDir = path.join("/tmp", "uploads");
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      const filePath = path.join(uploadDir, uploadId);
+      fs.writeFileSync(filePath, "");
+      return res.json({ uploadId });
+    } catch (err: any) {
+      console.error("Erro ao inicializar upload chunk:", err);
+      return res.status(500).json({ error: "Erro ao inicializar upload." });
+    }
+  });
+
+  // API Route: Chunked Upload Chunk
+  app.post("/api/upload-chunk", (req, res): any => {
+    try {
+      const { uploadId, chunkIndex, totalChunks, chunkBase64 } = req.body;
+      if (!uploadId || !chunkBase64) {
+        return res.status(400).json({ error: "uploadId e chunkBase64 são obrigatórios." });
+      }
+      const cleanUploadId = String(uploadId).replace(/[^a-zA-Z0-9_-]/g, "");
+      const uploadDir = path.join("/tmp", "uploads");
+      const filePath = path.join(uploadDir, cleanUploadId);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "Sessão de upload expirada ou não encontrada." });
+      }
+      const chunkBuffer = Buffer.from(chunkBase64, "base64");
+      fs.appendFileSync(filePath, chunkBuffer);
+      return res.json({ success: true, chunkIndex, totalChunks });
+    } catch (err: any) {
+      console.error("Erro ao receber chunk de upload:", err);
+      return res.status(500).json({ error: "Erro ao processar parte do arquivo." });
+    }
+  });
+
+  // API Route: AI Status - lets users check if their API key is configured and working
+  app.get("/api/ai-status", async (req, res): Promise<any> => {
+    const clientAiConfig = req.query;
+    const resolved = await resolveAiConfig(req.headers.authorization);
+    if (!resolved) {
+      return res.json({
+        configured: false,
+        message: "Nenhuma chave de API configurada. Acesse 'IA & Modelos' e salve sua chave.",
+        hint: "A chave deve ser salva no localStorage via 'Salvar Configurações'. Verifique se o provedor ativo está correto."
+      });
+    }
+    return res.json({
+      configured: true,
+      provider: resolved.provider,
+      model: resolved.model,
+      message: `IA configurada: ${resolved.provider} / ${resolved.model}`
+    });
+  });
+
+  // API Route: Setup DB - creates the configuracoes_usuario table if it doesn't exist
+  // This is called once to initialize the Supabase schema.
+  app.post("/api/setup-db", async (req, res): Promise<any> => {
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
+    const supabaseServiceKey = req.body?.serviceKey || "";
+    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
+    
+    if (!supabaseUrl) {
+      return res.status(400).json({ error: "Supabase URL não configurada no servidor." });
+    }
+
+    const key = supabaseServiceKey || supabaseAnonKey;
+    
+    const sql = `
+      create table if not exists planilhas_disputas (
+        id text primary key,
+        user_id uuid references auth.users(id) on delete cascade not null,
+        orgao text not null,
+        uasg_und_compradora text default '',
+        numero_licitacao text default '',
+        portal text default 'Compras.gov.br',
+        produto_item text not null,
+        quantidade numeric default 1,
+        unidade_medida text default 'Unidade',
+        valor_estimado_item numeric default 0,
+        nosso_valor_alvo numeric default 0,
+        valor_minimo_piso numeric default 0,
+        data_hora_disputa text default '',
+        status text default 'Agendada',
+        observacoes text default '',
+        updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+      );
+      alter table planilhas_disputas enable row level security;
+      do $$ begin
+        if not exists (select 1 from pg_policies where tablename = 'planilhas_disputas' and policyname = 'Usuarios acessam suas disputas') then
+          create policy "Usuarios acessam suas disputas" on planilhas_disputas
+            for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+        end if;
+      end $$;
+
+      create table if not exists configuracoes_usuario (
+        user_id uuid references auth.users(id) on delete cascade not null primary key,
+        active_provider text not null default 'gemini',
+        gemini_key text default '',
+        gemini_model text default 'gemini-3.7-flash',
+        openai_key text default '',
+        openai_model text default 'gpt-4o',
+        anthropic_key text default '',
+        anthropic_model text default 'claude-sonnet-5',
+        deepseek_key text default '',
+        deepseek_model text default 'deepseek-chat',
+        updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+      );
+      alter table configuracoes_usuario enable row level security;
+      do $$ begin
+        if not exists (select 1 from pg_policies where tablename = 'configuracoes_usuario' and policyname = 'Usuarios acessam suas configuracoes') then
+          create policy "Usuarios acessam suas configuracoes" on configuracoes_usuario
+            for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+        end if;
+      end $$;
+    `;
+
+    try {
+      // Try via Supabase management API
+      const resp = await fetch(`${supabaseUrl}/rest/v1/rpc/exec_sql`, {
+        method: "POST",
+        headers: {
+          "apikey": key,
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ sql })
+      });
+      
+      if (resp.ok) {
+        return res.json({ success: true, message: "Tabela configuracoes_usuario criada com sucesso!" });
+      }
+      
+      // This endpoint may not exist, that's OK - the table may already exist
+      return res.json({ 
+        success: true, 
+        message: "Execute o SQL manualmente no Supabase Dashboard > SQL Editor:\n\n" + sql 
+      });
+    } catch (err: any) {
+      return res.json({ 
+        success: false, 
+        message: "Execute o SQL manualmente no Supabase Dashboard > SQL Editor:\n\n" + sql,
+        sql
+      });
+    }
+  });
+
+  // API Route: Sync Supabase Secrets
+  /**
+   * Grava a chave do Gemini nos Secrets do projeto Supabase.
+   *
+   * ⚠️ Esta rota já embutiu um token pessoal da API de gerenciamento do Supabase
+   * como valor padrão, e o mesmo token estava escrito na tela de configuração —
+   * ou seja, ia no pacote JavaScript entregue a todo visitante e ficou no
+   * histórico do repositório. Qualquer pessoa que o lesse podia administrar o
+   * projeto inteiro. O token foi removido dos dois lados e PRECISA SER
+   * REVOGADO E REGERADO em https://supabase.com/dashboard/account/tokens.
+   *
+   * Agora o token sai exclusivamente do segredo SUPABASE_ACCESS_TOKEN desta
+   * função. Aceitá-lo pelo corpo da requisição transformava o servidor em
+   * intermediário para escrever segredos em projeto alheio, e o valor padrão
+   * deixava a rota aberta para sobrescrever a chave do projeto sem credencial
+   * nenhuma. A rota também passou a exigir usuário autenticado.
+   */
+  app.post("/api/supabase/sync-secrets", async (req, res): Promise<any> => {
+    try {
+      const authHeader = String(req.headers.authorization || "");
+      if (!authHeader.startsWith("Bearer ") || !getUserIdFromJwt(authHeader.slice(7))) {
+        return res.status(401).json({ error: "Faça login para sincronizar a chave com o Supabase." });
+      }
+
+      const { geminiKey } = req.body;
+      if (!geminiKey || String(geminiKey).trim().length < 10) {
+        return res.status(400).json({ error: "Por favor, forneça a chave de API do Gemini para sincronizar." });
+      }
+
+      const targetAccessToken = String(process.env.SUPABASE_ACCESS_TOKEN || "").trim();
+      const targetProjectRef =
+        String(process.env.SUPABASE_PROJECT_REF || "").trim() ||
+        (process.env.SUPABASE_URL || "").replace(/^https:\/\//, "").split(".")[0];
+
+      if (!targetAccessToken || !targetProjectRef) {
+        return res.status(503).json({
+          error:
+            "Sincronização indisponível: configure os segredos SUPABASE_ACCESS_TOKEN e SUPABASE_PROJECT_REF " +
+            "nesta função. Enquanto isso, a chave continua valendo normalmente pela aba \"IA & Modelos\".",
+        });
+      }
+
+      const response = await fetch(`https://api.supabase.com/v1/projects/${targetProjectRef}/secrets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${targetAccessToken}`,
+        },
+        body: JSON.stringify([{ name: "GEMINI_API_KEY", value: String(geminiKey).trim() }]),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("[Supabase Secrets] Erro da API de gerenciamento do Supabase:", errorText);
+        return res.status(response.status).json({ error: errorText || "Falha ao atualizar segredos no Supabase." });
+      }
+
+      return res.json({ success: true, message: "GEMINI_API_KEY sincronizada com sucesso no Supabase!" });
+    } catch (err: any) {
+      console.error("[Supabase Secrets] Exceção:", err);
+      return res.status(500).json({ error: err.message || "Erro interno do servidor ao sincronizar segredos." });
+    }
+  });
+
+  // In-memory cache for PNCP queries to prevent 429 rate limits
+/* ==========================================================================
+ * Cliente do PNCP (Portal Nacional de Contratações Públicas)
+ *
+ * Fonte oficial e estruturada dos dados de licitação. Tudo que vem daqui é o
+ * que o próprio órgão publicou — não precisa ser adivinhado por IA.
+ *
+ * Duas APIs públicas, sem autenticação:
+ *   consulta   https://pncp.gov.br/api/consulta/v1/...   (busca de contratações)
+ *   integração https://pncp.gov.br/api/pncp/v1/...       (detalhe, itens, arquivos)
+ * ========================================================================== */
+
+const PNCP_CONSULTA_BASE = "https://pncp.gov.br/api/consulta";
+const PNCP_INTEGRACAO_BASE = "https://pncp.gov.br/api/pncp";
+
+// O PNCP entrega no máximo 500 registros por página.
+/**
+ * Regras da API de consulta vivem em src/utils/pncpQuery.ts, com testes.
+ * Era aqui que estava o defeito que zerava o Radar, e regra que decide se o
+ * usuário vê ou não uma licitação precisa ser verificável sem subir servidor.
+ */
+
+const PNCP_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Accept": "application/json"
+};
+
+interface RespostaPncp {
+  ok: boolean;
+  status: number;
+  json: any | null;
+  /** Frase pronta para o usuário quando a consulta não deu certo. */
+  erro?: string;
+}
+
+/**
+ * Busca no PNCP devolvendo SEMPRE o que aconteceu.
+ *
+ * A versão anterior devolvia `null` tanto para "o portal está fora do ar"
+ * quanto para "o PNCP recusou os seus parâmetros". Quem chamava tratava os
+ * dois como fim de paginação, e foi assim que um erro 400 nosso — tamanho de
+ * página acima do teto — virou, na tela, "não foi possível obter as
+ * contratações do PNCP". Um defeito de parâmetro ficou dois anos parecendo
+ * instabilidade do portal. Agora o motivo sobe junto.
+ */
+async function pncpFetchRaw(url: string, timeoutMs = 20_000): Promise<RespostaPncp> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { headers: PNCP_HEADERS, signal: controller.signal });
+
+    // 204 é resposta de sucesso do PNCP para "nada encontrado no recorte".
+    if (response.status === 204) {
+      return { ok: true, status: 204, json: { data: [], totalRegistros: 0, totalPaginas: 0, paginasRestantes: 0 } };
+    }
+
+    if (!response.ok) {
+      const corpo = await response.text().catch(() => "");
+      const detalhe = corpo.slice(0, 300).replace(/\s+/g, " ").trim();
+      console.warn(`[PNCP] HTTP ${response.status} em ${url}${detalhe ? ` — ${detalhe}` : ""}`);
+      return {
+        ok: false,
+        status: response.status,
+        json: null,
+        erro: `O PNCP respondeu ${response.status}${detalhe ? `: ${detalhe}` : ""}`
+      };
+    }
+
+    return { ok: true, status: response.status, json: await response.json() };
+  } catch (err: any) {
+    const timeout = err?.name === "AbortError";
+    console.warn(`[PNCP] Falha em ${url}:`, timeout ? `timeout de ${timeoutMs}ms` : err?.message || err);
+    return {
+      ok: false,
+      status: 0,
+      json: null,
+      erro: timeout ? `O PNCP não respondeu em ${timeoutMs / 1000}s.` : `Falha de rede ao falar com o PNCP: ${err?.message || err}`
+    };
+  }
+}
+
+/** Compatibilidade com os trechos que só querem o corpo da resposta. */
+async function pncpFetchJson(url: string, timeoutMs = 20_000): Promise<any | null> {
+  const r = await pncpFetchRaw(url, timeoutMs);
+  return r.ok ? r.json : null;
+}
+
+const pncpFormatDate = formatarDataPncp;
+const pncpKey = chaveContratacao;
+
+interface ResultadoVarredura {
+  items: any[];
+  totalPNCP: number;
+  truncado: boolean;
+  erros: string[];
+}
+
+interface ComboConsulta {
+  modalidade: string;
+  uf: string;
+}
+
+// Prazos calibrados pela execução do pncp-contract.yml contra o portal real.
+// Os valores e a medição que os justifica ficam em src/utils/pncpQuery.ts,
+// com testes que travam a relação entre eles — foi a falta dessa amarração
+// que deixou o timeout em 22 s enquanto a medição já mostrava que nenhuma
+// consulta bem-sucedida responde em menos de 33 s, e o Radar não trazia nada.
+// Continuam configuráveis por ambiente: a latência do PNCP varia com a origem
+// da requisição, e o teto de duração da função varia com o plano da hospedagem.
+const PNCP_TIMEOUT_MS = Number(process.env.PNCP_TIMEOUT_MS || PNCP_TIMEOUT_PADRAO_MS);
+// Precisa caber na duração da função (ver `export const config` no fim do
+// arquivo) com folga para montar e serializar a resposta.
+const PNCP_ORCAMENTO_MS = Number(process.env.PNCP_ORCAMENTO_MS || PNCP_ORCAMENTO_PADRAO_MS);
+// Uma rodada precisa caber dentro do orçamento, e a medição mostrou consultas
+// de 30 a 55 segundos. Com concorrência 6 e 13 modalidades seriam três lotes em
+// série — o tempo acabaria no primeiro, e sete modalidades sequer seriam
+// tentadas. Com 13, a primeira página de todas sai de uma vez, e o custo da
+// rodada passa a ser o de UMA consulta em vez de três.
+const PNCP_CONCORRENCIA = Number(process.env.PNCP_CONCORRENCIA || 13);
+
+/**
+ * Varre as combinações (modalidade × UF) EM LARGURA.
+ *
+ * A versão anterior ia em profundidade: cada combinação puxava até 20 páginas
+ * antes da próxima começar. Com um portal lento — e a medição no CI mostrou
+ * consultas passando de 20 segundos — o orçamento de tempo acabava dentro das
+ * primeiras modalidades, e as últimas não devolviam NADA. Pior: falhava em
+ * silêncio, porque o usuário via resultados e não tinha como saber que
+ * Credenciamento ou Inexigibilidade nem chegaram a ser consultados.
+ *
+ * Em largura, a primeira página de TODAS as modalidades vem antes da segunda de
+ * qualquer uma. Assim, quando o tempo acaba — e com um portal lento ele vai
+ * acabar — o que já foi carregado é uma amostra de todo o PNCP, e não o começo
+ * de um pedaço dele.
+ */
+async function pncpVarrerEmLargura(params: {
+  endpoint: EndpointContratacao;
+  combos: ComboConsulta[];
+  municipio?: string;
+  dataInicial?: string;
+  dataFinal: string;
+  maxPaginasPorCombo: number;
+  deadline: number;
+}): Promise<ResultadoVarredura> {
+  const vistos = new Set<string>();
+  const items: any[] = [];
+  const erros: string[] = [];
+  let totalPNCP = 0;
+  let truncado = false;
+
+  // Combinações ainda com páginas por buscar.
+  let ativos = params.combos.map((combo) => ({ combo, pagina: 1 }));
+
+  while (ativos.length > 0 && Date.now() < params.deadline) {
+    const proximaRodada: typeof ativos = [];
+
+    for (let i = 0; i < ativos.length; i += PNCP_CONCORRENCIA) {
+      if (Date.now() >= params.deadline) {
+        truncado = true;
+        break;
+      }
+
+      const lote = ativos.slice(i, i + PNCP_CONCORRENCIA);
+      const respostas = await Promise.all(
+        lote.map(async (alvo) => {
+          const query = montarQueryContratacoes({
+            endpoint: params.endpoint,
+            modalidade: alvo.combo.modalidade,
+            pagina: alvo.pagina,
+            dataInicial: params.dataInicial,
+            dataFinal: params.dataFinal,
+            uf: alvo.combo.uf || undefined,
+            municipio: params.municipio
+          });
+
+          // O prazo só era conferido ENTRE lotes, então uma consulta travada
+          // rodava seus 45 s inteiros mesmo com o orçamento já no fim — e a
+          // função estourava o teto da plataforma justamente esperando por
+          // quem não ia responder. O timeout de cada consulta agora é o que
+          // sobrou do orçamento.
+          const restante = params.deadline - Date.now();
+          const resposta = await pncpFetchRaw(
+            `${PNCP_CONSULTA_BASE}/v1/contratacoes/${params.endpoint}?${query}`,
+            Math.max(1_000, Math.min(PNCP_TIMEOUT_MS, restante))
+          );
+          return { alvo, resposta };
+        })
+      );
+
+      for (const { alvo, resposta } of respostas) {
+        if (!resposta.ok) {
+          // Erro na primeira página é falha daquela modalidade e precisa ser
+          // relatado; nas seguintes, apenas encerra a varredura dela.
+          if (alvo.pagina === 1 && resposta.erro) {
+            // Compara a mensagem já montada: comparar com a mensagem crua
+            // deixaria a deduplicação sem efeito, e o usuário receberia treze
+            // vezes o mesmo aviso — um por modalidade.
+            const aviso = `${PNCP_MODALIDADES[alvo.combo.modalidade] || alvo.combo.modalidade}: ${resposta.erro}`;
+            if (!erros.includes(aviso)) erros.push(aviso);
+          }
+          truncado = true;
+          continue;
+        }
+
+        const json = resposta.json || {};
+        const pageItems = Array.isArray(json.data) ? json.data : [];
+
+        if (alvo.pagina === 1) totalPNCP += Number(json.totalRegistros) || pageItems.length;
+
+        for (const raw of pageItems) {
+          const chave = pncpKey(raw);
+          if (!chave || vistos.has(chave)) continue;
+          vistos.add(chave);
+          items.push(pncpNormalizeItem(raw));
+        }
+
+        if (temProximaPagina(json, alvo.pagina)) {
+          if (alvo.pagina < params.maxPaginasPorCombo) {
+            proximaRodada.push({ combo: alvo.combo, pagina: alvo.pagina + 1 });
+          } else {
+            truncado = true;
+          }
+        }
+      }
+    }
+
+    if (Date.now() >= params.deadline && proximaRodada.length > 0) truncado = true;
+    ativos = proximaRodada;
+  }
+
+  if (ativos.length > 0) truncado = true;
+
+  return { items, totalPNCP, truncado, erros };
+}
+
+/** Normaliza uma contratação do PNCP para o formato consumido pela interface. */
+function pncpNormalizeItem(item: any): any {
+  const cnpj = item?.orgaoEntidade?.cnpj || item?.cnpjOrgao || "";
+  const ano = item?.anoCompra || new Date().getFullYear();
+  const sequencial = item?.sequencialCompra || 0;
+  const numeroControle = item?.numeroControlePNCP || (cnpj ? `${cnpj}-1-${String(sequencial).padStart(6, "0")}/${ano}` : "");
+  const modalidadeId = item?.modalidadeId != null ? String(item.modalidadeId) : "";
+
+  return {
+    ...item,
+    numeroControlePNCP: numeroControle,
+    idContratacaoPNCP: numeroControle,
+    cnpjOrgao: cnpj,
+    anoCompra: ano,
+    sequencialCompra: sequencial,
+    modalidadeNome: item?.modalidadeNome || PNCP_MODALIDADES[modalidadeId] || "",
+    uasg: item?.unidadeOrgao?.codigoUnidade
+      ? `UASG ${item.unidadeOrgao.codigoUnidade} - ${item.unidadeOrgao.nomeUnidade || item.unidadeOrgao.municipioNome || "Unidade Compradora"}`
+      : "",
+    linkPNCP: cnpj ? `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${sequencial}` : "",
+    // Marca a procedência: tudo que sai daqui veio da API oficial, nunca de
+    // dado gerado localmente.
+    fontePNCP: true
+  };
+}
+
+/** Lista os documentos (edital, anexos, termo de referência) de uma contratação. */
+async function pncpFetchArquivos(cnpj: string, ano: string | number, sequencial: string | number): Promise<any[]> {
+  const url = `${PNCP_INTEGRACAO_BASE}/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos`;
+  const json = await pncpFetchJson(url);
+  const lista = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+
+  return lista.map((doc: any, idx: number) => {
+    const sequencialDocumento = doc?.sequencialDocumento ?? idx + 1;
+    return {
+      sequencialDocumento,
+      titulo: doc?.titulo || doc?.nomeArquivo || `Documento ${sequencialDocumento}`,
+      tipo: doc?.tipoDocumentoNome || doc?.tipoDocumentoDescricao || "Documento",
+      dataPublicacao: doc?.dataPublicacaoPncp || doc?.dataPublicacao || "",
+      // `uri` é a URL absoluta que o próprio PNCP devolve para o arquivo.
+      uri: doc?.uri || doc?.url || `${PNCP_INTEGRACAO_BASE}/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}/arquivos/${sequencialDocumento}`
+    };
+  });
+}
+
+/** Dados oficiais e estruturados de uma contratação, incluindo seus itens. */
+async function pncpFetchContratacao(cnpj: string, ano: string | number, sequencial: string | number): Promise<any | null> {
+  const base = `${PNCP_INTEGRACAO_BASE}/v1/orgaos/${cnpj}/compras/${ano}/${sequencial}`;
+  const [detalhe, itens] = await Promise.all([
+    pncpFetchJson(base),
+    pncpFetchJson(`${base}/itens`)
+  ]);
+  if (!detalhe) return null;
+  return { ...detalhe, itens: Array.isArray(itens) ? itens : Array.isArray(itens?.data) ? itens.data : [] };
+}
+
+  const pncpCache = new Map<string, { timestamp: number; data: any }>();
+
+  // API Route: Proxy PNCP Contratacoes
+  /**
+   * Radar de Oportunidades — busca de contratações no PNCP.
+   *
+   * Reescrita por três motivos, todos verificados contra a tabela de domínio
+   * oficial e o manual de consultas do PNCP:
+   *
+   * 1. A modalidade estava errada. O código pedia `codigoModalidadeContratacao=5`
+   *    acreditando ser "Pregão Eletrônico", mas 5 é Concorrência PRESENCIAL —
+   *    Pregão Eletrônico é 6. A modalidade mais comum do país nunca era
+   *    consultada, e é a maior explicação para "só aparecem algumas".
+   * 2. A paginação era fictícia. Buscava UMA página de 20 registros por
+   *    modalidade, parava cedo (`length >= pageSize * 2`) e, pior, sobrescrevia
+   *    o `totalRegistros` do PNCP pela quantidade que havia carregado — a
+   *    interface acreditava que o total do Brasil eram 20 linhas.
+   * 3. Havia um gerador de licitações FICTÍCIAS que entrava sempre que a API
+   *    falhava, com órgãos, objetos e valores inventados, rotulado na interface
+   *    como "Base PNCP Sincronizada em Tempo Real". Numa plataforma de
+   *    licitações isso é inaceitável: o usuário poderia montar proposta para um
+   *    certame que não existe. Foi removido. Sem dado oficial, a rota diz que
+   *    não conseguiu buscar.
+   */
+  app.get("/api/pncp/contratacoes", async (req, res): Promise<any> => {
+    try {
+      const {
+        uf,
+        ufs,
+        modalidade,
+        modalidades,
+        pagina = "1",
+        tamanhoPagina = "20",
+        q = "",
+        municipio = "",
+        fonte = "proposta",
+        dataInicial: reqDataInicial,
+        dataFinal: reqDataFinal
+      } = req.query;
+
+      const selectedUfs: string[] = (() => {
+        if (ufs && typeof ufs === "string" && ufs.trim()) {
+          return ufs.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+        }
+        if (uf && typeof uf === "string" && uf.trim() && uf !== "TODOS") return [uf.trim().toUpperCase()];
+        return [];
+      })();
+
+      const selectedModalidades: string[] = (() => {
+        if (modalidades && typeof modalidades === "string" && modalidades.trim()) {
+          return modalidades.split(",").map(s => s.trim()).filter(Boolean);
+        }
+        if (modalidade && typeof modalidade === "string" && modalidade.trim() && modalidade !== "TODAS") {
+          return [modalidade.trim()];
+        }
+        return [];
+      })();
+
+      const pageNum = Math.max(1, parseInt(String(pagina), 10) || 1);
+      const pageSize = Math.min(200, Math.max(1, parseInt(String(tamanhoPagina), 10) || 20));
+
+      // "proposta" traz o que ainda aceita proposta — é o que um Radar de
+      // Oportunidades quer. "publicacao" traz tudo que foi publicado no período.
+      const endpoint: "publicacao" | "proposta" = fonte === "publicacao" ? "publicacao" : "proposta";
+
+      const hoje = new Date();
+      const daysBack = parseInt(String(req.query.periodDays || 90), 10) || 90;
+      const inicio = new Date();
+      inicio.setDate(hoje.getDate() - daysBack);
+
+      const dataInicial = reqDataInicial ? String(reqDataInicial).replace(/-/g, "") : pncpFormatDate(inicio);
+      // No endpoint de proposta, dataFinal é o horizonte de encerramento que
+      // interessa — olhar para a frente, não para trás.
+      const horizonte = new Date();
+      horizonte.setDate(hoje.getDate() + 365);
+      const dataFinal = reqDataFinal
+        ? String(reqDataFinal).replace(/-/g, "")
+        : pncpFormatDate(endpoint === "proposta" ? horizonte : hoje);
+
+      // `codigoModalidadeContratacao` é obrigatório na API: não existe "buscar
+      // todas de uma vez". Trazer o PNCP inteiro significa varrer modalidade
+      // por modalidade — antes o padrão cobria só 4 das 13, e Credenciamento,
+      // Concurso e os Leilões simplesmente não existiam para o usuário.
+      const targetMods = selectedModalidades.length > 0 ? selectedModalidades : PNCP_MODALIDADES_POR_RELEVANCIA;
+      // Sem UF escolhida, uma única consulta sem filtro cobre o Brasil inteiro.
+      const targetUfs = selectedUfs.length > 0 ? selectedUfs : [""];
+
+      const cacheKey = `${endpoint}|${targetUfs.join(",")}|${targetMods.join(",")}|${municipio}|${dataInicial}|${dataFinal}`;
+      const cached = pncpCache.get(cacheKey);
+      let agregado: { items: any[]; totalPNCP: number; truncado: boolean; erros: string[] };
+
+      // Cada varredura custa mais de 30 s contra um portal que responde 500
+      // em boa parte das modalidades. Com 3 minutos de validade, quase toda
+      // visita pagava esse preço de novo. O dado de licitação não muda de
+      // minuto a minuto; 15 minutos de cache trocam frescor por uma tela que
+      // abre na hora.
+      if (cached && Date.now() - cached.timestamp < 900_000) {
+        agregado = cached.data;
+      } else {
+        // Orçamento de tempo: a rota agrega muitas páginas, mas não pode
+        // estourar o limite de duração da função serverless.
+        const deadline = Date.now() + PNCP_ORCAMENTO_MS;
+        const maxPaginasPorCombo = 20; // até 1.000 registros por combinação
+
+        const combos: ComboConsulta[] = [];
+        for (const m of targetMods) for (const u of targetUfs) combos.push({ modalidade: m, uf: u });
+
+        const varredura = await pncpVarrerEmLargura({
+          endpoint,
+          combos,
+          municipio: String(municipio || "") || undefined,
+          dataInicial,
+          dataFinal,
+          maxPaginasPorCombo,
+          deadline
+        });
+
+        const items = varredura.items;
+        const erros = varredura.erros;
+        const totalPNCP = varredura.totalPNCP;
+        const truncado = varredura.truncado;
+
+        // Mais recentes primeiro.
+        items.sort((a, b) => String(b.dataPublicacaoPncp || "").localeCompare(String(a.dataPublicacaoPncp || "")));
+
+        agregado = { items, totalPNCP, truncado, erros };
+
+        if (items.length > 0 || erros.length === 0) {
+          // Resultado vazio por erro não entra no cache: senão uma
+          // instabilidade de 10 segundos apagaria o Radar pelo resto da
+          // validade.
+          pncpCache.set(cacheKey, { timestamp: Date.now(), data: agregado });
+        } else if (cached) {
+          // A varredura não trouxe nada e o portal acusou erro — mas já houve
+          // uma busca boa antes. Mostrar o resultado anterior, avisando que
+          // está defasado, é melhor do que devolver uma tela vazia: o portal
+          // responde 500 em boa parte das modalidades, e sem isto o Radar fica
+          // inutilizável exatamente nos momentos de instabilidade.
+          const minutos = Math.max(1, Math.round((Date.now() - cached.timestamp) / 60_000));
+          agregado = {
+            ...cached.data,
+            erros: [
+              `O PNCP está instável agora (${erros[0]}). Mostrando o último resultado obtido, de ${minutos} min atrás.`
+            ]
+          };
+        }
+      }
+
+      if (agregado.items.length === 0) {
+        // Distinguir os dois casos importa: "o recorte não tem nada" é uma
+        // resposta legítima e o usuário deve ajustar o filtro; "o PNCP recusou
+        // a consulta" é problema nosso ou do portal. Tratar tudo como portal
+        // fora do ar foi o que escondeu este defeito por tanto tempo.
+        const houveFalha = (agregado.erros || []).length > 0;
+        return res.status(houveFalha ? 502 : 200).json({
+          error: houveFalha
+            ? `Não foi possível obter as contratações do PNCP. ${agregado.erros[0]}`
+            : undefined,
+          aviso: houveFalha
+            ? undefined
+            : "Nenhuma contratação encontrada para estes filtros. Tente ampliar o período, as modalidades ou os estados.",
+          data: [],
+          totalRegistros: 0,
+          totalPaginas: 0,
+          numeroPagina: pageNum,
+          detalhesErro: houveFalha ? agregado.erros : undefined,
+          source: houveFalha ? "pncp_indisponivel" : "pncp_sem_resultados"
+        });
+      }
+
+      // Filtro por palavra-chave sobre o conjunto agregado (a API do PNCP não
+      // oferece busca textual).
+      let filtrados = agregado.items;
+      const termo = String(q || "").trim().toLowerCase();
+      if (termo) {
+        filtrados = filtrados.filter(i =>
+          `${i.objetoCompra || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.unidadeOrgao?.nomeUnidade || ""} ${i.unidadeOrgao?.municipioNome || ""}`
+            .toLowerCase()
+            .includes(termo)
+        );
+      }
+
+      const municipioTermo = String(municipio || "").trim().toLowerCase();
+      if (municipioTermo && !/^\d+$/.test(municipioTermo)) {
+        filtrados = filtrados.filter(i =>
+          String(i.unidadeOrgao?.municipioNome || "").toLowerCase().includes(municipioTermo)
+        );
+      }
+
+      const totalRegistros = filtrados.length;
+      const totalPaginas = Math.max(1, Math.ceil(totalRegistros / pageSize));
+      const inicioFatia = (pageNum - 1) * pageSize;
+
+      return res.json({
+        data: filtrados.slice(inicioFatia, inicioFatia + pageSize),
+        totalRegistros,
+        totalPaginas,
+        numeroPagina: pageNum,
+        // Quantos o PNCP diz existir no recorte, mesmo que nem todos tenham sido
+        // carregados — deixa explícito quando a busca foi limitada.
+        totalDisponivelPNCP: agregado.totalPNCP,
+        resultadoParcial: agregado.truncado,
+        // Varredura parcial não é o mesmo que varredura completa. Se alguma
+        // modalidade falhou, o usuário precisa saber que o que ele está vendo
+        // não é o PNCP inteiro — senão conclui que a licitação não existe.
+        avisosPNCP: (agregado.erros || []).length > 0 ? agregado.erros : undefined,
+        modalidadesConsultadas: targetMods.length,
+        fonte: endpoint,
+        source: "pncp_api_real"
+      });
+    } catch (error: any) {
+      console.error("[PNCP] Erro na busca de contratações:", error?.message || error);
+      return res.status(502).json({
+        error: `Falha ao consultar o PNCP: ${error?.message || "erro desconhecido"}`,
+        data: [],
+        totalRegistros: 0,
+        totalPaginas: 0,
+        source: "pncp_erro"
+      });
+    }
+  });
+
+  /** Lista os documentos (edital, anexos) de uma contratação do PNCP. */
+  app.get("/api/pncp/arquivos", async (req, res): Promise<any> => {
+    try {
+      const { numeroControle, cnpj, ano, sequencial } = req.query;
+      let alvo = { cnpj: String(cnpj || ""), ano: String(ano || ""), sequencial: String(sequencial || "") };
+
+      if (numeroControle) {
+        const parsed = parseNumeroControlePNCP(String(numeroControle));
+        if (parsed) alvo = parsed;
+      }
+      if (!alvo.cnpj || !alvo.ano || !alvo.sequencial) {
+        return res.status(400).json({ error: "Informe numeroControle ou cnpj, ano e sequencial da contratação." });
+      }
+
+      const arquivos = await pncpFetchArquivos(alvo.cnpj, alvo.ano, alvo.sequencial);
+      return res.json({ arquivos, contratacao: alvo });
+    } catch (error: any) {
+      console.error("[PNCP] Erro ao listar arquivos:", error?.message || error);
+      return res.status(502).json({ error: `Não foi possível listar os arquivos no PNCP: ${error?.message || "erro desconhecido"}` });
+    }
+  });
+
+  /**
+   * Baixa um documento do PNCP através do servidor.
+   *
+   * O download precisa passar por aqui porque o navegador não consegue buscar o
+   * arquivo direto do domínio do PNCP (CORS), e porque o mesmo conteúdo é
+   * reaproveitado pela análise por IA.
+   */
+  app.get("/api/pncp/arquivo", async (req, res): Promise<any> => {
+    try {
+      const uri = String(req.query.uri || "");
+      if (!/^https:\/\/pncp\.gov\.br\//.test(uri)) {
+        // Só o domínio do PNCP: sem isso a rota viraria um proxy aberto.
+        return res.status(400).json({ error: "URI inválida: só são aceitos arquivos do domínio pncp.gov.br." });
+      }
+
+      const upstream = await fetch(uri, { headers: PNCP_HEADERS });
+      if (!upstream.ok) {
+        return res.status(502).json({ error: `O PNCP respondeu ${upstream.status} ao baixar o arquivo.` });
+      }
+
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      const nome = String(req.query.nome || "edital.pdf").replace(/[^\w.\- ]/g, "_");
+      res.setHeader("Content-Type", upstream.headers.get("content-type") || "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${nome}"`);
+      return res.send(buffer);
+    } catch (error: any) {
+      console.error("[PNCP] Erro ao baixar arquivo:", error?.message || error);
+      return res.status(502).json({ error: `Não foi possível baixar o arquivo do PNCP: ${error?.message || "erro desconhecido"}` });
+    }
+  });
+
+  app.post("/api/analyze-edital", async (req, res): Promise<any> => {
+    const tempFilesToDelete: string[] = [];
+    const geminiFilesToDelete: string[] = [];
+    let aiClientForCleanup: GoogleGenAI | undefined = undefined;
+    // Fora do try: se o parecer falhar, o fallback ainda aproveita os itens que
+    // a extração dedicada tiver conseguido ler.
+    let itensPromise: Promise<any> | null = null;
+
+    try {
+      const { textInput, fileBase64, fileName, fileType, attachments, attachedFiles, files, aiConfig: clientAiConfig, selectedItems } = req.body;
+      let aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      // Collect all file attachments uniquely
+      const rawFileList = collectUniqueFiles([
+        attachments, 
+        attachedFiles, 
+        files, 
+        fileBase64 ? { base64: fileBase64, type: fileType, name: fileName } : null
+      ]);
+
+      if (!textInput && rawFileList.length === 0) {
+        return res.status(400).json({ error: "Nenhum conteúdo de edital ou anexo enviado." });
+      }
+
+      // If no AI key configured anywhere, smoothly process with local parser directly without failing
+      if (!aiConfig) {
+        console.log("[analyze-edital] Sem chave de IA configurada, extraindo texto e processando localmente...");
+        let extractedText = textInput || "";
+        for (const f of rawFileList) {
+          try {
+            if (f.uploadId) {
+              const chunkFilePath = path.join("/tmp", "uploads", String(f.uploadId).replace(/[^a-zA-Z0-9_-]/g, ""));
+              if (fs.existsSync(chunkFilePath)) {
+                const buf = fs.readFileSync(chunkFilePath);
+                try {
+                  const pdfText = await extractPdfText(buf);
+                  if (pdfText) extractedText += "\n" + pdfText;
+                } catch {
+                  const txt = buf.toString("utf-8");
+                  if (txt && !txt.startsWith("%PDF")) extractedText += "\n" + txt;
+                }
+              }
+            } else if (f.base64 || f.fileBase64 || f.data) {
+              const b64 = (f.base64 || f.fileBase64 || f.data || "").replace(/^data:[^;]+;base64,/, "").trim();
+              const buf = Buffer.from(b64, "base64");
+              try {
+                const pdfText = await extractPdfText(buf);
+                if (pdfText) extractedText += "\n" + pdfText;
+              } catch {
+                const txt = buf.toString("utf-8");
+                if (txt && !txt.startsWith("%PDF")) extractedText += "\n" + txt;
+              }
+            }
+          } catch (e) {
+            console.warn("[analyze-edital] Erro na extração offline:", e);
+          }
+        }
+        const offlineData = parseEditalLocally(extractedText.length > 5 ? extractedText : "Edital de Licitação Pública");
+        return res.json({
+          analysis: offlineData,
+          degraded: true,
+          reason: "Nenhuma chave de IA configurada — o edital foi lido por extração local, sem análise da IA. Configure sua chave em \"IA & Modelos\"."
+        });
+      }
+
+      const aiClient = getAiClientForConfig(aiConfig);
+      aiClientForCleanup = aiClient;
+
+      let contentParts: any[] = [];
+
+      for (const f of rawFileList) {
+        const processed = await processFileAttachmentAsync(f, aiClient);
+        if (processed) {
+          if (processed.part) contentParts.push(processed.part);
+          if (processed.tempFilePath) tempFilesToDelete.push(processed.tempFilePath);
+          if (processed.uploadedFileName) geminiFilesToDelete.push(processed.uploadedFileName);
+        }
+      }
+
+      let itemFocusInstructions = "";
+      if (selectedItems && Array.isArray(selectedItems) && selectedItems.length > 0) {
+        itemFocusInstructions = `
+
+⚠️ ATENÇÃO EXTREMAMENTE CRÍTICA - FOCO EXCLUSIVO NOS SEGUINTES ITENS SELECIONADOS PELO USUÁRIO:
+${selectedItems.map((it: any) => `- Item/Lote ${it.numero}: ${it.descricao} (Quantidade: ${it.quantidade} ${it.unidade || ""})`).join("\n")}
+
+A sua análise e o relatório markdown GERADOS DEVEM FOCAR EXCLUSIVAMENTE nos itens/lotes especificados acima.
+1. No campo "descricaoProduto", transcreva na íntegra apenas a descrição e especificações técnicas completas dos itens selecionados.
+2. Na seção "ESPECIFICAÇÕES TÉCNICAS E PEGADINHAS" e no campo "especificacoesTecnicas", mapeie apenas as exigências físicas e pegadinhas que se aplicam a estes itens selecionados. Ignore pegadinhas ou exigências que pertencem a outros itens não selecionados.
+3. Na seção "BUROCRACIA E BARREIRAS DE ENTRADA", filtre as barreiras para contemplar somente as que afetam a entrega destes itens específicos (ex: se exigir amostra apenas para um item não selecionado, não mencione como exigência obrigatória).
+4. Na "VIABILIDADE FINANCEIRA" e no campo "valorEstimado", calcule e analise as estimativas de preço de mercado especificamente para estes itens selecionados.
+5. No "PARECER FINAL DO ANALISTA" e no "reportMarkdown", dê o veredito e elabore a estratégia de lances focada exclusivamente em vencer a disputa por este grupo de itens selecionados.
+*Nota: Se houver cláusulas gerais aplicáveis a todo o edital (como certidões fiscais ou regras gerais de disputa), mantenha-as normalmente, mas garanta que todo o foco material, técnico e financeiro esteja afunilado para os itens selecionados.*`;
+      }
+
+      const basePrompt = `
+Você é um Analista de Licitações Públicas sênior, inteligente, moderno e altamente focado em estratégia de mercado e mitigação de riscos.
+Sua missão é ler o edital/termo de referência anexado e gerar uma análise executiva completa no campo "reportMarkdown".
+
+⚠️ REGRAS CRÍTICAS E INVIOLÁVEIS:
+
+1. **FIDELIDADE ABSOLUTA AO EDITAL. NUNCA INVENTE.**
+   - Todo dado que você retornar tem que estar escrito no documento anexado.
+   - Se uma informação não estiver no edital, escreva exatamente "Não especificado no edital".
+   - É MUITO melhor devolver "Não especificado no edital" do que um valor plausível porém inventado. O usuário toma decisão de negócio e monta proposta com base nisso: um dado inventado causa prejuízo real.
+   - Não complete listas para "ficar bonito". Uma lista com 1 item verdadeiro vale mais que uma com 5, sendo 4 supostos.
+
+2. **ITENS E LOTES — ENUMERE TODOS, SEM EXCEÇÃO.**
+   - Percorra o edital inteiro, incluindo ANEXOS, TERMO DE REFERÊNCIA e PLANILHAS/TABELAS de itens.
+   - "itensEdital" DEVE conter TODOS os itens/lotes do certame, um por um, na ordem do edital. Se o edital tem 47 itens, retorne os 47. Se tem 3 lotes com subitens, retorne cada subitem.
+   - NUNCA agrupe itens diferentes em um só, e NUNCA repita a mesma descrição em itens diferentes: cada item tem a SUA descrição, a SUA quantidade e a SUA unidade, exatamente como na planilha.
+   - Copie a quantidade e a unidade exatamente como estão. Se a quantidade não estiver legível, use 0 — não chute 1.
+   - Só use uma lista com 1 item quando o edital realmente tiver objeto único e indivisível.
+
+3. **VALORES — DISTINGA UNITÁRIO DE TOTAL.**
+   - Em "valorEstimado" de cada item, informe o valor UNITÁRIO daquele item.
+   - Em "viabilidadeFinanceira.valorEstimado", informe o valor TOTAL/GLOBAL estimado da contratação, deixando explícito que é o total (ex.: "Valor total estimado: R$ 250.000,00").
+   - Jamais confunda com multas, garantias, faturamento mínimo ou índices contábeis: esses números NÃO são o valor estimado.
+   - Se o edital não trouxer valor estimado (contratação com orçamento sigiloso, por exemplo), escreva "Orçamento sigiloso / não divulgado no edital".
+
+4. **DOCUMENTOS EXIGIDOS — SOMENTE OS QUE O EDITAL EXIGE.**
+   - Liste apenas as certidões e documentos efetivamente citados no instrumento convocatório, com a redação do edital.
+   - NÃO inclua as certidões "de praxe" por suposição. Se o edital não pede certidão estadual, ela não entra na lista.
+
+5. SEMPRE retorne um JSON válido e completo, sem truncar.
+
+6. Nunca use os literais "undefined", "null", "N/A" ou "n/a" — use a informação real ou "Não especificado no edital".
+
+O campo "reportMarkdown" DEVE SEGUIR RIGOROSAMENTE E EXATAMENTE ESTE MODELO DE RESPOSTA FORMATADO EM MARKDOWN (substituindo os colchetes com os dados reais do edital):
+
+Aqui está a **análise executiva e completa** da **[INSERIR MODALIDADE E NÚMERO/ANO DO PROCESSO (ÓRGÃO/COMPRADOR)]** que está selecionada no seu perfil:
+
+---
+
+### 🎯 Veredito da Análise
+• **Recomendação:** **[VALE A PENA PARTICIPAR / NÃO VALE A PENA PARTICIPAR / PARTICIPAR COM RESSALVAS]**
+• **Grau de Risco:** **[BAIXO / MÉDIO / ALTO]**
+• **Modelo do Negócio:** [Descreva sucintamente o modelo de entrega/serviço, ex: 100% Digital / SaaS (Software como Serviço) em nuvem — sem custos logísticos, fretes ou necessidade de estoque físico, ou Fornecimento Físico com entrega em lote único, etc.]
+
+---
+
+### 💰 Resumo Financeiro e Lotes do Certame
+• **Valor Estimado Total Global:** **R$ [INSERIR VALOR GLOBAL TOTAL ESTIMADO]**
+
+1. **Lote 01 — [NOME/MANDATO DO LOTE OU ITEM 1]:**
+   - **Quantidade:** [X licenças anuais / unidades]
+   - **Valor Estimado Unitário:** R$ [VALOR UNITÁRIO]
+   - **Valor Total do Lote:** **R$ [VALOR TOTAL LOTE 1]**
+
+2. **Lote 02 — [NOME/MANDATO DO LOTE OU ITEM 2]:**
+   - **Quantidade:** [X licenças anuais / unidades]
+   - **Valor Estimado Unitário:** R$ [VALOR UNITÁRIO]
+   - **Valor Total do Lote:** **R$ [VALOR TOTAL LOTE 2]**
+
+(Listar rigorosamente todos os lotes ou itens individuais do certame no mesmo formato numerado acima)
+
+---
+
+### ✅ Pontos Fortes e Vantagens Competitivas
+- **[Título do Ponto Forte 1]:** [Explicação objetiva da vantagem competitiva]
+- **[Título do Ponto Forte 2]:** [Explicação objetiva da vantagem competitiva]
+- **[Título do Ponto Forte 3]:** [Explicação objetiva da vantagem competitiva]
+
+---
+
+### ⚠️ Pontos de Alerta e Regras do Edital
+- **[Título do Alerta 1]:** [Explicação detalhada do risco, prazo curto ou regra estrita]
+- **[Título do Alerta 2]:** [Explicação detalhada do risco, proibição ou regra estrita]
+- **[Título do Alerta 3]:** [Explicação detalhada do risco, exigência técnica ou atestado]
+
+---
+
+### 📋 Documentos Exigidos para Habilitação
+- Regularidade no SICAF, CAUF ou portal do órgão.
+- Contrato Social / Estatuto em vigor e CNPJ.
+- Certidões Negativas: Federal (SRF/PGFN), Estadual (SEFAZ), Municipal, FGTS (CRF) e Trabalhista (CNDT).
+- Atestado de Capacidade Técnica (Pessoa Jurídica Pública ou Privada).
+- Declarações de cumprimento aos requisitos legais e enquadramento ME/EPP (se aplicável).
+
+---
+
+### 💡 Estratégia Recomendada
+[Resumo direto com orientação tática para cotação e disputa de lances, visando maximizar a margem líquida]
+
+---
+
+Adote um tom corporativo, extremamente profissional, objetivo e scannable.
+Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos individuais estão mencionados no edital e preencha a lista "itensEdital" no JSON, além de preencher todos os demais campos estruturados do JSON solicitados.
+RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, use "Não especificado no edital".
+`;
+
+      contentParts.push({
+        text: textInput 
+          ? `${basePrompt}\n${itemFocusInstructions}\n\nTexto adicional / Edital:\n${textInput}` 
+          : `${basePrompt}\n${itemFocusInstructions}`
+      });
+
+      /**
+       * A análise é feita em DUAS chamadas paralelas, não em uma só.
+       *
+       * Numa chamada única o modelo precisava gerar, em sequência, a planilha
+       * inteira de itens E o relatório executivo — e é a geração da resposta,
+       * não a leitura do documento, que domina o tempo de espera (reduzir o
+       * texto enviado de 400k para 120k caracteres mudou de 18,9s para 17,2s,
+       * quase nada). Pior: para caber no tempo o raciocínio ficou em MINIMAL, e
+       * aí a leitura da tabela passou a falhar de forma intermitente — numa
+       * medição de três execuções, uma devolveu 1 item em vez de 12.
+       *
+       * Separando, cada chamada gera metade da saída e as duas correm ao mesmo
+       * tempo. A extração de itens fica com uma tarefa estreita, schema pequeno
+       * e raciocínio LOW (confiável na leitura de tabela); o parecer fica com
+       * MINIMAL, que já se mostrou equivalente no julgamento.
+       */
+      const promptItens = `Você é um extrator de dados. Sua ÚNICA tarefa é listar os itens/lotes do edital anexado.
+
+REGRAS:
+- Percorra o documento inteiro, incluindo ANEXOS, TERMO DE REFERÊNCIA e PLANILHAS.
+- Liste TODOS os itens/lotes, um por um, na ordem do edital. Se há 47 itens, retorne 47.
+- Cada item tem a SUA descrição, a SUA quantidade e a SUA unidade. NUNCA repita a mesma descrição em itens diferentes e NUNCA agrupe itens distintos.
+- Copie quantidade e unidade exatamente como estão na planilha. Quantidade ilegível: use 0, não chute 1.
+- "valorEstimado" do item é o valor UNITÁRIO dele.
+- Só retorne 1 item se o objeto for realmente único e indivisível.
+- Não invente itens que não estejam no documento.`;
+
+      const itensSchema = {
+        type: Type.OBJECT,
+        properties: {
+          itensEdital: {
+            type: Type.ARRAY,
+            description: "Lista de TODOS os itens, lotes ou produtos individuais do edital.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                numero: { type: Type.INTEGER, description: "Número do item ou lote conforme a planilha" },
+                descricao: { type: Type.STRING, description: "Descrição do produto ou serviço deste item específico" },
+                quantidade: { type: Type.INTEGER, description: "Quantidade solicitada deste item" },
+                unidade: { type: Type.STRING, description: "Unidade de medida deste item" },
+                valorEstimado: { type: Type.STRING, description: "Valor UNITÁRIO estimado deste item" }
+              },
+              required: ["numero", "descricao", "quantidade"]
+            }
+          }
+        },
+        required: ["itensEdital"]
+      };
+
+      itensPromise = generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: [{ text: promptItens }, ...contentParts],
+        aiConfig,
+        jsonMode: true,
+        responseSchema: itensSchema,
+        // LOW: a saída é pequena, então o custo em tempo é baixo, e a leitura
+        // de tabela fica estável — em MINIMAL ela falhava de forma intermitente.
+        thinkingLevel: (process.env.AI_THINKING_LEVEL_ITENS as any) || "LOW"
+      }).catch((err: any) => {
+        console.warn("[analyze-edital] Extração dedicada de itens falhou:", err?.message || err);
+        return null;
+      });
+
+      console.log("Chamando AI Router para análise de edital...");
+      const response = await generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: contentParts,
+        aiConfig,
+        jsonMode: true,
+        // Extração estruturada guiada por schema: o raciocínio profundo custa
+        // muitos segundos de espera e quase não muda o resultado.
+        //
+        // Medido com um edital de 244 páginas e 12 itens, mesma chave e mesmo
+        // modelo: HIGH 56s, LOW 30s, MINIMAL 19s — os três com os 12 itens
+        // corretos, descrições distintas e o valor total certo. No julgamento,
+        // MINIMAL manteve o mesmo veredito, o mesmo grau de risco e apontou a
+        // mesma cláusula de multa abusiva; HIGH só acrescentou um ou dois
+        // alertas secundários. Não compensa triplicar a espera do usuário.
+        thinkingLevel: (process.env.AI_THINKING_LEVEL as any) || "MINIMAL",
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              pontosPositivos: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "3 a 5 Pontos positivos e facilidades para a empresa"
+              },
+              pontosAlerta: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "3 a 5 Pegadinhas, riscos, multas ou perigos de eliminação imediata"
+              },
+              prazoEntrega: {
+                type: Type.STRING,
+                description: "Prazo real de entrega após nota de empenho/AFM"
+              },
+              prazoPagamento: {
+                type: Type.STRING,
+                description: "Prazo finalizado para o recebimento do pagamento em dias"
+              },
+              descricaoProduto: {
+                type: Type.STRING,
+                description: "Transcrição INTEGRAL, DETALHADA E COMPLETA de todas as especificações técnicas, características físicas, modelos, quantitativos e exigências minuciosas do produto/serviço conforme descrito no edital. NÃO resuma, capte tudo na íntegra para permitir comparação técnica 100% fidedigna."
+              },
+              documentosExigidos: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Lista completa e fidedigna de todos os documentos, certidões negativas (Federais, Estaduais, Municipais, Trabalhistas, FGTS, Falência), atestados de capacidade técnica e habilitações jurídicas efetivamente exigidos no edital."
+              },
+              identificacaoCertame: {
+                type: Type.OBJECT,
+                properties: {
+                  orgaoComprador: { type: Type.STRING, description: "Órgão comprador e Unidade Gestora" },
+                  modalidade: { type: Type.STRING, description: "Modalidade do processo (eg. Pregão Eletrônico, Concorrência)" },
+                  identificacaoNumerica: { type: Type.STRING, description: "Número do Processo ou Edital / busca no portal" },
+                  dataHoraSessao: { type: Type.STRING, description: "Data, horário e fuso da sessão de disputa/lances" },
+                  idContratacaoPNCP: { type: Type.STRING, description: "Id contratação PNCP se identificado (ex: 79151312000156-1-000501/2026)" },
+                  linkPNCP: { type: Type.STRING, description: "URL ou link direto da licitação/edital no Portal PNCP (ex: https://pncp.gov.br/app/editais/79151312000156/2026/000501)" }
+                },
+                required: ["orgaoComprador", "modalidade", "identificacaoNumerica", "dataHoraSessao"]
+              },
+              especificacoesTecnicas: {
+                type: Type.OBJECT,
+                properties: {
+                  exigenciasFisicas: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Exigências físicas do produto (dimensão, conexões, etc)" },
+                  pegadinhasOcultas: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Pegadinhas ou travas de homologação específicas" }
+                },
+                required: ["exigenciasFisicas", "pegadinhasOcultas"]
+              },
+              burocraciaBarreiras: {
+                type: Type.OBJECT,
+                properties: {
+                  exigeAmostra: { type: Type.STRING, description: "Se exige amostra, prazo e retorno" },
+                  exigeCartaSolidariedade: { type: Type.STRING, description: "Se exige carta de exclusividade/solidariedade do fabricante" },
+                  exigenciaGarantia: { type: Type.STRING, description: "Garantia de proposta ou contratual" },
+                  consorcioSubcontratacao: { type: Type.STRING, description: "Permissão de consórcio ou subcontratação" }
+                },
+                required: ["exigeAmostra", "exigeCartaSolidariedade", "exigenciaGarantia", "consorcioSubcontratacao"]
+              },
+              logisticaCronograma: {
+                type: Type.OBJECT,
+                properties: {
+                  prazoEntregaReal: { type: Type.STRING, description: "Prazo real em dias úteis ou corridos" },
+                  classificacaoPrazo: { type: Type.STRING, description: "Classificação: Confortável, Aceitável ou Crítico/Relâmpago" },
+                  enderecoEntrega: { type: Type.STRING, description: "Endereço e condições de entrega" },
+                  prazoGarantia: { type: Type.STRING, description: "Tempo de garantia legal/contratual exigida" }
+                },
+                required: ["prazoEntregaReal", "classificacaoPrazo", "enderecoEntrega", "prazoGarantia"]
+              },
+              viabilidadeFinanceira: {
+                type: Type.OBJECT,
+                properties: {
+                  valorEstimado: { type: Type.STRING, description: "Valor unitário e global aceitável" },
+                  distorcoesPreco: { type: Type.STRING, description: "Distorções identificadas comparado com o privado" },
+                  prazoPagamento: { type: Type.STRING, description: "Prazo de liquidação de nota fiscal" }
+                },
+                required: ["valorEstimado", "distorcoesPreco", "prazoPagamento"]
+              },
+              parecerFinal: {
+                type: Type.OBJECT,
+                properties: {
+                  veredito: { type: Type.STRING, description: "Veredito se vale a pena participar ou não" },
+                  grauRisco: { type: Type.STRING, description: "Nível de risco (Baixo, Médio, Alto)" },
+                  estrategiaLances: { type: Type.STRING, description: "Estratégia recomendada de lances" }
+                },
+                required: ["veredito", "grauRisco", "estrategiaLances"]
+              },
+              reportMarkdown: {
+                type: Type.STRING,
+                description: "Relatório executivo completo em markdown super scannable utilizando tabelas bem feitas, tópicos fortes e dividindo rigorosamente as seções de 1 a 6."
+              },
+            },
+            required: [
+              "pontosPositivos", "pontosAlerta", "prazoEntrega", "prazoPagamento", "descricaoProduto", "documentosExigidos",
+              "identificacaoCertame", "especificacoesTecnicas", "burocraciaBarreiras", "logisticaCronograma", "viabilidadeFinanceira", "parecerFinal",
+              "reportMarkdown"
+            ]
+          }
+      });
+
+      const rawJson = response.text || "{}";
+      let parsedData = cleanAndParseJson(rawJson);
+
+      // Junta a extração dedicada de itens, que correu em paralelo.
+      const itensResposta = await itensPromise;
+      if (itensResposta?.text) {
+        try {
+          const extraidos = cleanAndParseJson(itensResposta.text);
+          if (Array.isArray(extraidos?.itensEdital) && extraidos.itensEdital.length > 0) {
+            parsedData.itensEdital = extraidos.itensEdital;
+            console.log(`[analyze-edital] Extração dedicada devolveu ${extraidos.itensEdital.length} itens.`);
+          }
+        } catch (err: any) {
+          console.warn("[analyze-edital] Não foi possível ler os itens extraídos:", err?.message || err);
+        }
+      }
+
+      if (!parsedData || Object.keys(parsedData).length === 0) {
+        console.warn("[analyze-edital] JSON estruturado vazio ou inválido da IA, tentando recuperação...");
+        const textForLocal = (textInput || "") + "\n" + (response.text || "");
+        parsedData = parseEditalLocally(textForLocal.length > 20 ? textForLocal : "Edital de Licitação");
+      }
+
+      /**
+       * Normalização do resultado da IA.
+       *
+       * ⚠️ Esta etapa NÃO INVENTA MAIS NADA. A versão anterior preenchia todo
+       * campo ausente com conteúdo plausível: três "pontos positivos"
+       * genéricos, seis certidões "de praxe" como se fossem exigidas por
+       * aquele edital, modalidade caindo em "Pregão Eletrônico", garantia em
+       * "12 meses" e — o mais grave — o parecer final caindo em "Vale a pena
+       * participar!". Eram dados errados apresentados ao usuário com a mesma
+       * cara de dados lidos do edital.
+       *
+       * Agora um campo que a IA não conseguiu extrair fica vazio ou marcado
+       * como não identificado, e a interface mostra isso como tal.
+       */
+      const NAO_IDENTIFICADO = "Não identificado no edital";
+
+      /** Aceita apenas texto real; descarta os literais de "vazio". */
+      const textoOuNulo = (valor: any): string => {
+        const t = String(valor ?? "").trim();
+        if (!t) return "";
+        const baixo = t.toLowerCase();
+        if (baixo === "null" || baixo === "undefined" || baixo === "n/a" || baixo === "na") return "";
+        return t;
+      };
+
+      /**
+       * Reconhece os textos de preenchimento ("Não especificado no edital" e
+       * variantes) que a IA devolve quando não achou a informação.
+       *
+       * A checagem exige que a frase COMECE com a negativa, para não confundir
+       * com respostas informativas legítimas: "Orçamento sigiloso / não
+       * divulgado no edital" é um dado de verdade sobre o certame, não uma
+       * falha de leitura.
+       */
+      const ehPlaceholder = (valor: string): boolean =>
+        /^n[ãa]o\s+(especificad|identificad|informad|localizad|consta|h[áa]\b)/i.test(valor.trim());
+
+      const listaDeTextos = (valor: any): string[] =>
+        Array.isArray(valor)
+          ? valor.map(textoOuNulo).filter(t => Boolean(t) && !ehPlaceholder(t))
+          : [];
+
+      parsedData.pontosPositivos = listaDeTextos(parsedData.pontosPositivos);
+      parsedData.pontosAlerta = listaDeTextos(parsedData.pontosAlerta);
+      parsedData.documentosExigidos = listaDeTextos(parsedData.documentosExigidos);
+
+      if (!Array.isArray(parsedData.itensEdital)) {
+        parsedData.itensEdital = [];
+      } else {
+        const vistos = new Set<string>();
+        parsedData.itensEdital = parsedData.itensEdital
+          .filter((it: any) => it && typeof it === "object")
+          .map((it: any, idx: number) => {
+            // A descrição do item NÃO herda mais o objeto geral da licitação:
+            // era isso que fazia todos os itens aparecerem com o mesmo texto,
+            // exatamente o "dados duplicados" relatado.
+            const descricao = textoOuNulo(it.descricao ?? it.descrição) || NAO_IDENTIFICADO;
+            // Quantidade ausente vira 0, não 1: um número inventado aqui vira
+            // preço de proposta errado lá na frente.
+            const quantidadeBruta = Number(it.quantidade);
+            return {
+              numero: Number.isFinite(Number(it.numero)) ? Number(it.numero) : idx + 1,
+              descricao,
+              quantidade: Number.isFinite(quantidadeBruta) && quantidadeBruta >= 0 ? quantidadeBruta : 0,
+              unidade: textoOuNulo(it.unidade) || "Não especificado",
+              valorEstimado: textoOuNulo(it.valorEstimado) || "Não especificado no edital"
+            };
+          })
+          // Remove repetições exatas que a IA às vezes emite ao percorrer tabelas.
+          .filter((it: any) => {
+            const chave = `${it.numero}|${it.descricao}|${it.quantidade}|${it.unidade}`;
+            if (vistos.has(chave)) return false;
+            vistos.add(chave);
+            return true;
+          })
+          .slice(0, 500); // editais grandes chegam a centenas de itens
+      }
+
+      const objetoOuNulo = (valor: any) => (valor && typeof valor === "object" ? valor : {});
+
+      const ic = objetoOuNulo(parsedData.identificacaoCertame);
+      parsedData.identificacaoCertame = {
+        ...ic,
+        orgaoComprador: textoOuNulo(ic.orgaoComprador) || NAO_IDENTIFICADO,
+        // Sem cair em "Pregão Eletrônico": uma dispensa exibida como pregão
+        // muda o entendimento do usuário sobre o rito do certame.
+        modalidade: textoOuNulo(ic.modalidade) || NAO_IDENTIFICADO,
+        identificacaoNumerica: textoOuNulo(ic.identificacaoNumerica) || NAO_IDENTIFICADO,
+        dataHoraSessao: textoOuNulo(ic.dataHoraSessao) || NAO_IDENTIFICADO
+      };
+
+      const et = objetoOuNulo(parsedData.especificacoesTecnicas);
+      parsedData.especificacoesTecnicas = {
+        exigenciasFisicas: listaDeTextos(et.exigenciasFisicas),
+        pegadinhasOcultas: listaDeTextos(et.pegadinhasOcultas)
+      };
+
+      const bb = objetoOuNulo(parsedData.burocraciaBarreiras);
+      parsedData.burocraciaBarreiras = {
+        exigeAmostra: textoOuNulo(bb.exigeAmostra) || NAO_IDENTIFICADO,
+        exigeCartaSolidariedade: textoOuNulo(bb.exigeCartaSolidariedade) || NAO_IDENTIFICADO,
+        exigenciaGarantia: textoOuNulo(bb.exigenciaGarantia) || NAO_IDENTIFICADO,
+        consorcioSubcontratacao: textoOuNulo(bb.consorcioSubcontratacao) || NAO_IDENTIFICADO
+      };
+
+      const lc = objetoOuNulo(parsedData.logisticaCronograma);
+      parsedData.logisticaCronograma = {
+        prazoEntregaReal: textoOuNulo(lc.prazoEntregaReal) || textoOuNulo(parsedData.prazoEntrega) || NAO_IDENTIFICADO,
+        classificacaoPrazo: textoOuNulo(lc.classificacaoPrazo) || NAO_IDENTIFICADO,
+        enderecoEntrega: textoOuNulo(lc.enderecoEntrega) || NAO_IDENTIFICADO,
+        // "12 meses" era chute puro; garantia varia de 3 meses a 5 anos.
+        prazoGarantia: textoOuNulo(lc.prazoGarantia) || NAO_IDENTIFICADO
+      };
+
+      const vf = objetoOuNulo(parsedData.viabilidadeFinanceira);
+      parsedData.viabilidadeFinanceira = {
+        valorEstimado: textoOuNulo(vf.valorEstimado) || NAO_IDENTIFICADO,
+        distorcoesPreco: textoOuNulo(vf.distorcoesPreco) || NAO_IDENTIFICADO,
+        prazoPagamento: textoOuNulo(vf.prazoPagamento) || textoOuNulo(parsedData.prazoPagamento) || NAO_IDENTIFICADO
+      };
+
+      const pf = objetoOuNulo(parsedData.parecerFinal);
+      parsedData.parecerFinal = {
+        // Um veredito é uma RECOMENDAÇÃO de negócio. Se a IA não emitiu um, a
+        // plataforma não pode emitir por ela — antes o padrão era "Vale a pena
+        // participar!", ou seja, a ferramenta recomendava participar sem ter
+        // analisado nada.
+        veredito: textoOuNulo(pf.veredito) || "Sem parecer conclusivo — revise o edital manualmente",
+        grauRisco: textoOuNulo(pf.grauRisco) || NAO_IDENTIFICADO,
+        estrategiaLances: textoOuNulo(pf.estrategiaLances) || NAO_IDENTIFICADO
+      };
+
+      // Campos que ficaram sem informação, para a interface poder avisar o
+      // usuário em vez de deixá-lo achar que a leitura foi completa.
+      const naoLocalizado = (valor: string) => !valor || valor === NAO_IDENTIFICADO || ehPlaceholder(valor);
+
+      parsedData.camposNaoIdentificados = [
+        ...(parsedData.itensEdital.length === 0 ? ["itens do edital"] : []),
+        ...(parsedData.documentosExigidos.length === 0 ? ["documentos exigidos"] : []),
+        ...(naoLocalizado(parsedData.viabilidadeFinanceira.valorEstimado) ? ["valor estimado"] : []),
+        ...(naoLocalizado(parsedData.identificacaoCertame.orgaoComprador) ? ["órgão comprador"] : []),
+        ...(naoLocalizado(parsedData.identificacaoCertame.modalidade) ? ["modalidade"] : []),
+        ...(naoLocalizado(parsedData.identificacaoCertame.dataHoraSessao) ? ["data da sessão"] : [])
+      ];
+
+      // Preserve or extract direct PNCP URL or PNCP control number / ID contratação PNCP if present in input text
+      const textForUrl = ((req.body.textInput || "") + "\n" + (req.body.editalText || "")).trim();
+      const numControleMatch = textForUrl.match(/(\d{14})[-_\s/]?1[-_\s/]?(\d{1,6})[/-_](\d{4})/);
+      
+      if (numControleMatch) {
+        const cnpj = numControleMatch[1];
+        const seqPadded = numControleMatch[2].padStart(6, '0');
+        const ano = numControleMatch[3];
+        const idPncp = `${cnpj}-1-${seqPadded}/${ano}`;
+        const constructedUrl = `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seqPadded}`;
+        
+        parsedData.idContratacaoPNCP = idPncp;
+        parsedData.linkPNCP = constructedUrl;
+        if (!parsedData.identificacaoCertame) parsedData.identificacaoCertame = {};
+        parsedData.identificacaoCertame.idContratacaoPNCP = idPncp;
+        parsedData.identificacaoCertame.linkPNCP = constructedUrl;
+      } else {
+        const directUrlMatch = textForUrl.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/(\d{14})\/(\d{4})\/(\d{1,6}))/i)
+          || textForUrl.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/app\/editais\/[^\s\)\"\'>]+)/i)
+          || textForUrl.match(/(https?:\/\/(?:www\.)?pncp\.gov\.br\/[^\s\)\"\'>]+)/i);
+
+        if (directUrlMatch) {
+          let extractedPncpUrl = directUrlMatch[1].replace(/[.,;]$/, "");
+          if (directUrlMatch[2] && directUrlMatch[3] && directUrlMatch[4]) {
+            const cnpj = directUrlMatch[2];
+            const ano = directUrlMatch[3];
+            const seqPadded = directUrlMatch[4].padStart(6, '0');
+            extractedPncpUrl = `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seqPadded}`;
+          }
+          parsedData.linkPNCP = extractedPncpUrl;
+          if (!parsedData.identificacaoCertame) parsedData.identificacaoCertame = {};
+          parsedData.identificacaoCertame.linkPNCP = extractedPncpUrl;
+        }
+      }
+
+
+      /**
+       * Sobrepõe os campos FACTUAIS com o dado oficial do PNCP.
+       *
+       * Órgão, objeto, modalidade, valor estimado, datas e itens são publicados
+       * pelo próprio órgão e estão disponíveis de forma estruturada. Deixar a IA
+       * adivinhá-los a partir do PDF é trocar dado certo por dado provável. Aqui
+       * o julgamento continua com a IA (riscos, pegadinhas, parecer, estratégia)
+       * e os fatos passam a vir da fonte.
+       */
+      const numeroControleInformado =
+        String(req.body.numeroControlePNCP || "").trim() ||
+        String(parsedData.idContratacaoPNCP || "").trim();
+      const alvoPncp = numeroControleInformado ? parseNumeroControlePNCP(numeroControleInformado) : null;
+
+      if (alvoPncp) {
+        try {
+          const oficial = await pncpFetchContratacao(alvoPncp.cnpj, alvoPncp.ano, alvoPncp.sequencial);
+          if (oficial) {
+            if (!parsedData.identificacaoCertame) parsedData.identificacaoCertame = {};
+            const ident = parsedData.identificacaoCertame;
+            const camposOficiais: string[] = [];
+
+            const orgao = oficial.orgaoEntidade?.razaoSocial || oficial.orgaoEntidade?.nomeRazaoSocial;
+            if (orgao) { ident.orgaoComprador = orgao; camposOficiais.push("órgão comprador"); }
+
+            const modalidadeOficial = oficial.modalidadeNome || PNCP_MODALIDADES[String(oficial.modalidadeId)];
+            if (modalidadeOficial) { ident.modalidade = modalidadeOficial; camposOficiais.push("modalidade"); }
+
+            const numeroOficial = oficial.numeroCompra || oficial.processo;
+            if (numeroOficial) {
+              ident.identificacaoNumerica = `${modalidadeOficial || "Contratação"} nº ${numeroOficial}/${oficial.anoCompra || alvoPncp.ano}`;
+              camposOficiais.push("número do processo");
+            }
+
+            if (oficial.dataAberturaProposta) {
+              ident.dataHoraSessao = new Date(oficial.dataAberturaProposta).toLocaleString("pt-BR");
+              camposOficiais.push("data da sessão");
+            }
+
+            if (typeof oficial.valorTotalEstimado === "number" && oficial.valorTotalEstimado > 0) {
+              if (!parsedData.viabilidadeFinanceira) parsedData.viabilidadeFinanceira = {};
+              parsedData.viabilidadeFinanceira.valorEstimado =
+                `R$ ${oficial.valorTotalEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (valor oficial publicado no PNCP)`;
+              camposOficiais.push("valor estimado");
+            }
+
+            if (oficial.objetoCompra) {
+              parsedData.descricaoProduto = oficial.objetoCompra;
+              camposOficiais.push("objeto");
+            }
+
+            // Os itens oficiais substituem os inferidos: trazem número,
+            // descrição, quantidade, unidade e valor unitário conforme publicado.
+            if (Array.isArray(oficial.itens) && oficial.itens.length > 0) {
+              parsedData.itensEdital = oficial.itens.map((it: any, idx: number) => ({
+                numero: it.numeroItem ?? idx + 1,
+                descricao: it.descricao || it.materialOuServicoNome || "Item da contratação",
+                quantidade: Number(it.quantidade) || 0,
+                unidade: it.unidadeMedida || "Unidade",
+                valorEstimado:
+                  typeof it.valorUnitarioEstimado === "number"
+                    ? `R$ ${it.valorUnitarioEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    : "Não informado no PNCP"
+              }));
+              camposOficiais.push(`${parsedData.itensEdital.length} itens`);
+            }
+
+            parsedData.dadosOficiaisPNCP = {
+              numeroControlePNCP: numeroControleInformado,
+              camposSubstituidos: camposOficiais,
+              consultadoEm: new Date().toISOString()
+            };
+            console.log(`[PNCP] Análise enriquecida com dado oficial (${camposOficiais.join(", ")}).`);
+          }
+        } catch (err: any) {
+          // O enriquecimento é um bônus: se o PNCP não responder, a análise da
+          // IA segue valendo por si só.
+          console.warn("[PNCP] Não foi possível enriquecer a análise com dado oficial:", err?.message || err);
+        }
+      }
+      return res.json({ analysis: parsedData });
+    } catch (error: any) {
+      console.error("[analyze-edital] Erro na análise do edital com a IA, aplicando fallback local:", error.message || error);
+      const errMsg = error?.message || "Erro de conexão com o serviço de IA.";
+
+      try {
+        const { textInput, fileBase64, fileName, attachments, attachedFiles, files } = req.body;
+        let extractedTextFromFiles = "";
+        const rawFileList = collectUniqueFiles([
+          attachments, 
+          attachedFiles, 
+          files, 
+          fileBase64 ? { base64: fileBase64, name: fileName } : null
+        ]);
+        for (const f of rawFileList) {
+          try {
+            if (f.uploadId) {
+              const chunkFilePath = path.join("/tmp", "uploads", String(f.uploadId).replace(/[^a-zA-Z0-9_-]/g, ""));
+              if (fs.existsSync(chunkFilePath)) {
+                const buf = fs.readFileSync(chunkFilePath);
+                try {
+                  const pdfText = await extractPdfText(buf);
+                  if (pdfText) extractedTextFromFiles += "\n" + pdfText;
+                } catch {
+                  const txt = buf.toString("utf-8");
+                  if (txt && !txt.startsWith("%PDF")) extractedTextFromFiles += "\n" + txt;
+                }
+              }
+            } else if (f.base64 || f.fileBase64 || f.data) {
+              const b64 = (f.base64 || f.fileBase64 || f.data || "").replace(/^data:[^;]+;base64,/, "").trim();
+              const buf = Buffer.from(b64, "base64");
+              try {
+                const pdfText = await extractPdfText(buf);
+                if (pdfText) extractedTextFromFiles += "\n" + pdfText;
+              } catch {
+                const txt = buf.toString("utf-8");
+                if (txt && !txt.startsWith("%PDF")) extractedTextFromFiles += "\n" + txt;
+              }
+            }
+          } catch {
+            // ignore non-text decoding errors
+          }
+        }
+        const combinedText = ((textInput || "") + "\n" + extractedTextFromFiles).trim();
+        console.log("[analyze-edital] Aplicando fallback local estruturado para garantir resposta contínua ao usuário...");
+        const fallbackData = parseEditalLocally(combinedText.length > 5 ? combinedText : "Edital de Licitação Pública");
+
+        // As duas chamadas correm em paralelo, então o parecer pode falhar com a
+        // extração de itens já concluída. O parser local por expressão regular
+        // devolve linhas cruas de tabela, quantidade 1 inventada e o valor total
+        // no lugar do unitário — quando os itens de verdade existem, eles valem
+        // mais do que isso.
+        if (itensPromise) {
+          try {
+            const itensResposta = await itensPromise;
+            const extraidos = itensResposta?.text ? cleanAndParseJson(itensResposta.text) : null;
+            if (Array.isArray(extraidos?.itensEdital) && extraidos.itensEdital.length > 0) {
+              fallbackData.itensEdital = extraidos.itensEdital;
+              console.log(`[analyze-edital] Fallback aproveitou ${extraidos.itensEdital.length} itens da extração dedicada.`);
+            }
+          } catch {
+            // sem itens, o fallback segue com o que o parser local conseguiu
+          }
+        }
+
+        return res.json({
+          analysis: fallbackData,
+          degraded: true,
+          reason: describeAiFailure(error)
+        });
+      } catch (fallbackError: any) {
+        console.error("[analyze-edital] Falha no fallback local:", fallbackError);
+      }
+
+      return res.status(400).json({ 
+        error: errMsg 
+      });
+    } finally {
+      await cleanupAttachmentResources(tempFilesToDelete, geminiFilesToDelete, aiClientForCleanup);
+    }
+  });
+
+  // API Route: Analyze Competitor Documents
+  app.post("/api/analyze-competitor", async (req, res): Promise<any> => {
+    const tempFilesToDelete: string[] = [];
+    const geminiFilesToDelete: string[] = [];
+    let aiClientForCleanup: GoogleGenAI | undefined = undefined;
+
+    try {
+      const { competitorName, competitorDocumentText, fileBase64, fileType, files, editalText, focusItems, aiConfig: clientAiConfig } = req.body;
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
+
+      const aiClient = getAiClientForConfig(aiConfig);
+      aiClientForCleanup = aiClient;
+
+      const rawFileList = collectUniqueFiles([
+        files, 
+        fileBase64 ? { base64: fileBase64, type: fileType } : null
+      ]);
+
+      if (!competitorDocumentText && rawFileList.length === 0) {
+        return res.status(400).json({ error: "Nenhum documento do concorrente enviado." });
+      }
+
+      let contentParts: any[] = [];
+
+      for (const f of rawFileList) {
+        const processed = await processFileAttachmentAsync(f, aiClient);
+        if (processed) {
+          if (processed.part) contentParts.push(processed.part);
+          if (processed.tempFilePath) tempFilesToDelete.push(processed.tempFilePath);
+          if (processed.uploadedFileName) geminiFilesToDelete.push(processed.uploadedFileName);
+        }
+      }
+
+      const basePrompt = `
+Você é um Advogado Especialista em Licitações Públicas e Auditor de Certames Governamentais experiente (Lei 14.133/2021 e demais legislações brasileiras).
+Sua missão é realizar uma AUDITORIA CIRÚRGICA E RIGOROSA nos documentos ou proposta do concorrente para encontrar qualquer desconformidade, erro, omissão, fraude ou irregularidade técnica/burocrática comparado com as exigências e regras estabelecidas no Edital de Licitação fornecido abaixo.
+
+Se o nome do concorrente não tiver sido fornecido, analise atentamente o texto ou o documento enviado para identificar e extrair o nome empresarial/razão social correto do Concorrente. Retorne este nome identificado na propriedade "competitorName" do JSON de resposta.
+
+O objetivo principal é encontrar brechas reais e juridicamente viáveis que possam fundamentar um RECURSO ADMINISTRATIVO ou impugnação visando desclassificar esse concorrente que ganhou ou está liderando a disputa.
+
+Considere as seguintes informações do EDITAL DE LICITAÇÃO:
+\n${editalText || "Edital não fornecido diretamente. Use as regras de ouro de licitações federais para analisar compatibilidade padrão."}\n
+
+Foco da análise indicado pelo usuário:
+\n${focusItems || "Análise Completa e Multidisciplinar (Técnica, Documental, Certidões, Prazo, Garantias, Assinaturas)"}\n
+
+Instruções para a análise:
+1. Examine minuciosamente as especificações do produto/serviço ofertado pelo concorrente vs. o exigido pelo Edital (dimensões, marcas, certificações exigidas, garantias, etc.).
+2. Avalie se as certidões estão válidas, se há omissão de declarações obrigatórias ou erros de preenchimento.
+3. Se encontrar alguma irregularidade, classifique a gravidade como:
+   - ALTA: Desclassificação iminente (descumpriu requisito mandatório/técnico do edital, certidão vencida, objeto incompatível).
+   - MÉDIA: Risco moderado, sanável por diligência ou passível de recurso caso o pregoeiro seja muito formalista.
+   - BAIXA: Mera formalidade ou detalhe estético insignificante.
+4. Fundamente sempre com a Base Legal aplicável (ex: item do edital correspondente, artigos da Lei 14.133/2021, jurisprudência do TCU, Súmulas, etc.).
+5. Redija um "modeloRecurso" (Draft de Recurso Administrativo) completo, com preâmbulo, fatos, fundamentos jurídicos, pedidos e encerramento, pronto para cópia direta em formato Markdown.
+
+O formato de retorno DEVE ser obrigatoriamente um objeto JSON com o esquema definido abaixo.
+`;
+
+      contentParts.push({
+        text: competitorDocumentText 
+          ? `${basePrompt}\n\nTexto dos Documentos/Proposta do Concorrente:\n${competitorDocumentText}` 
+          : basePrompt
+      });
+
+      console.log("Chamando AI Router para auditoria jurídica do concorrente...");
+      const response = await generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: contentParts,
+        aiConfig,
+        jsonMode: true,
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              competitorName: {
+                type: Type.STRING,
+                description: "Razão Social ou nome do concorrente extraído ou confirmado do documento enviado"
+              },
+              isCompliant: {
+                type: Type.BOOLEAN,
+                description: "Se o concorrente atende plenamente e sem ressalvas a todas as regras do edital"
+              },
+              irregularidadesEncontradas: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    campoExigido: { type: Type.STRING, description: "O que o edital ou pregoeiro solicitou de forma explícita" },
+                    propostaConcorrente: { type: Type.STRING, description: "O que o concorrente de fato apresentou ou declarou" },
+                    gravidade: { type: Type.STRING, description: "Gravidade do erro: ALTA, MÉDIA ou BAIXA" },
+                    baseLegal: { type: Type.STRING, description: "Item do edital desrespeitado, artigo da Lei 14.133/21, lei complementar ou jurisprudência TCU" },
+                    impacto: { type: Type.STRING, description: "Por que esse erro desclassifica ou invalida a proposta do concorrente" }
+                  },
+                  required: ["campoExigido", "propostaConcorrente", "gravidade", "baseLegal", "impacto"]
+                },
+                description: "Lista detalhada de falhas, furos, certidões vencidas, descumprimentos e brechas de desclassificação identificadas"
+              },
+              pontosFortesConcorrente: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Aspectos da proposta dele que estão corretos ou que demonstram solidez técnica"
+              },
+              modeloRecurso: {
+                type: Type.STRING,
+                description: "Peça jurídica formal de RECURSO ADMINISTRATIVO em Markdown para o pregoeiro, extremamente persuasiva, solicitando a desclassificação do concorrente com base nos erros encontrados."
+              },
+              analiseEstiloMarkdown: {
+                type: Type.STRING,
+                description: "Relatório de auditoria técnica-legal em formato Markdown estruturado, ideal para visualização na tela."
+              }
+            },
+            required: [
+              "competitorName", "isCompliant", "irregularidadesEncontradas", "pontosFortesConcorrente", "modeloRecurso", "analiseEstiloMarkdown"
+            ]
+          }
+      });
+
+      const rawJson = response.text || "{}";
+      const parsedData = cleanAndParseJson(rawJson);
+      return res.json({ analysis: parsedData });
+    } catch (error: any) {
+      console.warn("Erro na análise do concorrente, aplicando fallback...", error.message || error);
+      // Structured fallback
+      const fallbackData = {
+        competitorName: req.body?.competitorName || "TecnoEstrela Comércio e Importação Ltda",
+        isCompliant: false,
+        irregularidadesEncontradas: [
+          {
+            campoExigido: "Certidão de Regularidade perante a SEFAZ (Fazenda Estadual)",
+            propostaConcorrente: "Anexou comprovante de solicitação e não a Certidão de Regularidade Fiscal Estadual ativa",
+            gravidade: "ALTA",
+            baseLegal: "Item 9.3 do Edital / Art. 68 da Lei 14.133/21",
+            impacto: "A ausência de certidão fiscal válida na plataforma no momento da sessão gera a inabilitação direta do concorrente."
+          },
+          {
+            campoExigido: "Notebook com tela FHD de 14 polegadas e Processador Intel Core i5 de 11ª geração",
+            propostaConcorrente: "Ofertou notebook modelo 'FlexBook Lite' com tela HD de 1366x768 pixels",
+            gravidade: "ALTA",
+            baseLegal: "Item 2.4 - Características Técnicas Obrigatórias do Termo de Referência",
+            impacto: "Incompatibilidade técnica grave do produto ofertado com as especificações mínimas obrigatórias estipuladas pelo edital."
+          }
+        ],
+        pontosFortesConcorrente: [
+          "Preço unitário muito competitivo",
+          "Apresentou Balanço Patrimonial e CNDT válidos"
+        ],
+        modeloRecurso: `## ILUSTRÍSSIMO SENHOR PREGOEIRO DA SECRETARIA ESTADUAL DE EDUCAÇÃO E CULTURA
+
+**PREGÃO ELETRÔNICO Nº 14/2026**
+**PROCESSO ADMINISTRATIVO Nº 124/2026**
+
+**RECORRENTE**: [Sua Razão Social]
+**RECORRIDO**: [Nome do Concorrente Recorrido]
+
+---
+
+### I. DA ADMISSIBILIDADE E TEMPESTIVIDADE
+O presente recurso é tempestivo, formulado dentro do prazo regulamentar contado a partir da data de habilitação/vencedor do certame em tela, detendo a Recorrente pleno interesse de agir e legitimidade para contestar as irregularidades insanáveis identificadas.
+
+### II. DOS FATOS E DOS FUNDAMENTOS JURÍDICOS
+
+#### 1. DA INCOMPATIBILIDADE TÉCNICA DO PRODUTO OFERTADO (TELA HD vs. FHD)
+O Termo de Referência em seu item 2.4 é categórico ao exigir laptops com tela de alta definição FHD (Full High Definition - 1920x1080).
+Ocorre que, conforme se depreende do catálogo e ficha técnica anexada pelo Recorrido às fls. 45, o modelo ofertado detém exclusivamente **Tela HD (1366x768)**.
+A oferta de item inferior ao mínimo admissível afronta o princípio da vinculação ao instrumento convocatório previsto no **Art. 5º da Lei Federal nº 14.133/2021**.
+
+#### 2. DA FALTA DE COMPROVAÇÃO DE REGULARIDADE FISCAL ESTADUAL
+Ainda, o Recorrido descumpriu o item 9.3 do edital ao omitir a Certidão de Regularidade de Débitos Estaduais, apresentando mero protocolo de agendamento que não supre a prova inequívoca de regularidade.
+
+### III. DOS PEDIDOS
+Ante o exposto, requer-se:
+1. O recebimento do presente recurso e seu provimento;
+2. A desclassificação e inabilitação da proposta do Recorrido por infringência frontal ao edital;
+3. A convocação da Recorrente para assunção do item como legítima classificada.
+
+Localidade, 26 de Junho de 2026.
+[Sua Empresa]`,
+        analiseEstiloMarkdown: `### 🔍 Relatório de Auditoria do Concorrente
+
+Identificamos **2 irregularidades de gravidade ALTA** que servem como fundamentação jurídica plena para a desclassificação do concorrente.
+
+#### 📋 Quadro de Irregularidades Detectadas
+| Exigência do Edital | Apresentado pelo Concorrente | Gravidade | Base Legal | Impacto Prático |
+| :--- | :--- | :--- | :--- | :--- |
+| **Tela FHD 1080p** | Tela HD 1366x768 | **ALTA** | TR Item 2.4 | Desclassificação técnica direta por produto inferior. |
+| **Certidão SEFAZ** | Comprovante de agendamento | **ALTA** | Edital Item 9.3 | Inabilitação por falta de regularidade fiscal estadual. |
+
+#### 💡 Pontos de Atenção & Recomendações
+- O concorrente apresentou preço menor, porém com produto defasado. O recurso deve frisar o desvio técnico para convencer o pregoeiro de que o produto ofertado trará prejuízos à administração pública.`
+      };
+      return res.json({ analysis: fallbackData });
+    } finally {
+      await cleanupAttachmentResources(tempFilesToDelete, geminiFilesToDelete, aiClientForCleanup);
+    }
+  });
+
+  // API Route: Analyze Certificate / Document
+  app.post("/api/analyze-cert", async (req, res): Promise<any> => {
+    const tempFilesToDelete: string[] = [];
+    const geminiFilesToDelete: string[] = [];
+    let aiClientForCleanup: GoogleGenAI | undefined = undefined;
+
+    try {
+      const fileBase64 = req.body.fileBase64 || req.body.base64 || req.body.data;
+      const fileName = req.body.fileName || req.body.name || "documento.pdf";
+      const fileType = req.body.fileType || req.body.type || "application/pdf";
+      const uploadId = req.body.uploadId;
+      const docName = req.body.docName || req.body.name || fileName;
+      const clientAiConfig = req.body.aiConfig;
+
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
+
+      if (!fileBase64 && !fileName && !uploadId) {
+        return res.status(400).json({ error: "Nenhum arquivo ou nome de arquivo enviado para análise." });
+      }
+
+      const aiClient = getAiClientForConfig(aiConfig);
+      aiClientForCleanup = aiClient;
+
+      let contentParts: any[] = [];
+
+      const filePayload = {
+        base64: fileBase64,
+        uploadId,
+        name: fileName,
+        type: fileType
+      };
+
+      if (filePayload.base64 || filePayload.uploadId) {
+        const processed = await processFileAttachmentAsync(filePayload, aiClient);
+        if (processed) {
+          if (processed.part) contentParts.push(processed.part);
+          if (processed.tempFilePath) tempFilesToDelete.push(processed.tempFilePath);
+          if (processed.uploadedFileName) geminiFilesToDelete.push(processed.uploadedFileName);
+        }
+      }
+
+      contentParts.push({
+        text: `O usuário está preenchendo o campo de certidão/documento denominado exatamente como: "${docName}". O nome do arquivo enviado é "${fileName}". Por favor, analise as informações contidas no documento anexado e preencha a estrutura JSON de retorno.`
+      });
+
+      const systemInstruction = `Você é uma inteligência artificial especialista em auditoria e análise de documentos fiscais, certidões públicas e contratos societários brasileiros (ex: CND, CNPJ, Contrato Social, etc.).
+Sua tarefa é analisar o documento fornecido para extrair dados oficiais E realizar um teste de conformidade de tipo de acordo com a exigência informada.
+
+--- REGRA DE SEGURANÇA MÁXIMA DE DATA DE VENCIMENTO (EXPIRATION DATE) ---
+A análise da DATA DE VENCIMENTO do documento de certidão fiscal não pode errar sob hipótese alguma! A data deve ser extraída com precisão absoluta de 100%. Siga rigorosamente este protocolo de validação:
+1. IDENTIFICAÇÃO DE DATAS: No documento, localize claramente e diferencie a "Data de Emissão", "Data de Validade/Vencimento/Expiração" ou "Válida até". NUNCA confunda a data de emissão ou de consulta do documento com o vencimento dele.
+2. PALAVRAS-CHAVE DE VENCIMENTO: Procure no documento por termos como "válida até", "vencimento:", "validade:", "prazo de validade", "válido até", "limite de validade", "data de expiração", "expira em", "válida pelo prazo de", "vencimento em".
+3. CLÁUSULA DE PRAZO EM DIAS (VENCIMENTO CALCULADO): Muitas certidões brasileiras não trazem uma data de vencimento explícita, mas afirmam uma cláusula como "Esta certidão é válida por 90 (noventa) dias a contar da data de sua emissão" ou "válida por 180 dias". Nesses casos:
+   - Identifique a data de emissão com precisão (ex: "Emitida em 10/05/2026").
+   - Calcule matematicamente a data exata de validade somando a quantidade de dias descrita no prazo à data de emissão.
+   - Retorne esta data calculada no formato "YYYY-MM-DD".
+4. VALIDAÇÃO DE ANO: Certifique-se de que o ano extraído é coerente e confira os quatro dígitos (ex: 2026, 2027, etc.). Não confunda com anos de decretos, leis ou portarias que possam estar citados no texto da certidão (ex: "Portaria RFB nº 103 de 2021").
+5. DOCUMENTOS PERMANENTES/SEM VENCIMENTO: Se o documento enviado for um comprovante de CNPJ, Inscrição Estadual/Municipal ou Contrato Social/Estatuto que não expira e é permanente por natureza, você deve retornar a string de "expirationDate" vazia "".
+6. FORMATO DE SAÍDA: A data de vencimento final deve estar estritamente formatada como uma string "YYYY-MM-DD" (ex: "2026-12-15"). Se for atemporal, retorne "".
+
+REGRAS CRÍTICAS DE COMPATIBILIDADE (Evite classificar documentos corretos como incompatíveis!):
+Seja extremamente flexível, inteligente e tolerante com abreviações, sinônimos, órgãos emissores e variações de nomenclatura comuns no Brasil. O "documentMatchesRow" deve ser TRUE sempre que o arquivo enviado servir para comprovar a exigência descrita no campo solicitado.
+
+Considere as seguintes equivalências como VÁLIDAS (documentMatchesRow = true):
+1. Exigência "FGTS" ou "Regularidade do FGTS" ou "CRF": Aceita "Certificado de Regularidade do FGTS", "CRF", "Situação de Regularidade do Empregador", emitida pela Caixa Econômica Federal (CEF).
+2. Exigência "Tributos Federais", "Receita Federal", "União", "INSS", "Dívida Ativa da União" ou "Conjunta Federal": Aceita "Certidão Conjunta de Débitos Relativos a Tributos Federais e à Dívida Ativa da União", "Certidão de Débitos Previdenciários", "Certidão da Secretaria da Receita Federal do Brasil (RFB)" ou "Procuradoria-Geral da Fazenda Nacional (PGFN)".
+3. Exigência "Tributos Estaduais", "Fazenda Estadual", "ICMS", "Sefaz" ou "Receita Estadual": Aceita qualquer Certidão de Débitos Estaduais, certidões de Tributos Estaduais ativas ou não inscritos em dívida ativa estadual, emitida pela Secretaria de Fazenda/Finanças do respectivo Estado.
+4. Exigência "Tributos Municipais", "Fazenda Municipal", "ISS", "Prefeitura": Aceita "Certidão de Débitos Municipais" (seja de tributos mobiliários ou imobiliários), emitida pela Secretaria de Finanças/Fazenda do respectivo Municipio.
+5. Exigência "Trabalhista", "Débitos Trabalhistas", "Justiça do Trabalho", "CNDT": Aceita "Certidão Negativa de Débitos Trabalhistas" (CNDT), emitida pelo Tribunal Superior do Trabalho (TST) ou Justiça do Trabalho.
+6. Exigência "Falência e Recuperação Judicial", "Falência", "Recuperação": Aceita "Certidão Negativa de Falência e Recuperação Judicial", "Certidão de Distribuição Cível (Ações de Falência e Concordata)", emitida pelo Tribunal de Justiça do estado sede.
+7. Exigência "CNPJ" ou "Cartão CNPJ": Aceita "Comprovante de Inscrição e de Situação Cadastral" do CNPJ da Receita Federal.
+8. Exigência "Contrato Social", "Estatuto Social", "Estatuto", "Constituição", "Requerimento de Empresário": Aceita Contrato Social consolidado, alterações contratuais, estatuto social de S/A acompanhado de ata de eleição da diretoria, ou documento de empresário individual correspondente.
+9. Se o nome do arquivo carregado pelo usuário ou o conteúdo sugerir forte correlação com o nome do campo de destino, marque como "documentMatchesRow" = true.
+
+Apenas retorne "documentMatchesRow" = false se o documento enviado for bizarramente desconexo do campo de destino (ex: enviou uma certidão de FGTS no campo de Contrato Social, ou um CNPJ no campo da CNDT). Caso contrário, se for um equivalente ou se houver dúvida razoável, sempre dê preferência por aceitar (true) e use o campo "validationFeedback" para dar uma orientação ou aviso amigável.
+
+Retorne um objeto JSON contendo exatamente os seguintes campos em português brasileiro:
+1. "expirationDate": Uma string correspondente à data de validade/vencimento do documento no formato "YYYY-MM-DD". Se for permanente ou sem vencimento, retorne "".
+2. "documentMatchesRow": Um valor booleano (true ou false) conforme as regras de compatibilidade acima.
+3. "validationFeedback": Uma frase de justificativa bem esclarecedora.
+4. "extractedCompanyData": Um objeto contendo dados da empresa que você conseguir identificar ou deduzir com base no conteúdo lido do documento (como um Contrato Social, CNPJ ou CND). Deixe os campos vazios caso não localize no documento:
+   - "razonSocial": Razão Social / Nome da empresa
+   - "cnpj": Número do CNPJ formatado ou não
+   - "address": Endereço completo
+   - "phone": Telefone de contato
+   - "email": E-mail corporativo
+   - "representativeName": Nome do representante legal, sócio administrador ou outorgado
+   - "representativeCpf": CPF do representante/sócio
+
+Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o esquema e não adicione texto explicativo ou markdown fora das chaves do JSON.`;
+
+      console.log(`Chamando AI Router para análise da certidão: ${docName || fileName}...`);
+      const response = await generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: contentParts,
+        systemInstruction,
+        aiConfig,
+        jsonMode: true,
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              expirationDate: {
+                type: Type.STRING,
+                description: "Data de vencimento da certidão no formato YYYY-MM-DD (deixe em branco se não houver)"
+              },
+              documentMatchesRow: {
+                type: Type.BOOLEAN,
+                description: "Se o documento enviado coincide perfeitamente com a finalidade do campo atual"
+              },
+              validationFeedback: {
+                type: Type.STRING,
+                description: "Mensagem explicativa sobre a validação ou erro de correspondência de documento"
+              },
+              extractedCompanyData: {
+                type: Type.OBJECT,
+                properties: {
+                  razonSocial: { type: Type.STRING },
+                  cnpj: { type: Type.STRING },
+                  address: { type: Type.STRING },
+                  phone: { type: Type.STRING },
+                  email: { type: Type.STRING },
+                  representativeName: { type: Type.STRING },
+                  representativeCpf: { type: Type.STRING }
+                },
+                description: "Dados cadastrais da empresa identificados no documento"
+              }
+            },
+            required: ["expirationDate", "documentMatchesRow", "validationFeedback", "extractedCompanyData"]
+          }
+      });
+
+      const rawJson = response.text || "{}";
+      const parsedData = cleanAndParseJson(rawJson);
+      return res.json({ result: parsedData });
+    } catch (error: any) {
+      console.warn("Erro na análise da certidão, aplicando fallback inteligente local...", error.message || error);
+      try {
+        const { docName, fileName } = req.body;
+        const fallbackData = parseCertificateLocally(docName || fileName || "Documento");
+        return res.json({ result: fallbackData });
+      } catch (fallbackError: any) {
+        return res.status(500).json({ error: "Erro ao processar certidão local." });
+      }
+    } finally {
+      await cleanupAttachmentResources(tempFilesToDelete, geminiFilesToDelete, aiClientForCleanup);
+    }
+  });
+
+  // API Route: Generate Document (Proposals, Declarations, etc.)
+  app.post("/api/generate-document", async (req, res): Promise<any> => {
+    try {
+      const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText, proposalDetails, aiConfig: clientAiConfig } = req.body;
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
+
+      let prompt = "";
+
+      if (docType === "proposal") {
+        const details = proposalDetails || {};
+        const items = details.proposalItems || [];
+        const itemsListText = items.map((it: any, idx: number) => 
+          `| ${idx + 1} | ${it.description} | ${it.quantity} | ${it.brandModel} | R$ ${it.unitValue} | R$ ${it.totalValue} |`
+        ).join("\n");
+
+        prompt = `
+Você é um consultor especialista em licitações e editais governamentais no Brasil.
+Seu objetivo é gerar uma PROPOSTA COMERCIAL formal, em formato Markdown profissional e completa, baseada estritamente no modelo oficial de proposta fornecido pelo usuário.
+
+Siga exatamente o layout, estilo e estrutura do modelo a seguir, preenchendo todos os dados de acordo com os detalhes fornecidos pelo usuário e com as exigências específicas do edital.
+
+--- MODELO DE ESTRUTURA REQUERIDO (MANTENHA ESTA CONFIGURAÇÃO EXATA DE SEÇÕES) ---
+1. Cabeçalho Principal (Nome do proponente destacado em negrito, CNPJ, E-mail, Tel, Cidade - UF).
+2. Título Centralizado "PROPOSTA COMERCIAL" destacado, seguido do número do Pregão/Dispensa e Processo Administrativo.
+3. Destinatário formal ("Ao Setor de Dispensa / Comissão de Licitação da [Secretaria/Orgão Licitante]").
+4. Parágrafo de abertura declarando aceitar irrestritamente as diretrizes da presente Chamada Pública ou Pregão.
+5. Seção "1. IDENTIFICAÇÃO DO CONCORRENTE" formatada em tabela limpa, contendo as colunas/linhas: Razão Social, CNPJ, Endereço Comercial, Telefone / WhatsApp, E-mail Comercial, Responsável Legal e Dados Bancários.
+6. Seção "2. PLANILHA DE QUANTITATIVOS, ESPECIFICAÇÕES E PREÇOS" em tabela com colunas exatas: Item | Descrição Detalhada do Produto Conforme o Edital e Marca Ofertada | Qtd. | Marca / Modelo | Valor Unit. | Valor Total.
+   - Logo abaixo da tabela de itens, apresente destacado em caixa ou negrito:
+     **VALOR TOTAL GLOBAL DA PROPOSTA:** R$ [SOMA TOTAL GLOBAL]
+     **VALOR TOTAL POR EXTENSO:** [TOTAL GLOBAL POR EXTENSO]
+7. Seção "3. CONDIÇÕES COMERCIAIS OBRIGATÓRIAS" em tabela ou lista formal com: Prazo de Validade, Condições de Pagamento, Prazo de Entrega, e Local de Entrega.
+8. Seção "4. DECLARAÇÕES LEGAIS OBRIGATÓRIAS" contendo as declarações tradicionais obrigatórias (conformidade com leis, validade da proposta, inclusão de tributos/fretes, concordância com o edital, regularidade ambiental, e prazo de entrega).
+9. Fechamento formal com Cidade-UF, Data por extenso, e Bloco de Assinatura centralizado com Linha de assinatura, Nome do Representante, Cargo "Representante Legal / Titular", CPF e CNPJ.
+
+--- DADOS DA EMPRESA PROPONENTE ---
+- Nome / Razão Social: ${companyData?.razonSocial || "GABRIEL DUARTE MOTA SOUZA"}
+- CNPJ: ${companyData?.cnpj || "45.153.397/0001-90"}
+- Endereço completo: ${companyData?.address || "AV CONSELHEIRO JUNQUEIRA, Nº 595, BAIRRO CATU, ALAGOINHAS - BA, CEP: 48.015-900"}
+- E-mail: ${companyData?.email || "GABRIELTRAFEGO7@GMAIL.COM"}
+- Telefone: ${companyData?.phone || "(75) 9993-0808"}
+- Responsável Legal: ${companyData?.representativeName || "GABRIEL DUARTE MOTA SOUZA"}
+- CPF do Representante: ${companyData?.representativeCpf || "063.976.775-32"}
+- Dados Bancários: ${companyData?.bankDetails || "Banco: Nu Pagamentos S.A - Instituição de Pagamento (Cód. 0260) | Agência: 0001 | Conta: 64252707-9"}
+
+--- DADOS DA PROPOSTA PERSONALIZADA PELO USUÁRIO ---
+- Título da Proposta/Modalidade: ${details.proposalDispensa || "Dispensa de Licitação nº 046/2026"}
+- Processo Administrativo: ${details.proposalProcesso || "Processo Administrativo nº 209/2026"}
+- Órgão Destinatário: ${details.proposalOrgao || "Secretaria Municipal de Educação de Juazeiro/BA"}
+- Objeto/Intro: ${details.proposalObject || "fornecimento de equipamentos audiovisuais e tecnológicos destinados ao preenchimento integral das metas do Programa Educomunicativo Conexão Escola, sob coordenação da TV Escola Juazeiro"}
+- Itens da Proposta (Use estes valores exatos na tabela de preços):
+${itemsListText || `| 1 | ${analysisData?.descricaoProduto || "Equipamentos audiovisuais conforme especificações do edital"} | 08 | Marca Ofertada | R$ _,__ | R$ _,__ |`}
+- Valor Total Global da Proposta: R$ ${details.totalValueGlobal || "0,00"}
+- Valor Total por Extenso: ${details.totalValueExtenso || "Zero reais."}
+- Prazo de Validade da Proposta: ${details.valPrazo || "60 (sessenta) dias, a contar da data de apresentação deste documento."}
+- Condições de Pagamento: ${details.valPgto || "Em até 30 (trinta) dias úteis, contados da finalização da regular liquidação da despesa pelo Município."}
+- Prazo de Entrega: ${details.valEntrega || "Até 15 (quinze) dias corridos, contados a partir do recebimento da Ordem de Fornecimento ou Nota de Empenho."}
+- Local de Entrega: ${details.valLocal || "Secretaria Municipal de Educação de Juazeiro/BA, diretamente no Setor de TI. Sem custos logísticos para o órgão."}
+- Data e Local de Emissão: ${details.proposalDate || "Alagoinhas - BA, " + new Date().toLocaleDateString('pt-BR')}
+
+--- INSTRUÇÕES ADICIONAIS DO USUÁRIO ---
+${extraInstructions || "Nenhuma específica."}
+
+Gere o documento completo formatado em Markdown impecável, pronto para impressão ou conversão para PDF. Mantenha os valores monetários exatamente nos valores solicitados e preenchidos acima. Do não adicione introduções como "Aqui está a proposta", retorne APENAS o documento estruturado.
+`;
+      } else if (docType === "joint_declaration") {
+        prompt = `
+Escreva uma DECLARAÇÃO CONJUNTA formal para Pregão Eletrônico, baseada nas normas nacionais brasileiras de licitação, em formato Markdown profissional.
+Esta declaração deve englobar de forma consolidada os seguintes itens tradicionais frequentemente exigidos juntos nos editais:
+1. Inexistência de fatos supervenientes impeditivos da habilitação (Art. 32, § 2º, Lei 8.666/93 ou correspondentes Lei 14.133/21).
+2. Cumprimento do Art. 7º, inciso XXXIII, da Constituição Federal (Proibição de trabalho infantil e trabalho escravo).
+3. Enquadramento legal como Microempresa ou Empresa de Pequeno Porte (ME/EPP) se aplicável, ou declaração padrão de regularidade em licitações.
+4. Cumprimento da Lei Federal de anticorrupção.
+
+Dados da Empresa proponente:
+- Razão Social: ${companyData?.razonSocial || "Minha Empresa"}
+- CNPJ: ${companyData?.cnpj || "00.000.000/0001-00"}
+- Representante legal: ${companyData?.representativeName || "Diretor Responsável"}
+- CPF do Representante: ${companyData?.representativeCpf || "000.000.000-00"}
+
+Instruções extras: ${extraInstructions || "Nenhuma específica."}
+
+Crie um texto com tom jurídico impecável, contendo espaço para data, assinatura e local. Retorne exclusivamente o documento formatado em markdown.
+`;
+      } else if (docType === "custom_declaration") {
+        prompt = `
+Você é um assistente de elaboração de documentos fiscais e legais para licitações.
+Crie um modelo customizado preenchido da declaração exigida no edital.
+O usuário enviou um texto exemplo ou modelo a ser replicado ou preenchido:
+"${uploadedTemplateText || "DECLARAÇÃO DE COMPROMISSO E REGULARIDADE"}"
+
+Preencha as lacunas ou variáveis desse documento exemplo utilizando os seguintes dados da empresa proponente:
+- Razão Social: ${companyData?.razonSocial || "Minha Empresa"}
+- CNPJ: ${companyData?.cnpj || "00.000.000/0001-00"}
+- Representante legal: ${companyData?.representativeName || "Diretor Responsável"}
+- CPF do Representante: ${companyData?.representativeCpf || "000.000.000-00"}
+
+Dados retirados do Edital:
+- Prazo de Entrega: ${analysisData?.prazoEntrega || "Conforme edital"}
+- Prazo de Pagamento: ${analysisData?.prazoPagamento || "Conforme edital"}
+- Resumo do Escopo: ${analysisData?.descricaoProduto || "Conforme especificação"}
+
+Instruções adicionais do usuário: ${extraInstructions || "Substituir campos e tornar profissional."}
+
+Gere o documento final completo em formato Markdown, pronto para impressão ou assinatura.
+Manter a redação original do modelo fornecido pelo usuário, apenas aprimorando ou preenchendo as lacunas de forma precisa e integrada ao contexto comercial. Do not include headers explaining what you did, return directly the document.
+`;
+      } else {
+        return res.status(400).json({ error: "Tipo de documento inválido." });
+      }
+
+      console.log(`Chamando AI Router para gerar documento (${docType})...`);
+      const response = await generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: [{ text: prompt }],
+        aiConfig,
+      });
+
+      return res.json({ 
+        markdown: response.text,
+        title: docType === "proposal" ? (proposalDetails?.proposalFileTitle || "Proposta Comercial de Licitação.md") : undefined
+      });
+    } catch (error: any) {
+      console.warn("Erro na geração de documento, aplicando fallback inteligente local...", error.message || error);
+      try {
+        const { docType, companyData, analysisData, proposalDetails } = req.body;
+        const fallbackDoc = generateDocumentLocally(docType, companyData, analysisData, proposalDetails);
+        return res.json({ 
+          markdown: fallbackDoc,
+          title: docType === "proposal" ? (proposalDetails?.proposalFileTitle || "Proposta Comercial de Licitação.md") : undefined
+        });
+      } catch (fallbackError: any) {
+        return res.status(500).json({ error: "Erro ao preencher documento local." });
+      }
+    }
+  });
+
+  // API Route: Compare candidate products with edital product specifications using Google Search grounding
+  app.post("/api/compare-products", async (req, res): Promise<any> => {
+    try {
+      const { requiredSpecs, candidateProducts, aiConfig: clientAiConfig } = req.body;
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
+
+      if (!requiredSpecs || !candidateProducts || !Array.isArray(candidateProducts)) {
+        return res.status(400).json({ error: "Parâmetros 'requiredSpecs' ou 'candidateProducts' inválidos ou ausentes." });
+      }
+
+      console.log(`[Comparador] Iniciando comparação de ${candidateProducts.length} produtos em relação às especificações do edital.`);
+
+      const results = await Promise.all(
+        candidateProducts.map(async (productModel: string) => {
+          try {
+            const prompt = `Definição da licitação (Requisitos do Edital):
+"${requiredSpecs}"
+
+Produto Candidato que pretendo fornecer:
+"${productModel}"
+
+Instruções de Comparação de Rigor Máximo (Risco de Desclassificação):
+Você é um auditor de licitação extremamente rígido e meticuloso. Em licitações públicas, pequenos detalhes técnicos e conectores causam a imediata desclassificação jurídica e técnica ("Desclassificação sumária").
+Por favor, faça uma busca detalhada no Google para mapear a ficha técnica real oficial exata do produto "${productModel}", prestando atenção cirúrgica aos detalhes.
+
+Compare item por item em relação ao Edital. Seja ABSOLUTAMENTE RIGOROSO com:
+1. Conectores e Portas Físicas:
+   - Se o edital exige conexão P2 (conector analógico estéreo comum de 3 pinos) e o produto tem conector P3 (conector de 4 pinos com microfone integrado), ou vice-versa, isso é uma DIVERGÊNCIA relevante.
+   - Se o edital exige conector USB e o produto possui conector P2/P3 analógico (ou vice-versa), isso é um impeditivo grave. Marque como "DIVERGENTE" e atribua "NAO_ATENDE" ou "ATENDE_PARCIALMENTE" dependendo da gravidade, reduzindo a nota drasticamente.
+2. Dimensões, Materiais e Ergonomia (ex: Normas regulamentadoras NR17, pesos, espessuras).
+3. Capacidade, Velocidade, Tensão Elétrica ou Conexões Secundárias.
+
+Se houver QUALQUER diferença ou incerteza técnica, você não deve ignorar ou justificar como "facilmente adaptável" ou "compatível". Se não houver compatibilidade nativa direta sem adaptadores externos (salvo se o edital explicitamente permitir adaptadores), classifique o status como "DIVERGENTE" e reduza o "suitabilityScore" de forma correspondente.
+
+Retorne sua resposta estritamente no seguinte formato JSON, sem comentários nem tags codeblock extras:
+{
+  "productName": "Nome exato consultado e modelo do produto com marca",
+  "matchStatus": "ATENDE" | "ATENDE_PARCIALMENTE" | "NAO_ATENDE",
+  "suitabilityScore": 0, (grau realístico de conformidade técnica exata de 0 a 100),
+  "specsAnalysis": [
+    {
+      "requirement": "Requisito exato extraído do edital",
+      "foundSpecText": "Valor ou característica técnica exata encontrada no produto candidato",
+      "status": "ATENDE" | "DIVERGENTE" | "NAO_ENCONTRADO",
+      "comment": "Análise técnica exaustiva demonstrando se atende ou viola a exigência"
+    }
+  ],
+  "pros": ["Pontuais pontos de aderência com a licitação"],
+  "cons": ["Possíveis divergências identificadas, pontos fracos ou potenciais motivos para auditoria ou desclassificação técnica"],
+  "conclusion": "Parecer definitivo fundamentado explicando se o pregoeiro ou comissão técnica pode desclassificar o produto por conta de conectores, interfaces, potências ou normas, sugerindo alternativas exatas se necessário."
+}
+
+Retorne exclusivamente o JSON bruto estruturado e validável.`;
+
+            const response = await generateAiResponse({
+              model: "gemini-3.7-flash",
+              contents: [{ text: prompt }],
+              aiConfig,
+              jsonMode: true,
+              tools: [{ googleSearch: {} }]
+            });
+
+            const parsedResult = cleanAndParseJson(response.text);
+            return {
+              originalName: productModel,
+              success: true,
+              data: parsedResult,
+              sources: response.groundingMetadata?.groundingChunks || response.candidates?.[0]?.groundingMetadata?.groundingChunks || []
+            };
+          } catch (err: any) {
+            console.warn(`Erro ao analisar produto "${productModel}":`, err.message || err);
+            try {
+              const fallbackSingle = compareProductsLocally(requiredSpecs, [productModel]).results[0];
+              return fallbackSingle;
+            } catch (fallbackErr) {
+              return {
+                originalName: productModel,
+                success: false,
+                error: err.message || "Erro desconhecido na análise fidedigna."
+              };
+            }
+          }
+        })
+      );
+
+      return res.json({ results });
+    } catch (error: any) {
+      console.warn("Erro na rota de comparação de produtos:", error.message || error);
+      return res.status(500).json({ error: error.message || "Erro interno ao comparar produtos." });
+    }
+  });
+
+  // API Route: Floating Gemini AI Chat Router
+  app.post("/api/chat", async (req, res): Promise<any> => {
+    try {
+      const { messages, companyData, activeEditalAnalysis, aiConfig: clientAiConfig } = req.body;
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+
+      if (!aiConfig) {
+        return res.status(400).json({ 
+          error: "❌ Chave de API não configurada. Acesse 'IA & Modelos', insira sua chave e clique em 'Salvar Configurações'.",
+          code: "NO_API_KEY"
+        });
+      }
+
+      if (!messages || !Array.isArray(messages)) {
+        return res.status(400).json({ error: "Mensagens inválidas ou ausentes." });
+      }
+
+      // Format messages into Google Gen AI standard format for chatting.
+      // We can map { role: 'user' | 'assistant', content: string, attachment?: any } to { role: 'user' | 'model', parts: [...] }
+      const formattedHistory = messages.map((m: any) => {
+        const parts: any[] = [];
+        
+        if (m.attachment && m.attachment.data) {
+          let base64Data = String(m.attachment.data);
+          if (base64Data.includes("base64,")) {
+            base64Data = base64Data.split("base64,")[1];
+          }
+          base64Data = base64Data.trim();
+
+          const isRealBase64 = base64Data.length > 20 &&
+            !base64Data.startsWith("[") &&
+            !base64Data.includes(" ") &&
+            /^[A-Za-z0-9+/=\r\n]+$/.test(base64Data);
+
+          if (isRealBase64) {
+            parts.push({
+              inlineData: {
+                mimeType: m.attachment.type || "image/png",
+                data: base64Data
+              }
+            });
+          } else {
+            parts.push({
+              text: `[Anexo de imagem/arquivo enviado previamente: ${m.attachment.name || "arquivo"}]`
+            });
+          }
+        }
+        
+        parts.push({ text: m.content || "Analise o arquivo ou imagem anexada acima." });
+        
+        return {
+          role: m.role === "assistant" ? "model" : "user",
+          parts: parts
+        };
+      });
+
+      // In the system instruction (or prepended context), we provide info about the company certs and active edital analysis if present!
+      const contextPrefix = `
+Você é a HORASIS AI, a Assessora e Consultora Inteligente de Licitações, Pregões Eletrônicos e Cotações de Mercado da plataforma HORASIS.
+Sua missão é dar respostas ultra-claras, diretas, resumidas e perfeitamente explicadas para os fornecedores e licitantes.
+
+🎯 DIRETRIZES FUNDAMENTAIS DE RESPOSTA (OBRIGATÓRIO):
+1. **RESPOSTAS DIRETAS, RESUMIDAS E EXPLICÁVEIS**:
+   - Responda com clareza e sem enrolação nas primeiras linhas. Os usuários querem praticidade e facilidade.
+   - Apresente os resultados, conclusões e valores numéricos diretamente logo de início.
+
+2. **PROIBIDO QUALQUER CÓDIGO OU SÍMBOLO DE FÓRMULA LATEX**:
+   - ❌ NUNCA USE '$$', '\\text{}', '\\times', '\\rightarrow', '\\cdot' ou qualquer marcação matemática LaTeX.
+   - ✅ Escreva todas as fórmulas, equações e cálculos em português simples e legível.
+   - Exemplo correto de cálculo de lucro e margem:
+     • **Preço de Venda do Governo:** R$ 800,00/mês
+     • **Custo do Produto/Serviço:** R$ 550,00/mês
+     • **Impostos Estimados (~6% Simples):** R$ 48,00/mês
+     • **Lucro Líquido Real:** **R$ 202,00 por mês** (Lucro Anual: R$ 2.424,00)
+
+3. **REGRAS SOBRE EDITAIS E DOCUMENTOS ANEXOS**:
+   - Só analise, mencione ou tome como base um edital se o usuário tiver explicitamente SELECIONADO um edital no Foco do Chat ou se tiver enviado um arquivo/documento em anexo.
+   - Se NENHUM edital estiver selecionado e nenhum anexo for enviado na mensagem, responda a qualquer dúvida do usuário de forma totalmente geral, direta e útil, sem inventar nem assumir nenhum edital prévio.
+
+4. **PESQUISA AUTÔNOMA NA INTERNET (WEB SEARCH) EM TEMPO REAL**:
+   - Você possui autonomia e ferramenta ativa de pesquisa no Google em tempo real.
+   - Sempre que o usuário solicitar preços de produtos, serviços, licenças de software (ex: Claude, ChatGPT, ERPs, softwares de IA), equipamentos, insumos ou cotações de mercado, PESQUISE imediatamente dados atualizados na internet.
+   - NUNCA invente preços ou dados se não souber. Se pesquisar, traga os valores e estimativas reais de mercado vigentes no Brasil.
+
+5. **ESTRUTURA LEGÍVEL E FORMATO**:
+   - Organize as respostas usando marcadores em tópicos (• ou -) com títulos destacados em negrito.
+   - Em cenários com tabelas, garanta que cada linha esteja formatada corretamente e seja fácil de ler no celular e computador.
+
+Informações da Empresa do Usuário:
+${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyData.cnpj}\n- Representante: ${companyData.representativeName}` : "Empresa não fornecida."}
+
+Edital Selecionado pelo Usuário nesta Conversa:
+${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum edital selecionado pelo usuário para esta conversa."}
+`;
+
+      // Invoke Gemini API with system instruction & Google Search grounding
+      console.log("Chamando Gemini API Chat com Web Search ativo...");
+      const response = await generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: formattedHistory,
+        systemInstruction: contextPrefix,
+        tools: [{ googleSearch: {} }],
+        aiConfig,
+      });
+
+      return res.json({ reply: response.text });
+    } catch (error: any) {
+      console.warn("Erro no chat com IA, aplicando resposta do assistente local:", error.message || error);
+      const errMsg = error?.message || "Erro de conexão com a IA.";
+      const reason = describeAiFailure(error);
+      try {
+        const { messages, companyData, activeEditalAnalysis } = req.body;
+        const fallbackReply = generateChatLocally(messages || [], companyData, activeEditalAnalysis);
+        // Resposta degradada: entrega o texto local, mas deixa explícito que a IA falhou.
+        return res.json({
+          reply: `⚠️ **Resposta gerada localmente — a IA não respondeu.**\n${reason}\n\n---\n\n${fallbackReply}`,
+          degraded: true,
+          reason
+        });
+      } catch (fallbackError: any) {
+        return res.status(400).json({ error: errMsg });
+      }
+    }
+  });
+
+  // API Route: Generate Chat Title based on first message
+  app.post("/api/chat/title", async (req, res): Promise<any> => {
+    try {
+      const { message, aiConfig: clientAiConfig } = req.body;
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+      if (!message || typeof message !== "string") {
+        return res.status(400).json({ error: "Mensagem ausente ou inválida." });
+      }
+
+      const prompt = `Gere um título curto, direto e descritivo (no máximo 3 ou 4 palavras) para um chat de licitações públicas que se inicia com a seguinte dúvida do usuário. Não coloque aspas, não adicione pontos finais nem explicações adicionais, retorne APENAS o título direto em português do Brasil. Se for apenas uma saudação inicial simples (como 'olá', 'tudo bem', 'bom dia'), retorne 'Conversa Rápida'.
+
+Dúvida do usuário: "${message.substring(0, 500)}"`;
+
+      console.log("Chamando Gemini API para gerar título de conversa...");
+      const response = await generateAiResponse({
+        model: "gemini-3.7-flash",
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        aiConfig,
+      });
+
+      let generatedTitle = response.text ? response.text.trim() : "";
+      // Strip any surrounding quotes or punctuation if the AI included them
+      generatedTitle = generatedTitle.replace(/^["'“”‘`]+|["'“”’`]+$/g, "").replace(/[.!?]+$/, "").trim();
+
+      if (!generatedTitle || generatedTitle.length > 50) {
+        generatedTitle = "Discussão de Edital";
+      }
+
+      return res.json({ title: generatedTitle });
+    } catch (error: any) {
+      console.warn("Erro ao gerar título de conversa, usando fallback local...", error.message || error);
+      return res.json({ title: null });
+    }
+  });
+
+  // API Route: Generate description/notes for a user-created certificate using IA
+  app.post("/api/generate-cert-description", async (req, res): Promise<any> => {
+    try {
+      const { name, aiConfig: clientAiConfig } = req.body;
+      const aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
+      if (!name || typeof name !== "string") {
+        return res.status(400).json({ error: "Nome da certidão ausente ou inválido." });
+      }
+
+      const prompt = `Você é um assessor especialista em licitações públicas no Brasil.
+O usuário criou uma certidão personalizada ou bloco de upload com o nome: "${name}".
+Sua tarefa é explicar brevemente para que serve essa certidão, o que ela comprova e onde geralmente é emitida.
+Escreva de forma extremamente concisa, técnica e direta, em português do Brasil, no máximo em uma ou duas frases (máximo 150 caracteres).
+Evite preâmbulos como "Esta certidão serve para", comece diretamente com o que ela faz.
+Exemplo para "Certidão de Falência e Recuperação Cível": "Comprova a idoneidade financeira e ausência de processos falimentares ativos da empresa perante o Tribunal de Justiça."`;
+
+      console.log(`Chamando Gemini API para gerar descrição da certidão: ${name}...`);
+      
+      let generatedDescription = "";
+      if (aiConfig) {
+        const response = await generateAiResponse({
+          model: "gemini-3.7-flash",
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          aiConfig,
+        });
+        generatedDescription = response.text ? response.text.trim() : "";
+      }
+
+      if (!generatedDescription || generatedDescription.length > 250) {
+        generatedDescription = `Documento auxiliar ou certidão de regularidade de "${name}" necessária para a comprovação de requisitos habilitatórios no processo de licitação pública.`;
+      }
+
+      return res.json({ description: generatedDescription });
+    } catch (error: any) {
+      console.warn("Erro ao gerar descrição da certidão por IA, usando fallback local...", error.message || error);
+      const name = req.body.name || "Documento";
+      return res.json({ 
+        description: `Documento ou certidão de regularidade para comprovar as obrigações e qualificações de "${name}" conforme as exigências do instrumento convocatório.`
+      });
+    }
+  });
+
+
+}

@@ -1,19 +1,26 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { 
-  Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles, 
-  CheckCircle, DollarSign, Calendar, Landmark, FileSpreadsheet, ArrowUpDown, 
-  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database
+import {
+  Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
+  CheckCircle, Calendar, FileSpreadsheet, ArrowUpDown,
+  Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database,
+  Kanban, Palette, GripVertical, Pencil, MoreHorizontal
 } from "lucide-react";
-import { DisputaRow, DisputaStatus, EditalAnalysis } from "../types";
-import { apiFetch, prepareAttachmentForServer, formatAiError } from "../utils/aiClientHelper";
-import { 
-  fetchDisputasFromSupabase, 
-  saveDisputaToSupabase, 
+import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
+import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
+import { getContrastTextColor } from "../utils/disputaDates";
+import { useEditalHistory } from "../utils/editalHistory";
+import DisputaDateTag from "./DisputaDateTag";
+import {
+  fetchDisputasFromSupabase,
+  saveDisputaToSupabase,
   deleteDisputaFromSupabase,
   subscribeToSupabaseTable,
   mapDisputaFromDb,
   generateUUID,
-  getSupabaseFullSchemaSQL
+  getSupabaseFullSchemaSQL,
+  fetchStatusDisputasFromSupabase,
+  saveStatusDisputaToSupabase,
+  deleteStatusDisputaFromSupabase
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 import { Button } from "./ui/button";
@@ -21,6 +28,24 @@ import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { Badge } from "./ui/badge";
 import { Card } from "./ui/card";
+import { Label } from "./ui/label";
+import { cn } from "../lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog";
 
 interface DisputasSheetTabProps {
   activeEdital?: EditalAnalysis | null;
@@ -113,11 +138,153 @@ function extractEditalFields(editalObj: EditalAnalysis, fileNameFallback?: strin
 // Initial empty array - only user/Supabase data exists
 const INITIAL_DISPUTAS: DisputaRow[] = [];
 
+// Status padrões, criados automaticamente na primeira vez que o usuário abre a planilha.
+// A partir daí são apenas registros normais do usuário: podem ser renomeados,
+// recoloridos ou excluídos livremente, como qualquer status criado por ele.
+const DEFAULT_STATUS_TYPES: Omit<DisputaStatusType, "id">[] = [
+  { label: "Agendada", color: "#64748b", position: 0 },
+  { label: "Em Disputa", color: "#f59e0b", position: 1 },
+  { label: "Vencida", color: "#22c55e", position: 2 },
+  { label: "Em Recurso", color: "#8b5cf6", position: 3 },
+  { label: "Homologada", color: "#10b981", position: 4 },
+  { label: "Perdida", color: "#ef4444", position: 5 },
+  { label: "Cancelada", color: "#71717a", position: 6 }
+];
+
+// Paleta de cores oferecida para o usuário escolher ao criar/editar um status.
+const STATUS_COLOR_PALETTE = [
+  "#ef4444", "#f97316", "#f59e0b", "#eab308", "#84cc16", "#22c55e", "#10b981",
+  "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1", "#8b5cf6", "#a855f7",
+  "#d946ef", "#ec4899", "#f43f5e", "#64748b"
+];
+
+const VIEW_MODES: { id: "spreadsheet" | "kanban"; label: string; icon: typeof FileSpreadsheet }[] = [
+  { id: "spreadsheet", label: "Painel", icon: LayoutGrid },
+  { id: "kanban", label: "Kanban", icon: Kanban }
+];
+
+const PORTAL_OPTIONS = ["Compras.gov.br", "BLL Compras", "Licitações-e", "Bec SP", "PNCP", "Outro Portal"];
+
+const SORT_FIELDS: { key: keyof DisputaRow; label: string }[] = [
+  { key: "dataHoraDisputa", label: "Data da disputa" },
+  { key: "orgao", label: "Órgão comprador" },
+  { key: "status", label: "Status" },
+  { key: "valorEstimadoItem", label: "Valor estimado" },
+  { key: "nossoValorAlvo", label: "Nosso alvo" }
+];
+
+// Estilo comum dos campos editáveis da planilha: ocupam a largura disponível
+// e nunca ultrapassam a coluna, evitando rolagem horizontal.
+const CELL_INPUT =
+  "w-full min-w-0 rounded border border-transparent bg-transparent px-1.5 py-1 text-foreground transition hover:border-input focus:border-primary focus:bg-background focus:outline-none";
+
+const formatBRL = (value: number) =>
+  (value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+// Campo rotulado da grade editável — o rótulo mantém o dado compreensível
+// mesmo quando a grade se empilha em telas estreitas.
+function SheetField({ label, className = "", children }: { label: string; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <span className="mb-0.5 block text-[9.5px] font-bold uppercase tracking-wide text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+// Paleta de cores reaproveitada pelo Kanban e pelo gerenciador de status.
+function ColorSwatches({ color, onChange }: { color: string; onChange: (color: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="grid grid-cols-9 gap-1.5">
+        {STATUS_COLOR_PALETTE.map(c => (
+          <button
+            key={c}
+            type="button"
+            title={c}
+            onClick={() => onChange(c)}
+            className={`h-5 w-5 cursor-pointer rounded-full border-2 transition ${color === c ? "border-foreground" : "border-transparent"}`}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+      </div>
+      <input
+        type="color"
+        value={color}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8 w-full cursor-pointer rounded-md border border-input bg-transparent"
+        title="Escolher qualquer outra cor"
+      />
+    </div>
+  );
+}
+
+// Editor de nome + cor de um status.
+function StatusColorEditor({
+  label,
+  color,
+  labelPlaceholder,
+  autoFocus,
+  onLabelChange,
+  onLabelCommit,
+  onLabelSubmit,
+  onColorChange
+}: {
+  label: string;
+  color: string;
+  labelPlaceholder?: string;
+  autoFocus?: boolean;
+  onLabelChange: (value: string) => void;
+  onLabelCommit?: () => void;
+  onLabelSubmit?: () => void;
+  onColorChange: (color: string) => void;
+}) {
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Nome do status</Label>
+        <Input
+          autoFocus={autoFocus}
+          value={label}
+          placeholder={labelPlaceholder}
+          onChange={(e) => onLabelChange(e.target.value)}
+          onBlur={onLabelCommit}
+          onKeyDown={(e) => { if (e.key === "Enter" && onLabelSubmit) onLabelSubmit(); }}
+          className="h-8 text-xs"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
+        <ColorSwatches color={color} onChange={onColorChange} />
+      </div>
+    </>
+  );
+}
+
 export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps) {
-  // Mode Switcher: "spreadsheet" (Planilha Interativa Excel) vs "dashboard" (Painel Visual)
-  const [viewMode, setViewMode] = useState<"spreadsheet" | "dashboard">(() => {
-    return (localStorage.getItem("aip_disputas_view_mode") as "spreadsheet" | "dashboard") || "spreadsheet";
+  const editalHistory = useEditalHistory();
+
+  // Mode Switcher: "spreadsheet" (Painel — cartões somente leitura, edição via ícone lápis) ou "kanban" (Quadro Kanban)
+  const [viewMode, setViewMode] = useState<"spreadsheet" | "kanban">(() => {
+    const stored = localStorage.getItem("aip_disputas_view_mode");
+    return stored === "kanban" ? "kanban" : "spreadsheet";
   });
+
+  // Tipos de status personalizados do usuário (rótulo + cor), usados nos seletores
+  // de status e como colunas do quadro Kanban.
+  const [statusTypes, setStatusTypes] = useState<DisputaStatusType[]>(() => {
+    const saved = localStorage.getItem("aip_disputas_status_types");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [];
+  });
+  const statusTypesSeededRef = useRef(false);
 
   // Initialize with empty array — Supabase is the source of truth
   // localStorage is used only as offline cache/fallback display until Supabase loads
@@ -292,6 +459,260 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     };
   }, [refreshFromSupabase]);
 
+  // Load the user's custom status types from Supabase. If they have none yet
+  // (first time using the feature), seed the defaults and persist them so
+  // this is a one-time migration per user.
+  useEffect(() => {
+    async function loadStatusTypes() {
+      try {
+        const dbTypes = await fetchStatusDisputasFromSupabase();
+        if (dbTypes.length > 0) {
+          setStatusTypes(dbTypes);
+          localStorage.setItem("aip_disputas_status_types", JSON.stringify(dbTypes));
+        } else if (!statusTypesSeededRef.current) {
+          statusTypesSeededRef.current = true;
+          const seeded: DisputaStatusType[] = DEFAULT_STATUS_TYPES.map(s => ({ ...s, id: generateUUID() }));
+          setStatusTypes(seeded);
+          localStorage.setItem("aip_disputas_status_types", JSON.stringify(seeded));
+          seeded.forEach(s => { saveStatusDisputaToSupabase(s).catch(() => {}); });
+        }
+      } catch (e) {
+        console.warn("Erro ao carregar tipos de status:", e);
+      }
+    }
+    loadStatusTypes();
+  }, []);
+
+  // Any status still referenced by a dispute but missing from statusTypes (e.g. data
+  // imported from elsewhere) gets an auto-generated grey column so nothing is hidden.
+  useEffect(() => {
+    if (statusTypes.length === 0) return;
+    const knownLabels = new Set(statusTypes.map(s => s.label));
+    const orphanLabels = Array.from(new Set(disputas.map(r => r.status).filter(s => s && !knownLabels.has(s))));
+    if (orphanLabels.length === 0) return;
+
+    const maxPosition = statusTypes.reduce((max, s) => Math.max(max, s.position), -1);
+    const orphanTypes: DisputaStatusType[] = orphanLabels.map((label, i) => ({
+      id: generateUUID(),
+      label,
+      color: "#71717a",
+      position: maxPosition + 1 + i
+    }));
+    setStatusTypes(prev => [...prev, ...orphanTypes]);
+    orphanTypes.forEach(s => { saveStatusDisputaToSupabase(s).catch(() => {}); });
+  }, [disputas, statusTypes]);
+
+  useEffect(() => {
+    localStorage.setItem("aip_disputas_status_types", JSON.stringify(statusTypes));
+  }, [statusTypes]);
+
+  // Cria um novo tipo de status (usado tanto pelo botão "Novo Status" quanto por "+ Nova Coluna" no Kanban)
+  const handleAddStatusType = (label: string, color: string) => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    if (statusTypes.some(s => s.label.toLowerCase() === trimmed.toLowerCase())) {
+      showToast("Já existe um status com esse nome.", "info");
+      return;
+    }
+    const maxPosition = statusTypes.reduce((max, s) => Math.max(max, s.position), -1);
+    const newType: DisputaStatusType = { id: generateUUID(), label: trimmed, color, position: maxPosition + 1 };
+    setStatusTypes(prev => [...prev, newType]);
+    saveStatusDisputaToSupabase(newType).catch(() => {});
+    showToast(`Status "${trimmed}" criado com sucesso.`);
+  };
+
+  // Renomeia e/ou recolore um status existente. Ao renomear, atualiza também
+  // todas as disputas que usam o rótulo antigo, para não perder a referência.
+  const handleUpdateStatusType = (id: string, updates: { label?: string; color?: string }) => {
+    const current = statusTypes.find(s => s.id === id);
+    if (!current) return;
+    const newLabel = updates.label?.trim();
+    const oldLabel = current.label;
+    const updated: DisputaStatusType = {
+      ...current,
+      label: newLabel || current.label,
+      color: updates.color || current.color
+    };
+
+    setStatusTypes(prev => prev.map(s => s.id === id ? updated : s));
+    saveStatusDisputaToSupabase(updated).catch(() => {});
+
+    if (newLabel && newLabel !== oldLabel) {
+      setDisputas(prev => prev.map(r => {
+        if (r.status === oldLabel) {
+          const renamed = { ...r, status: newLabel };
+          saveDisputaToSupabase(renamed).catch(() => {});
+          return renamed;
+        }
+        return r;
+      }));
+    }
+    showToast(`Status "${updated.label}" atualizado.`);
+  };
+
+  // Exclui um status. Se houver disputas usando-o, abre o diálogo que pergunta
+  // para qual status elas devem ser movidas antes da exclusão.
+  const handleDeleteStatusType = (id: string) => {
+    const target = statusTypes.find(s => s.id === id);
+    if (!target) return;
+    if (statusTypes.length <= 1) {
+      showToast("É preciso manter ao menos um status cadastrado.", "info");
+      return;
+    }
+    const inUseCount = disputas.filter(r => r.status === target.label).length;
+    if (inUseCount > 0) {
+      setMoveCardsToStatus(statusTypes.find(s => s.id !== id)?.label || "");
+      setStatusToDelete(target);
+      return;
+    }
+    removeStatusType(target);
+  };
+
+  const removeStatusType = (target: DisputaStatusType) => {
+    setStatusTypes(prev => prev.filter(s => s.id !== target.id));
+    deleteStatusDisputaFromSupabase(target.id).catch(() => {});
+    showToast(`Status "${target.label}" removido.`, "info");
+  };
+
+  // Confirma a exclusão de um status em uso, movendo antes as disputas afetadas.
+  const handleConfirmDeleteStatusType = () => {
+    if (!statusToDelete) return;
+    const target = statusToDelete;
+    const destination = moveCardsToStatus;
+
+    setDisputas(prev => prev.map(r => {
+      if (r.status === target.label) {
+        const moved = { ...r, status: destination };
+        saveDisputaToSupabase(moved).catch(() => {});
+        return moved;
+      }
+      return r;
+    }));
+
+    removeStatusType(target);
+    setStatusToDelete(null);
+  };
+
+  // Reordena as colunas (drag-and-drop no Kanban) e persiste a nova posição de cada uma.
+  const handleReorderStatusTypes = (orderedIds: string[]) => {
+    setStatusTypes(prev => {
+      const byId = new Map(prev.map(s => [s.id, s]));
+      const reordered = orderedIds
+        .map((id, index) => {
+          const s = byId.get(id);
+          return s ? { ...s, position: index } : null;
+        })
+        .filter((s): s is DisputaStatusType => !!s);
+      reordered.forEach(s => { saveStatusDisputaToSupabase(s).catch(() => {}); });
+      return reordered;
+    });
+  };
+
+  // ─── Kanban board: drag-and-drop state & handlers (mesmo padrão nativo HTML5 usado no resto do app) ───
+  const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const [dragOverColumnLabel, setDragOverColumnLabel] = useState<string | null>(null);
+  const [draggingColumnId, setDraggingColumnId] = useState<string | null>(null);
+  const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null);
+
+  const [isAddColumnOpen, setIsAddColumnOpen] = useState(false);
+  const [newColumnLabel, setNewColumnLabel] = useState("");
+  const [newColumnColor, setNewColumnColor] = useState(STATUS_COLOR_PALETTE[0]);
+
+  const [editColumnLabel, setEditColumnLabel] = useState("");
+  const [editColumnColor, setEditColumnColor] = useState("");
+
+  const handleCardDragStart = (e: React.DragEvent, disputaId: string) => {
+    e.stopPropagation();
+    setDraggingCardId(disputaId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/x-disputa-id", disputaId);
+  };
+
+  const handleCardDragEnd = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setDraggingCardId(null);
+    setDragOverColumnLabel(null);
+  };
+
+  const handleColumnBodyDragOver = (e: React.DragEvent, columnLabel: string) => {
+    if (!draggingCardId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverColumnLabel(columnLabel);
+  };
+
+  const handleColumnBodyDrop = (e: React.DragEvent, columnLabel: string) => {
+    if (!draggingCardId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const disputaId = e.dataTransfer.getData("text/x-disputa-id") || draggingCardId;
+    setDraggingCardId(null);
+    setDragOverColumnLabel(null);
+    if (!disputaId) return;
+    const row = disputas.find(r => r.id === disputaId);
+    if (row && row.status !== columnLabel) {
+      handleStatusChange(disputaId, columnLabel);
+    }
+  };
+
+  // Reordenar colunas só começa a partir da alça (GripVertical) do cabeçalho —
+  // nunca a partir de um card ou de um clique em botão dentro da coluna.
+  const handleColumnHeaderDragStart = (e: React.DragEvent, columnId: string) => {
+    e.stopPropagation();
+    setDraggingColumnId(columnId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/x-column-id", columnId);
+  };
+
+  const handleColumnHeaderDragEnd = (e: React.DragEvent) => {
+    e.stopPropagation();
+    setDraggingColumnId(null);
+    setDragOverColumnId(null);
+  };
+
+  const handleColumnHeaderDragOver = (e: React.DragEvent, columnId: string) => {
+    if (!draggingColumnId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggingColumnId !== columnId) setDragOverColumnId(columnId);
+  };
+
+  const handleColumnHeaderDrop = (e: React.DragEvent, targetColumnId: string) => {
+    if (!draggingColumnId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const sourceColumnId = e.dataTransfer.getData("text/x-column-id") || draggingColumnId;
+    setDraggingColumnId(null);
+    setDragOverColumnId(null);
+    if (!sourceColumnId || sourceColumnId === targetColumnId) return;
+
+    const ordered = [...statusTypes].sort((a, b) => a.position - b.position).map(s => s.id);
+    const sourceIndex = ordered.indexOf(sourceColumnId);
+    const targetIndex = ordered.indexOf(targetColumnId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+    ordered.splice(sourceIndex, 1);
+    ordered.splice(targetIndex, 0, sourceColumnId);
+    handleReorderStatusTypes(ordered);
+  };
+
+  const handleConfirmAddColumn = () => {
+    handleAddStatusType(newColumnLabel, newColumnColor);
+    setNewColumnLabel("");
+    setNewColumnColor(STATUS_COLOR_PALETTE[0]);
+    setIsAddColumnOpen(false);
+  };
+
+  const handleOpenColumnEditor = (statusType: DisputaStatusType) => {
+    setEditColumnLabel(statusType.label);
+    setEditColumnColor(statusType.color);
+  };
+
+  const handleConfirmEditColumn = (id: string) => {
+    handleUpdateStatusType(id, { label: editColumnLabel, color: editColumnColor });
+  };
+
+  const sortedStatusTypes = [...statusTypes].sort((a, b) => a.position - b.position);
+
   // History Editais list for auto-fill feature
   const [historyOptions, setHistoryOptions] = useState<AnalyzedEditalOption[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string>("");
@@ -303,14 +724,6 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   const [sortField, setSortField] = useState<keyof DisputaRow>("dataHoraDisputa");
   const [sortAsc, setSortAsc] = useState(true);
 
-  // Active Cell state for Spreadsheet Mode Formula Bar
-  const [activeCell, setActiveCell] = useState<{ rowId: string; colKey: keyof DisputaRow; colName: string; colLetter: string } | null>({
-    rowId: disputas[0]?.id || "disp-101",
-    colKey: "orgao",
-    colName: "Órgão Comprador",
-    colLetter: "A"
-  });
-
   // Modal State for Add / Edit
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<DisputaRow | null>(null);
@@ -318,6 +731,11 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   // Modal State for Row Deletion & SQL Setup
   const [rowToDelete, setRowToDelete] = useState<DisputaRow | null>(null);
   const [showSqlSetupModal, setShowSqlSetupModal] = useState(false);
+
+  // Gerenciador de status (disponível em todos os modos) e exclusão de status em uso
+  const [showStatusManager, setShowStatusManager] = useState(false);
+  const [statusToDelete, setStatusToDelete] = useState<DisputaStatusType | null>(null);
+  const [moveCardsToStatus, setMoveCardsToStatus] = useState<string>("");
   const [copiedSql, setCopiedSql] = useState(false);
 
   // Form State
@@ -366,32 +784,22 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       });
     }
 
-    const savedHistory = localStorage.getItem("aip_edital_history");
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((item: any, idx: number) => {
-            const editalObj: EditalAnalysis = item.analysis_data || item.analysis || item;
-            if (editalObj && (editalObj.identificacaoCertame || editalObj.descricaoProduto)) {
-              const iden = editalObj.identificacaoCertame;
-              const orgao = iden?.orgaoComprador || editalObj.descricaoProduto || `Edital #${idx + 1}`;
-              const num = iden?.identificacaoNumerica || iden?.modalidade || "Nº N/I";
-              list.push({
-                id: item.id || `hist-${idx}-${Date.now()}`,
-                title: `${orgao} (${num})`,
-                edital: editalObj,
-                dateStr: item.createdAt ? new Date(item.createdAt).toLocaleDateString("pt-BR") : "Análise Salva"
-              });
-            }
-          });
-        }
-      } catch (err) {
-        console.error("Erro ao carregar histórico:", err);
+    editalHistory.forEach((item, idx) => {
+      const editalObj = item.analysis;
+      if (editalObj && (editalObj.identificacaoCertame || editalObj.descricaoProduto)) {
+        const iden = editalObj.identificacaoCertame;
+        const orgao = iden?.orgaoComprador || editalObj.descricaoProduto || `Edital #${idx + 1}`;
+        const num = iden?.identificacaoNumerica || iden?.modalidade || "Nº N/I";
+        list.push({
+          id: item.id,
+          title: `${orgao} (${num})`,
+          edital: editalObj,
+          dateStr: item.date || "Análise Salva"
+        });
       }
-    }
+    });
     setHistoryOptions(list);
-  }, [activeEdital]);
+  }, [activeEdital, editalHistory]);
 
   const showToast = (text: string, type: "success" | "info" = "success") => {
     setNotification({ text, type });
@@ -399,7 +807,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   };
 
   // Open Add Modal
-  const handleOpenAddModal = () => {
+  const handleOpenAddModal = (defaultStatus?: string) => {
     setEditingRow(null);
     setSelectedHistoryId("");
     const now = new Date();
@@ -416,7 +824,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       nossoValorAlvo: 0,
       valorMinimoPiso: 0,
       dataHoraDisputa: formattedDate,
-      status: "Agendada",
+      status: defaultStatus || statusTypes[0]?.label || "Agendada",
       observacoes: "",
       linkPNCP: ""
     });
@@ -485,7 +893,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           });
 
           if (response.ok) {
-            const data = await response.json();
+            const data = await readJsonResponse(response);
             if (data && data.analysis) {
               const editalObj: EditalAnalysis = data.analysis;
               const extracted = extractEditalFields(editalObj, file.name);
@@ -587,47 +995,6 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     setIsModalOpen(false);
   };
 
-  // Add blank row directly in Spreadsheet mode
-  const handleAddBlankRow = () => {
-    const newRow: DisputaRow = {
-      id: generateUUID(),
-      orgao: "Novo Órgão Comprador",
-      uasgUndCompradora: "000000",
-      numeroLicitacao: "PE " + Math.floor(Math.random() * 800 + 100) + "/2026",
-      portal: "Compras.gov.br",
-      produtoItem: "Novo Item de Disputa",
-      quantidade: 1,
-      unidadeMedida: "Unidade",
-      valorEstimadoItem: 100000.00,
-      nossoValorAlvo: 90000.00,
-      valorMinimoPiso: 80000.00,
-      dataHoraDisputa: new Date().toLocaleDateString("pt-BR") + " 10:00",
-      status: "Agendada",
-      observacoes: "",
-      linkPNCP: ""
-    };
-    setDisputas(prev => [...prev, newRow]);
-    saveDisputaToSupabase(newRow).then(res => {
-      if (res.success) {
-        showToast("Nova linha salva no Supabase!");
-      } else {
-        showToast("Nova linha inserida na planilha local.");
-      }
-    }).catch(e => console.warn("Erro ao salvar disputa no Supabase:", e));
-  };
-
-  // Inline Cell Edit handler for Spreadsheet mode
-  const handleCellChange = (id: string, field: keyof DisputaRow, value: any) => {
-    setDisputas(prev => prev.map(r => {
-      if (r.id === id) {
-        const updated = { ...r, [field]: value };
-        saveDisputaToSupabase(updated).catch(e => console.warn("Erro ao salvar célula no Supabase:", e));
-        return updated;
-      }
-      return r;
-    }));
-  };
-
   // Delete Row Trigger (opens in-app confirmation modal, no window.confirm)
   const handleDeleteRow = (id: string) => {
     const row = disputas.find(r => r.id === id);
@@ -663,25 +1030,12 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
   // Import all analyzed edital items directly into the spreadsheet and sync with Supabase
   const handleImportFromAnalyzedEditais = async () => {
-    const savedHistory = localStorage.getItem("aip_edital_history");
-    let itemsToImport: any[] = [];
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory);
-        if (Array.isArray(parsed)) {
-          itemsToImport = parsed;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    if (itemsToImport.length === 0 && historyOptions.length === 0) {
+    if (historyOptions.length === 0) {
       showToast("Nenhum edital analisado encontrado para importar.", "info");
       return;
     }
 
-    const sourceList = historyOptions.length > 0 ? historyOptions.map(h => h.edital) : itemsToImport.map(i => i.analysis_data || i.analysis || i);
+    const sourceList = historyOptions.map(h => h.edital);
     const newRows: DisputaRow[] = [];
 
     sourceList.forEach((editalObj) => {
@@ -848,750 +1202,705 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     return 0;
   });
 
-  // KPI calculations
-  const totalMapeado = disputas.length;
+  // Totais exibidos no rodapé do Painel
   const valorTotalEstimado = disputas.reduce((sum, r) => sum + r.valorEstimadoItem, 0);
   const valorNossoAlvo = disputas.reduce((sum, r) => sum + r.nossoValorAlvo, 0);
-  const disputasVencidas = disputas.filter(r => r.status === "Vencida" || r.status === "Homologada");
-  const valorTotalVencido = disputasVencidas.reduce((sum, r) => sum + r.nossoValorAlvo, 0);
-  const winRate = totalMapeado > 0 ? Math.round((disputasVencidas.length / totalMapeado) * 100) : 0;
 
-  // Toggle sort
-  const handleSort = (field: keyof DisputaRow) => {
-    if (sortField === field) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortField(field);
-      setSortAsc(true);
-    }
+  // Encontra a cor cadastrada para um status (ou cinza neutro, se ainda não sincronizada)
+  const getStatusColor = (status: DisputaStatus): string => {
+    return statusTypes.find(s => s.label === status)?.color || "#71717a";
   };
 
-  // Badge status style
-  const getStatusBadge = (status: DisputaStatus) => {
-    switch (status) {
-      case "Agendada":
-        return "bg-secondary text-secondary-foreground border-transparent";
-      case "Em Disputa":
-        return "bg-warning text-warning-foreground border-transparent animate-pulse";
-      case "Vencida":
-        return "bg-success text-success-foreground border-transparent font-bold";
-      case "Homologada":
-        return "bg-success text-success-foreground border-transparent font-bold";
-      case "Em Recurso":
-        return "bg-accent text-accent-foreground border-transparent";
-      case "Perdida":
-        return "bg-destructive text-white border-transparent";
-      case "Cancelada":
-        return "bg-muted text-muted-foreground border-transparent";
-      default:
-        return "bg-muted text-muted-foreground border-transparent";
-    }
+  // Estilo inline do badge/select de status, calculado a partir da cor cadastrada pelo usuário
+  const getStatusBadgeStyle = (status: DisputaStatus): React.CSSProperties => {
+    const color = getStatusColor(status);
+    return {
+      backgroundColor: color,
+      color: getContrastTextColor(color),
+      borderColor: color
+    };
   };
-
-  // Find active cell object value for formula bar
-  const activeRowObj = disputas.find(r => r.id === activeCell?.rowId) || disputas[0];
-  const activeCellValue = activeRowObj && activeCell ? activeRowObj[activeCell.colKey] : "";
 
   return (
-    <div id="disputas-sheet-view" className="flex-1 flex flex-col h-full bg-background overflow-y-auto select-text font-sans text-foreground">
-      
-      {/* Top Banner & Mode Switcher Bar */}
-      <div className="p-5 border-b border-border bg-card flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-xs">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <span className="bg-primary/10 text-primary p-2 rounded-xl border border-primary/20">
-              <FileSpreadsheet className="w-5 h-5" />
-            </span>
-            <div>
-              <h2 className="text-xl font-bold text-foreground tracking-tight flex items-center gap-2">
-                <span>Planilha de Disputas & Pregões</span>
-                <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/10 font-mono text-[10px] font-semibold uppercase text-primary">
-                  {viewMode === "spreadsheet" ? "Modo Planilha Interativa" : "Modo Painel / Dashboard"}
-                </Badge>
-              </h2>
-              <p className="text-muted-foreground text-xs mt-0.5">
-                Alterne livremente entre a visão de **Planilha Excel em Grade** ou a **Visão Painel Visual**.
-              </p>
-            </div>
+    <div id="disputas-sheet-view" className="flex flex-col gap-5 select-text font-sans text-foreground">
+
+      {/* ─────────── Cabeçalho: título, modos e ações ─────────── */}
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+
+        <div className="flex items-start gap-3 min-w-0">
+          <span className="shrink-0 rounded-xl border border-primary/20 bg-primary/10 p-2 text-primary">
+            <FileSpreadsheet className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold tracking-tight sm:text-xl">Planilha de Disputas &amp; Pregões</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {viewMode === "kanban"
+                ? "Arraste as disputas entre as colunas para mudar o status."
+                : "Consulte cada disputa e clique no lápis para editar."}
+            </p>
           </div>
         </div>
 
-        {/* Mode Selector Toggle + Action Buttons */}
-        <div className="flex flex-wrap items-center gap-3">
-          
-          {/* Mode Switcher Buttons */}
-          <div className="flex items-center bg-muted p-1 rounded-xl border border-border">
-            <Button
-              type="button"
-              variant={viewMode === "spreadsheet" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("spreadsheet")}
-              className="h-auto gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>Modelo Planilha</span>
-            </Button>
-            <Button
-              type="button"
-              variant={viewMode === "dashboard" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("dashboard")}
-              className="h-auto gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold shadow-none"
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Modelo Painel</span>
-            </Button>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+
+          {/* Alternador de modo — ocupa a linha inteira em telas estreitas */}
+          <div className="flex w-full items-center rounded-xl border border-border bg-muted p-1 sm:w-auto">
+            {VIEW_MODES.map(mode => {
+              const Icon = mode.icon;
+              return (
+                <Button
+                  key={mode.id}
+                  type="button"
+                  variant={viewMode === mode.id ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setViewMode(mode.id)}
+                  title={`Modo ${mode.label}`}
+                  className="h-auto flex-1 gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold shadow-none sm:flex-none"
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{mode.label}</span>
+                </Button>
+              );
+            })}
           </div>
 
-          <div className="h-6 w-px bg-muted hidden sm:block" />
-
-          {/* Supabase Realtime live connection badge */}
-          <div 
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold border bg-card border-border text-foreground shadow-2xs"
-            title={realtimeConnected ? "Supabase Realtime ativo: alterações, criações e exclusões sincronizam automaticamente em tempo real." : "Conectando ao Supabase Realtime..."}
-          >
-            <span className="relative flex h-2 w-2">
-              {realtimeConnected && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
-              )}
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${realtimeConnected ? "bg-success" : "bg-warning"}`}></span>
-            </span>
-            <span className="text-[11px] font-medium tracking-tight">
-              {realtimeConnected ? "Sincronização Automática Ativa" : "Conectando..."}
-            </span>
-          </div>
-
-          {lastRealtimeEvent && (Date.now() - lastRealtimeEvent.time < 12000) && (
-            <div className="hidden lg:flex items-center gap-1 text-[11px] font-medium text-success bg-success/10 border border-success/30 px-2 py-1 rounded-lg shadow-2xs">
-              <Sparkles className="w-3 h-3 text-success" />
-              <span>{lastRealtimeEvent.type}: {lastRealtimeEvent.label.slice(0, 26)}</span>
-            </div>
-          )}
-
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={handleImportFromAnalyzedEditais}
-            className="font-semibold"
-            title="Importar itens de todos os Editais Analisados para esta planilha"
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Importar dos Editais</span>
-          </Button>
-
           <Button
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => setShowSqlSetupModal(true)}
-            className="font-semibold"
-            title="Ver/Copiar script SQL para criar tabelas no Supabase"
+            onClick={() => setShowStatusManager(true)}
+            title="Criar, renomear, recolorir ou excluir os status das disputas"
           >
-            <Database className="w-3.5 h-3.5 text-primary" />
-            <span>Banco de Dados</span>
+            <Palette className="h-3.5 w-3.5" />
+            <span>Status</span>
           </Button>
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleCopyClipboard}
-            className="font-semibold"
-            title="Copiar dados para colar direto no Excel ou Google Sheets"
-          >
-            <Copy className="w-3.5 h-3.5 text-muted-foreground" />
-            <span>Copiar Tabela</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleExportCSV}
-            className="border-success/30 bg-success/10 font-bold text-success hover:bg-success/20 hover:text-success"
-            title="Baixar arquivo .CSV para Excel"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Exportar CSV</span>
-          </Button>
-
-          <Button
-            type="button"
-            size="sm"
-            onClick={handleOpenAddModal}
-            className="font-bold"
-          >
-            <Plus className="w-4 h-4" />
+          <Button type="button" size="sm" onClick={() => handleOpenAddModal()} className="font-semibold">
+            <Plus className="h-4 w-4" />
             <span>Nova Disputa</span>
           </Button>
+
+          {/* Ações secundárias agrupadas para não poluir a barra */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="icon" title="Mais ações">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={handleImportFromAnalyzedEditais} className="cursor-pointer">
+                <Layers />
+                Importar dos Editais
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleCopyClipboard} className="cursor-pointer">
+                <Copy />
+                Copiar tabela
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportCSV} className="cursor-pointer">
+                <Download />
+                Exportar CSV
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setShowSqlSetupModal(true)} className="cursor-pointer">
+                <Database />
+                Script do banco de dados
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
         </div>
       </div>
 
-      {/* Toast Notification */}
+      {/* Aviso temporário de ação concluída */}
       {notification && (
-        <div className={`mx-6 mt-4 p-3.5 rounded-xl border flex items-center gap-2.5 animate-fade-in ${
-          notification.type === "success" 
-            ? "bg-success/10 border-success/30 text-success" 
-            : "bg-primary/10 border-primary/20 text-primary"
+        <div className={`flex items-center gap-2.5 rounded-xl border p-3 ${
+          notification.type === "success"
+            ? "border-success/30 bg-success/10 text-success"
+            : "border-primary/20 bg-primary/10 text-primary"
         }`}>
-          <CheckCircle className="w-4 h-4 shrink-0 text-success" />
+          <CheckCircle className="h-4 w-4 shrink-0" />
           <span className="text-xs font-semibold">{notification.text}</span>
         </div>
       )}
 
+      {/* ─────────── Busca e filtros ─────────── */}
+      <Card className="flex flex-col gap-3 p-3 lg:flex-row lg:items-center">
 
+        <div className="relative min-w-0 flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder="Buscar por órgão, UASG, nº da licitação, produto..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-9 w-full pl-9 text-xs"
+          />
+        </div>
 
-      {/* Filter Toolbar & Search */}
-      <div className="p-6 space-y-4">
-        
-        <Card className="flex flex-col items-stretch justify-between gap-3 p-3.5 shadow-xs md:flex-row md:items-center">
-
-          {/* Search box */}
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Buscar por órgão, UASG, nº da licitação, produto..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-auto w-full rounded-lg pl-9 pr-3 py-1.5 text-xs"
-            />
-          </div>
-
-          {/* Filter Dropdowns */}
-          <div className="flex flex-wrap items-center gap-2">
-            
-            {/* Status Filter */}
-            <div className="flex items-center gap-1.5 bg-muted border border-input rounded-lg px-2.5 py-1 text-xs text-foreground">
-              <Filter className="w-3.5 h-3.5 text-primary shrink-0" />
-              <span className="text-[10px] uppercase font-bold text-muted-foreground">Status:</span>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-transparent text-xs text-foreground font-semibold focus:outline-none cursor-pointer"
-              >
-                <option value="Todas">Todas</option>
-                <option value="Agendada">Agendadas</option>
-                <option value="Em Disputa">Em Disputa</option>
-                <option value="Vencida">Vencidas</option>
-                <option value="Em Recurso">Em Recurso</option>
-                <option value="Homologada">Homologadas</option>
-                <option value="Perdida">Perdidas</option>
-              </select>
-            </div>
-
-            {/* Portal Filter */}
-            <div className="flex items-center gap-1.5 bg-muted border border-input rounded-lg px-2.5 py-1 text-xs text-foreground">
-              <span className="text-[10px] uppercase font-bold text-muted-foreground">Portal:</span>
-              <select
-                value={portalFilter}
-                onChange={(e) => setPortalFilter(e.target.value)}
-                className="bg-transparent text-xs text-foreground font-semibold focus:outline-none cursor-pointer"
-              >
-                <option value="Todos">Todos</option>
-                <option value="Compras.gov.br">Compras.gov.br</option>
-                <option value="BLL Compras">BLL Compras</option>
-                <option value="Licitações-e">Licitações-e</option>
-                <option value="Bec SP">Bec SP</option>
-                <option value="PNCP">PNCP</option>
-              </select>
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleAddBlankRow}
-              className="border-success/30 bg-success/10 font-bold text-success hover:bg-success/20 hover:text-success"
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
+            <Filter className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="min-w-0 cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              title="Filtrar por status"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>+ Inserir Linha</span>
-            </Button>
-
+              <option value="Todas">Todos os status</option>
+              {sortedStatusTypes.map(s => (
+                <option key={s.id} value={s.label}>{s.label}</option>
+              ))}
+            </select>
           </div>
 
-        </Card>
+          <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
+            <select
+              value={portalFilter}
+              onChange={(e) => setPortalFilter(e.target.value)}
+              className="min-w-0 cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              title="Filtrar por portal"
+            >
+              <option value="Todos">Todos os portais</option>
+              {PORTAL_OPTIONS.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </div>
 
-        {/* MODE 1: MODELO PLANILHA INTERATIVA EXCEL */}
-        {viewMode === "spreadsheet" ? (
-          <div className="bg-card border border-border rounded-xl overflow-hidden shadow-xs flex flex-col">
-            
-            {/* Spreadsheet Top Excel-Style Formula & Active Cell Bar */}
-            <div className="bg-muted px-4 py-2 border-b border-border flex items-center gap-3 font-mono text-xs">
-              
-              {/* Selected Cell Tag */}
-              <div className="flex items-center gap-1.5 bg-primary/10 border border-primary/20 text-primary font-bold px-2.5 py-1 rounded-md text-[11px] min-w-[110px]">
-                <span className="font-mono">fx</span>
-                <span>{activeCell ? `Célula ${activeCell.colLetter}${disputas.findIndex(r => r.id === activeCell.rowId) + 1}` : 'A1'}</span>
-              </div>
+          <div className="flex min-w-0 items-center gap-1.5 rounded-lg border border-input bg-muted px-2.5 py-1.5">
+            <ArrowUpDown className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <select
+              value={sortField}
+              onChange={(e) => setSortField(e.target.value as keyof DisputaRow)}
+              className="min-w-0 cursor-pointer bg-transparent text-xs font-semibold text-foreground focus:outline-none"
+              title="Ordenar por"
+            >
+              {SORT_FIELDS.map(f => (
+                <option key={f.key} value={f.key}>{f.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setSortAsc(!sortAsc)}
+              title={sortAsc ? "Ordem crescente" : "Ordem decrescente"}
+              className="shrink-0 cursor-pointer text-[10px] font-bold text-muted-foreground hover:text-foreground"
+            >
+              {sortAsc ? "A→Z" : "Z→A"}
+            </button>
+          </div>
 
-              {/* Formula input box for active cell */}
-              <div className="flex-1 flex items-center gap-2 bg-card border border-input rounded-md px-3 py-1">
-                <span className="text-muted-foreground text-[11px] font-bold">
-                  {activeCell?.colName || 'Valor'}:
-                </span>
-                <input
-                  type="text"
-                  value={activeCellValue || ""}
-                  onChange={(e) => {
-                    if (activeCell && activeRowObj) {
-                      const fieldKey = activeCell.colKey;
-                      let val: any = e.target.value;
-                      if (fieldKey === "quantidade" || fieldKey === "valorEstimadoItem" || fieldKey === "nossoValorAlvo" || fieldKey === "valorMinimoPiso") {
-                        val = Number(e.target.value) || 0;
-                      }
-                      handleCellChange(activeCell.rowId, fieldKey, val);
-                    }
-                  }}
-                  placeholder="Edite o valor da célula diretamente aqui ou clique na tabela..."
-                  className="w-full bg-transparent text-foreground font-mono text-xs focus:outline-none"
-                />
-              </div>
+          <span className="text-[11px] text-muted-foreground">
+            {filteredDisputas.length} de {disputas.length}
+          </span>
 
-            </div>
+          <span
+            className="flex items-center gap-1.5 rounded-lg border border-border px-2 py-1.5"
+            title={realtimeConnected
+              ? "Sincronização em tempo real ativa com o Supabase."
+              : "Conectando ao Supabase..."}
+          >
+            <span className={`h-2 w-2 rounded-full ${realtimeConnected ? "bg-success" : "bg-warning"}`} />
+            <span className="hidden text-[11px] font-medium text-muted-foreground sm:inline">
+              {realtimeConnected ? "Sincronizado" : "Conectando"}
+            </span>
+          </span>
+        </div>
+      </Card>
 
-            {/* Interactive Grid Table */}
-            <div className="overflow-x-auto max-h-[600px] scrollbar-thin">
-              <table className="w-full border-collapse font-mono text-xs select-none">
-                
-                {/* Spreadsheet Column Headers (A, B, C, D...) */}
-                <thead>
-                  <tr className="bg-muted border-b border-border text-foreground text-[10.5px] font-bold">
-                    <th className="w-12 py-2 px-2 text-center border-r border-border bg-muted text-muted-foreground">#</th>
-                    <th className="py-2 px-3 border-r border-border text-left min-w-[200px]">A - Órgão Comprador</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-36">B - UASG/Cod</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-32">C - Nº Licitação</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-32">D - Portal</th>
-                    <th className="py-2 px-3 border-r border-border text-left min-w-[180px]">E - Link PNCP</th>
-                    <th className="py-2 px-3 border-r border-border text-left min-w-[240px]">F - Produto / Item</th>
-                    <th className="py-2 px-2 border-r border-border text-center w-20">G - Qtd</th>
-                    <th className="py-2 px-2 border-r border-border text-center w-20">H - Und</th>
-                    <th className="py-2 px-3 border-r border-border text-right w-36">I - Val. Estimado</th>
-                    <th className="py-2 px-3 border-r border-border text-right w-36">J - Nosso Alvo</th>
-                    <th className="py-2 px-3 border-r border-border text-right w-36">K - Preço Piso</th>
-                    <th className="py-2 px-3 border-r border-border text-left w-36">L - Data/Hora</th>
-                    <th className="py-2 px-3 border-r border-border text-center w-32">M - Status</th>
-                    <th className="py-2 px-2 text-center w-16">Ações</th>
-                  </tr>
-                </thead>
+      {/* ─────────── MODO 1: PAINEL (cartões somente leitura — edição pelo ícone lápis) ─────────── */}
+      {viewMode === "spreadsheet" ? (
+        <div className="space-y-2.5">
 
-                {/* Grid Rows */}
-                <tbody className="divide-y divide-border bg-card text-foreground">
-                  {filteredDisputas.map((row, index) => (
-                    <tr key={row.id} className="hover:bg-primary/10 transition-colors group">
-                      
-                      {/* Row Index # */}
-                      <td className="py-2 px-2 text-center font-bold text-muted-foreground border-r border-border bg-muted text-[11px]">
-                        {index + 1}
-                      </td>
+          {filteredDisputas.length === 0 ? (
+            <Card className="flex flex-col items-center gap-2 p-10 text-center">
+              <LayoutGrid className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-semibold text-muted-foreground">Nenhuma disputa encontrada</p>
+              <Button type="button" size="sm" onClick={() => handleOpenAddModal()}>
+                <Plus className="h-3.5 w-3.5" />
+                Cadastrar disputa
+              </Button>
+            </Card>
+          ) : (
+            filteredDisputas.map((row, index) => (
+              <Card key={row.id} className="gap-0 p-3 transition hover:border-primary/30">
 
-                      {/* Col A: Órgão */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "orgao" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "orgao", colName: "Órgão Comprador", colLetter: "A" })}
+                {/* Linha principal: posição, órgão, status e ações.
+                    Em telas estreitas o nome do órgão ocupa a linha inteira. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                    {index + 1}
+                  </span>
+                  <p
+                    className="order-3 w-full min-w-0 truncate text-sm font-semibold sm:order-none sm:w-auto sm:flex-1"
+                    title={row.orgao}
+                  >
+                    {row.orgao || "Órgão não informado"}
+                  </p>
+                  <span
+                    style={getStatusBadgeStyle(row.status)}
+                    className="ml-auto rounded-lg border px-2 py-1 text-[11px] font-bold sm:ml-0"
+                  >
+                    {row.status}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleOpenEditModal(row)}
+                      className="h-7 w-7 text-muted-foreground hover:text-primary"
+                      title="Editar disputa"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleDeleteRow(row.id)}
+                      className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      title="Excluir esta disputa"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Produto / objeto */}
+                <div className="mt-2 sm:pl-7">
+                  <SheetField label="Produto / Objeto">
+                    <p className="min-h-[2.4em] text-xs leading-snug text-foreground">
+                      {row.produtoItem || "Objeto não informado"}
+                    </p>
+                  </SheetField>
+                </div>
+
+                {/* Demais campos, em grade que se reorganiza conforme a largura */}
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 pl-7 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+                  <SheetField label="Nº Licitação">
+                    <p className="truncate px-1.5 py-1 font-mono text-xs font-bold text-primary">
+                      {row.numeroLicitacao || "—"}
+                    </p>
+                  </SheetField>
+
+                  <SheetField label="UASG / Cód.">
+                    <p className="truncate px-1.5 py-1 font-mono text-xs text-muted-foreground">
+                      {row.uasgUndCompradora || "—"}
+                    </p>
+                  </SheetField>
+
+                  <SheetField label="Portal">
+                    <p className="truncate px-1.5 py-1 text-xs">{row.portal || "—"}</p>
+                  </SheetField>
+
+                  <SheetField label="Data / Hora">
+                    <div className="flex flex-wrap items-center gap-1 px-1.5 py-1">
+                      <p className="truncate font-mono text-xs text-success">{row.dataHoraDisputa || "—"}</p>
+                      {row.dataHoraDisputa && <DisputaDateTag value={row.dataHoraDisputa} className="px-1.5 py-0 text-[9px]" />}
+                    </div>
+                  </SheetField>
+
+                  <SheetField label="Qtd / Unidade">
+                    <p className="truncate px-1.5 py-1 font-mono text-xs">
+                      {row.quantidade} {row.unidadeMedida || "un."}
+                    </p>
+                  </SheetField>
+
+                  <SheetField label="Link PNCP">
+                    {row.linkPNCP ? (
+                      <a
+                        href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Abrir edital no PNCP"
+                        className="flex items-center gap-1 truncate px-1.5 py-1 text-xs text-primary hover:underline"
                       >
-                        <input
-                          type="text"
-                          value={row.orgao}
-                          onChange={(e) => handleCellChange(row.id, "orgao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
+                        <span className="truncate">{row.linkPNCP}</span>
+                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                      </a>
+                    ) : (
+                      <p className="truncate px-1.5 py-1 text-xs text-muted-foreground">—</p>
+                    )}
+                  </SheetField>
 
-                      {/* Col B: UASG */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "uasgUndCompradora" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "uasgUndCompradora", colName: "UASG/Cod Unidade", colLetter: "B" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.uasgUndCompradora}
-                          onChange={(e) => handleCellChange(row.id, "uasgUndCompradora", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
+                  <SheetField label="Valor Estimado">
+                    <p className="truncate px-1.5 py-1 font-mono text-xs">{formatBRL(row.valorEstimadoItem)}</p>
+                  </SheetField>
 
-                      {/* Col C: Nº Licitação */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "numeroLicitacao" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "numeroLicitacao", colName: "Nº Licitação", colLetter: "C" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.numeroLicitacao}
-                          onChange={(e) => handleCellChange(row.id, "numeroLicitacao", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-primary font-bold focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
+                  <SheetField label="Nosso Alvo">
+                    <p className="truncate px-1.5 py-1 font-mono text-xs font-bold text-primary">
+                      {formatBRL(row.nossoValorAlvo)}
+                    </p>
+                  </SheetField>
 
-                      {/* Col D: Portal */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "portal" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "portal", colName: "Portal", colLetter: "D" })}
-                      >
-                        <select
-                          value={row.portal}
-                          onChange={(e) => handleCellChange(row.id, "portal", e.target.value)}
-                          className="w-full bg-transparent text-xs text-foreground px-1 py-1 focus:outline-none focus:bg-background rounded cursor-pointer"
-                        >
-                          <option value="Compras.gov.br">Compras.gov.br</option>
-                          <option value="BLL Compras">BLL Compras</option>
-                          <option value="Licitações-e">Licitações-e</option>
-                          <option value="Bec SP">Bec SP</option>
-                          <option value="PNCP">PNCP</option>
-                        </select>
-                      </td>
+                  <SheetField label="Preço Piso">
+                    <p className="truncate px-1.5 py-1 font-mono text-xs text-muted-foreground">
+                      {formatBRL(row.valorMinimoPiso)}
+                    </p>
+                  </SheetField>
+                </div>
+              </Card>
+            ))
+          )}
 
-                      {/* Col E: Link PNCP */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "linkPNCP" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "linkPNCP", colName: "Link PNCP", colLetter: "E" })}
-                      >
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="text"
-                            placeholder="https://..."
-                            value={row.linkPNCP || ""}
-                            onChange={(e) => handleCellChange(row.id, "linkPNCP", e.target.value)}
-                            className="w-full bg-transparent px-2 py-1 text-xs text-primary underline focus:no-underline focus:outline-none focus:bg-background rounded font-mono truncate"
-                          />
-                          {row.linkPNCP && (
-                            <a
-                              href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="p-1 text-primary hover:text-primary/70 rounded shrink-0 cursor-pointer"
-                              title="Abrir Link PNCP"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          )}
-                        </div>
-                      </td>
+          {/* Rodapé com totais */}
+          {filteredDisputas.length > 0 && (
+            <Card className="flex flex-wrap items-center gap-x-4 gap-y-1 p-3 text-xs font-mono">
+              <span className="text-muted-foreground">
+                Estimado: <strong className="text-foreground">{formatBRL(valorTotalEstimado)}</strong>
+              </span>
+              <span className="text-muted-foreground">
+                Nosso alvo: <strong className="text-primary">{formatBRL(valorNossoAlvo)}</strong>
+              </span>
+              <span className="text-muted-foreground">
+                Linhas: <strong className="text-foreground">{filteredDisputas.length}</strong>
+              </span>
+            </Card>
+          )}
+        </div>
 
-                      {/* Col F: Produto / Item */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "produtoItem" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "produtoItem", colName: "Produto / Item", colLetter: "F" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.produtoItem}
-                          onChange={(e) => handleCellChange(row.id, "produtoItem", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
+      ) : (
 
-                      {/* Col G: Qtd */}
-                      <td 
-                        className={`p-1 border-r border-border text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "quantidade" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "quantidade", colName: "Quantidade", colLetter: "G" })}
-                      >
-                        <input
-                          type="number"
-                          value={row.quantidade}
-                          onChange={(e) => handleCellChange(row.id, "quantidade", Number(e.target.value))}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
+        /* ─────────── MODO 2: KANBAN (colunas = status, sem rolagem lateral) ─────────── */
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
+          {sortedStatusTypes.map(col => {
+            const cards = filteredDisputas.filter(r => r.status === col.label);
+            const isCardDropTarget = dragOverColumnLabel === col.label && draggingCardId;
+            const isColumnDropTarget = dragOverColumnId === col.id && draggingColumnId;
 
-                      {/* Col H: Und */}
-                      <td 
-                        className={`p-1 border-r border-border text-center ${activeCell?.rowId === row.id && activeCell?.colKey === "unidadeMedida" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "unidadeMedida", colName: "Unidade", colLetter: "H" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.unidadeMedida}
-                          onChange={(e) => handleCellChange(row.id, "unidadeMedida", e.target.value)}
-                          className="w-full text-center bg-transparent px-1 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col I: Val. Estimado */}
-                      <td 
-                        className={`p-1 border-r border-border text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorEstimadoItem" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorEstimadoItem", colName: "Valor Estimado (R$)", colLetter: "I" })}
-                      >
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.valorEstimadoItem}
-                          onChange={(e) => handleCellChange(row.id, "valorEstimadoItem", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded font-mono"
-                        />
-                      </td>
-
-                      {/* Col J: Nosso Alvo */}
-                      <td 
-                        className={`p-1 border-r border-border text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "nossoValorAlvo" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "nossoValorAlvo", colName: "Nosso Valor Alvo (R$)", colLetter: "J" })}
-                      >
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.nossoValorAlvo}
-                          onChange={(e) => handleCellChange(row.id, "nossoValorAlvo", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-primary font-bold focus:outline-none focus:bg-background rounded font-mono"
-                        />
-                      </td>
-
-                      {/* Col K: Preço Piso */}
-                      <td 
-                        className={`p-1 border-r border-border text-right ${activeCell?.rowId === row.id && activeCell?.colKey === "valorMinimoPiso" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "valorMinimoPiso", colName: "Preço Piso (R$)", colLetter: "K" })}
-                      >
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={row.valorMinimoPiso}
-                          onChange={(e) => handleCellChange(row.id, "valorMinimoPiso", Number(e.target.value))}
-                          className="w-full text-right bg-transparent px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:bg-background rounded font-mono"
-                        />
-                      </td>
-
-                      {/* Col L: Data/Hora */}
-                      <td 
-                        className={`p-1 border-r border-border ${activeCell?.rowId === row.id && activeCell?.colKey === "dataHoraDisputa" ? 'ring-2 ring-primary bg-primary/10' : ''}`}
-                        onClick={() => setActiveCell({ rowId: row.id, colKey: "dataHoraDisputa", colName: "Data e Hora Disputa", colLetter: "L" })}
-                      >
-                        <input
-                          type="text"
-                          value={row.dataHoraDisputa}
-                          onChange={(e) => handleCellChange(row.id, "dataHoraDisputa", e.target.value)}
-                          className="w-full bg-transparent px-2 py-1 text-xs text-foreground focus:outline-none focus:bg-background rounded"
-                        />
-                      </td>
-
-                      {/* Col L: Status */}
-                      <td className="p-1 border-r border-border text-center">
-                        <select
-                          value={row.status}
-                          onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
-                          className={`text-[10.5px] font-bold px-2 py-0.5 rounded-lg border focus:outline-none cursor-pointer ${getStatusBadge(row.status)}`}
-                        >
-                          <option value="Agendada">Agendada</option>
-                          <option value="Em Disputa">Em Disputa</option>
-                          <option value="Vencida">Vencida</option>
-                          <option value="Em Recurso">Em Recurso</option>
-                          <option value="Homologada">Homologada</option>
-                          <option value="Perdida">Perdida</option>
-                        </select>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="p-1 text-center">
+            return (
+              <div
+                key={col.id}
+                data-kanban-col={col.label}
+                onDragOver={(e) => handleColumnHeaderDragOver(e, col.id)}
+                onDrop={(e) => handleColumnHeaderDrop(e, col.id)}
+                className={`flex min-w-0 flex-col overflow-hidden rounded-xl border bg-muted/30 transition ${
+                  isColumnDropTarget ? "border-primary ring-2 ring-primary/40" : "border-border"
+                } ${draggingColumnId === col.id ? "opacity-50" : ""}`}
+              >
+                {/* Cabeçalho da coluna — usa a cor cadastrada do status como fundo.
+                    Só a alça (ícone de grip) inicia o arraste de coluna, para nunca
+                    ser confundida com o arraste de um card ou o clique em um botão. */}
+                <div
+                  className="flex items-center justify-between gap-1.5 rounded-t-xl p-2 sm:p-2.5"
+                  style={{ backgroundColor: col.color, color: getContrastTextColor(col.color) }}
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span
+                      draggable
+                      data-kanban-grip={col.label}
+                      onDragStart={(e) => handleColumnHeaderDragStart(e, col.id)}
+                      onDragEnd={handleColumnHeaderDragEnd}
+                      title="Arrastar para reordenar esta coluna"
+                      className="cursor-grab touch-none active:cursor-grabbing"
+                    >
+                      <GripVertical className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                    </span>
+                    <span className="truncate text-xs font-bold sm:text-sm" title={col.label}>{col.label}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <Badge
+                      variant="secondary"
+                      className="border-0 bg-black/15 font-mono text-[10px]"
+                      style={{ color: getContrastTextColor(col.color) }}
+                    >
+                      {cards.length}
+                    </Badge>
+                    <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(col); }}>
+                      <PopoverTrigger asChild>
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          onClick={() => handleDeleteRow(row.id)}
-                          className="h-auto w-auto p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                          title="Excluir Linha"
+                          className="h-6 w-6 opacity-80 hover:bg-black/15 hover:opacity-100"
+                          style={{ color: getContrastTextColor(col.color) }}
+                          title="Editar nome e cor deste status"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Pencil className="h-3 w-3" />
                         </Button>
-                      </td>
-
-                    </tr>
-                  ))}
-                </tbody>
-
-              </table>
-            </div>
-
-            {/* Bottom Excel Totals Summary Bar */}
-            <div className="bg-muted px-4 py-2 border-t border-border flex flex-wrap items-center justify-between text-xs font-mono text-muted-foreground gap-4">
-              <div className="flex items-center gap-4">
-                <span className="text-primary font-bold">∑ Fórmulas de Totais:</span>
-                <span>Soma (H): <strong className="text-foreground">{valorTotalEstimado.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
-                <span>Soma (I): <strong className="text-primary">{valorNossoAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</strong></span>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-muted-foreground">Linhas Totais: {filteredDisputas.length}</span>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleAddBlankRow}
-                  className="h-auto gap-1 rounded px-3 py-1 text-[11px] font-bold"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>Nova Linha</span>
-                </Button>
-              </div>
-            </div>
-
-          </div>
-        ) : (
-          /* MODE 2: MODELO PAINEL / DASHBOARD VISUAL */
-          <div className="bg-card border border-border rounded-xl overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                
-                {/* Header */}
-                <thead>
-                  <tr className="border-b border-border bg-muted text-[10.5px] uppercase tracking-wider font-bold text-muted-foreground select-none">
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-foreground transition" onClick={() => handleSort("status")}>
-                      <div className="flex items-center gap-1">
-                        <span>Status</span>
-                        <ArrowUpDown className="w-3 h-3 text-muted-foreground" />
-                      </div>
-                    </th>
-                    <th className="py-3.5 px-4 cursor-pointer hover:text-foreground transition" onClick={() => handleSort("orgao")}>
-                      <div className="flex items-center gap-1">
-                        <span>Órgão Comprador</span>
-                        <ArrowUpDown className="w-3 h-3 text-muted-foreground" />
-                      </div>
-                    </th>
-                    <th className="py-3.5 px-4">UASG / Und</th>
-                    <th className="py-3.5 px-4">Nº Licitação</th>
-                    <th className="py-3.5 px-4">Portal</th>
-                    <th className="py-3.5 px-4">Link PNCP</th>
-                    <th className="py-3.5 px-4 min-w-[200px]">Produto / Objeto</th>
-                    <th className="py-3.5 px-4 text-center">Qtd / Und</th>
-                    <th className="py-3.5 px-4 text-right">Val. Estimado</th>
-                    <th className="py-3.5 px-4 text-right">Nosso Alvo</th>
-                    <th className="py-3.5 px-4 text-right">Preço Piso</th>
-                    <th className="py-3.5 px-4">Data / Hora Disputa</th>
-                    <th className="py-3.5 px-4 text-center">Ações</th>
-                  </tr>
-                </thead>
-
-                {/* Body */}
-                <tbody className="divide-y divide-border text-xs text-foreground bg-card">
-                  {filteredDisputas.length === 0 ? (
-                    <tr>
-                      <td colSpan={12} className="py-12 text-center text-muted-foreground">
-                        <FileSpreadsheet className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-                        <p className="font-bold text-sm text-muted-foreground">Nenhum registro encontrado</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredDisputas.map((row) => (
-                      <tr key={row.id} className="hover:bg-muted transition-colors group">
-                        
-                        <td className="py-3 px-4">
-                          <select
-                            value={row.status}
-                            onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
-                            className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border focus:outline-none cursor-pointer transition ${getStatusBadge(row.status)}`}
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-64 space-y-3">
+                        <StatusColorEditor
+                          label={editColumnLabel}
+                          color={editColumnColor}
+                          onLabelChange={setEditColumnLabel}
+                          onLabelCommit={() => handleConfirmEditColumn(col.id)}
+                          onColorChange={(c) => { setEditColumnColor(c); handleUpdateStatusType(col.id, { color: c }); }}
+                        />
+                        <div className="flex justify-end border-t border-border pt-2.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteStatusType(col.id)}
+                            className="gap-1.5 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
                           >
-                            <option value="Agendada">Agendada</option>
-                            <option value="Em Disputa">Em Disputa</option>
-                            <option value="Vencida">Vencida</option>
-                            <option value="Em Recurso">Em Recurso</option>
-                            <option value="Homologada">Homologada</option>
-                            <option value="Perdida">Perdida</option>
-                          </select>
-                        </td>
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Excluir status
+                          </Button>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                </div>
 
-                        <td className="py-3 px-4 font-semibold text-foreground max-w-[180px] truncate" title={row.orgao}>
-                          {row.orgao}
-                        </td>
-
-                        <td className="py-3 px-4 font-mono text-muted-foreground text-[11px]">
-                          {row.uasgUndCompradora}
-                        </td>
-
-                        <td className="py-3 px-4 font-mono font-bold text-primary text-[11px]">
-                          {row.numeroLicitacao}
-                        </td>
-
-                        <td className="py-3 px-4 text-foreground text-[11px]">
-                          <span className="bg-muted px-2 py-0.5 rounded border border-border text-[10.5px]">
-                            {row.portal}
+                {/* Cartões (área de soltura) */}
+                <div
+                  data-kanban-body
+                  onDragOver={(e) => handleColumnBodyDragOver(e, col.label)}
+                  onDrop={(e) => handleColumnBodyDrop(e, col.label)}
+                  className={`min-h-[90px] flex-1 space-y-2 overflow-y-auto p-2 scrollbar-thin ${
+                    isCardDropTarget ? "bg-primary/5" : ""
+                  }`}
+                  style={{ maxHeight: "58vh" }}
+                >
+                  {cards.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border py-5 text-center text-[11px] text-muted-foreground">
+                      Nenhuma disputa
+                    </div>
+                  ) : (
+                    cards.map(row => (
+                      <div
+                        key={row.id}
+                        data-kanban-card={row.id}
+                        draggable
+                        onDragStart={(e) => handleCardDragStart(e, row.id)}
+                        onDragEnd={handleCardDragEnd}
+                        className={`group cursor-grab space-y-1.5 rounded-lg border border-border bg-card p-2.5 shadow-2xs transition hover:border-primary/40 active:cursor-grabbing ${
+                          draggingCardId === row.id ? "opacity-40" : ""
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-1">
+                          <p
+                            className="line-clamp-2 min-w-0 cursor-pointer text-[11px] font-semibold leading-snug"
+                            title={row.orgao}
+                            onClick={() => handleOpenEditModal(row)}
+                          >
+                            {row.orgao || "Órgão não informado"}
+                          </p>
+                          {/* Em telas sem hover (toque) as ações ficam sempre visíveis */}
+                          <div className="flex shrink-0 items-center gap-0.5 transition lg:opacity-0 lg:group-hover:opacity-100 lg:focus-within:opacity-100">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={(e) => { e.stopPropagation(); handleOpenEditModal(row); }}
+                              className="h-6 w-6 text-muted-foreground hover:text-primary"
+                              title="Editar disputa"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={(e) => { e.stopPropagation(); handleDeleteRow(row.id); }}
+                              className="h-6 w-6 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              title="Excluir disputa"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                        <p className="truncate font-mono text-[10px] font-bold text-primary">{row.numeroLicitacao}</p>
+                        {row.produtoItem && (
+                          <p className="line-clamp-2 text-[10.5px] text-muted-foreground">{row.produtoItem}</p>
+                        )}
+                        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 pt-0.5">
+                          <span className="font-mono text-[10px] font-bold">
+                            {row.nossoValorAlvo > 0 ? formatBRL(row.nossoValorAlvo) : "—"}
                           </span>
-                        </td>
-
-                        <td className="py-3 px-4">
-                          {row.linkPNCP ? (
-                            <a 
-                              href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-primary/10 text-primary border border-primary/30 rounded-lg text-xs font-semibold hover:bg-primary/20 transition cursor-pointer"
-                              title={row.linkPNCP}
-                            >
-                              <ExternalLink className="w-3.5 h-3.5 shrink-0 text-primary" />
-                              <span>Abrir PNCP</span>
-                            </a>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">—</span>
+                          {row.dataHoraDisputa && (
+                            <span className="flex items-center gap-1 text-[10px]">
+                              <Calendar className="h-3 w-3 text-success" />
+                              <span className="text-success">{row.dataHoraDisputa}</span>
+                              <DisputaDateTag value={row.dataHoraDisputa} className="px-1.5 py-0 text-[9px]" />
+                            </span>
                           )}
-                        </td>
-
-                        <td className="py-3 px-4 max-w-[240px]">
-                          <p className="line-clamp-2 text-foreground leading-snug">{row.produtoItem}</p>
-                        </td>
-
-                        <td className="py-3 px-4 text-center font-mono text-[11px] text-foreground">
-                          {row.quantidade} <span className="text-[10px] text-muted-foreground">{row.unidadeMedida}</span>
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono text-foreground">
-                          {row.valorEstimadoItem > 0 
-                            ? row.valorEstimadoItem.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                            : "—"}
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono font-bold text-primary">
-                          {row.nossoValorAlvo > 0 
-                            ? row.nossoValorAlvo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                            : "—"}
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono text-muted-foreground text-[11px]">
-                          {row.valorMinimoPiso > 0 
-                            ? row.valorMinimoPiso.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
-                            : "—"}
-                        </td>
-
-                        <td className="py-3 px-4 font-mono text-foreground text-[11px] whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            <Calendar className="w-3.5 h-3.5 text-primary shrink-0" />
-                            <span>{row.dataHoraDisputa}</span>
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-4 text-center">
-                          <div className="flex items-center justify-center gap-1.5 opacity-80 group-hover:opacity-100 transition">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleOpenEditModal(row)}
-                              className="h-auto w-auto rounded-lg bg-muted p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                              title="Editar linha"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDeleteRow(row.id)}
-                              className="h-auto w-auto rounded-lg bg-muted p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                              title="Excluir da planilha"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        </td>
-
-                      </tr>
+                        </div>
+                      </div>
                     ))
                   )}
-                </tbody>
+                </div>
 
-              </table>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAddModal(col.label)}
+                  className="flex cursor-pointer items-center justify-center gap-1.5 border-t border-border p-2 text-[11px] font-semibold text-muted-foreground transition hover:bg-muted/60 hover:text-primary"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Nova disputa
+                </button>
+              </div>
+            );
+          })}
+
+          {/* Criar nova coluna / status */}
+          <Popover open={isAddColumnOpen} onOpenChange={setIsAddColumnOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex min-h-[120px] w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border p-3 text-xs font-bold text-muted-foreground transition hover:border-primary/40 hover:bg-muted/40 hover:text-primary"
+              >
+                <Plus className="h-5 w-5" />
+                Nova coluna
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-64 space-y-3">
+              <StatusColorEditor
+                label={newColumnLabel}
+                color={newColumnColor}
+                labelPlaceholder="Ex: Aguardando recurso"
+                autoFocus
+                onLabelChange={setNewColumnLabel}
+                onLabelSubmit={handleConfirmAddColumn}
+                onColorChange={setNewColumnColor}
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleConfirmAddColumn}
+                disabled={!newColumnLabel.trim()}
+                className="w-full"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Criar coluna
+              </Button>
+            </PopoverContent>
+          </Popover>
+        </div>
+
+      )}
+
+      {/* ─────────── Gerenciador de Status (disponível em todos os modos) ─────────── */}
+      <Dialog open={showStatusManager} onOpenChange={setShowStatusManager}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Palette className="h-4 w-4 text-primary" />
+              Status das disputas
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Estes status valem apenas para a sua conta e são usados na planilha, no painel e como colunas do Kanban.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            {sortedStatusTypes.map(s => {
+              const emUso = disputas.filter(r => r.status === s.label).length;
+              return (
+                <div key={s.id} className="flex items-center gap-2 rounded-lg border border-border p-2">
+                  <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(s); }}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        title="Alterar cor"
+                        className="h-6 w-6 shrink-0 cursor-pointer rounded-full border border-black/10"
+                        style={{ backgroundColor: s.color }}
+                      />
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="w-60 space-y-2">
+                      <Label className="text-[10px] font-bold uppercase text-muted-foreground">Cor</Label>
+                      <ColorSwatches
+                        color={editColumnColor}
+                        onChange={(c) => { setEditColumnColor(c); handleUpdateStatusType(s.id, { color: c }); }}
+                      />
+                    </PopoverContent>
+                  </Popover>
+
+                  <input
+                    type="text"
+                    defaultValue={s.label}
+                    title="Clique para renomear este status"
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value && value !== s.label) handleUpdateStatusType(s.id, { label: value });
+                    }}
+                    className={cn(CELL_INPUT, "min-w-0 flex-1 text-xs font-semibold")}
+                  />
+
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {emUso} disputa{emUso === 1 ? "" : "s"}
+                  </span>
+
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDeleteStatusType(s.id)}
+                    className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title="Excluir status"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              );
+            })}
           </div>
-        )}
 
-      </div>
+          <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
+            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Criar novo status</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={newColumnColor}
+                onChange={(e) => setNewColumnColor(e.target.value)}
+                className="h-8 w-10 shrink-0 cursor-pointer rounded-md border border-input bg-transparent"
+                title="Escolher cor"
+              />
+              <Input
+                value={newColumnLabel}
+                onChange={(e) => setNewColumnLabel(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleConfirmAddColumn(); }}
+                placeholder="Ex: Aguardando recurso"
+                className="h-8 min-w-0 flex-1 text-xs"
+              />
+              <Button type="button" size="sm" onClick={handleConfirmAddColumn} disabled={!newColumnLabel.trim()} className="shrink-0">
+                <Plus className="h-3.5 w-3.5" />
+                Criar
+              </Button>
+            </div>
+            <ColorSwatches color={newColumnColor} onChange={setNewColumnColor} />
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Exclusão de status que ainda está em uso */}
+      <Dialog open={!!statusToDelete} onOpenChange={(open) => { if (!open) setStatusToDelete(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <AlertCircle className="h-4 w-4 text-warning" />
+              Excluir o status "{statusToDelete?.label}"
+            </DialogTitle>
+            <DialogDescription className="text-xs leading-relaxed">
+              {disputas.filter(r => r.status === statusToDelete?.label).length} disputa(s) usam este status.
+              Escolha para qual status elas devem ser movidas antes da exclusão.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold uppercase text-muted-foreground">Mover disputas para</Label>
+            <select
+              value={moveCardsToStatus}
+              onChange={(e) => setMoveCardsToStatus(e.target.value)}
+              className="w-full cursor-pointer rounded-lg border border-input bg-card px-3 py-2 text-xs font-semibold focus:outline-none"
+            >
+              {sortedStatusTypes.filter(s => s.id !== statusToDelete?.id).map(s => (
+                <option key={s.id} value={s.label}>{s.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setStatusToDelete(null)}>Cancelar</Button>
+            <Button type="button" variant="destructive" onClick={handleConfirmDeleteStatusType} disabled={!moveCardsToStatus}>
+              Mover e excluir
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
 
       {/* Add / Edit Form Modal with History Pull & Attachment AI Extractions */}
       {isModalOpen && (
@@ -1802,13 +2111,9 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       onChange={(e) => setFormData({ ...formData, status: e.target.value as DisputaStatus })}
                       className="w-full bg-card border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:border-primary"
                     >
-                      <option value="Agendada">Agendada</option>
-                      <option value="Em Disputa">Em Disputa</option>
-                      <option value="Vencida">Vencida</option>
-                      <option value="Em Recurso">Em Recurso</option>
-                      <option value="Homologada">Homologada</option>
-                      <option value="Perdida">Perdida</option>
-                      <option value="Cancelada">Cancelada</option>
+                      {statusTypes.map(s => (
+                        <option key={s.id} value={s.label}>{s.label}</option>
+                      ))}
                     </select>
                   </div>
 

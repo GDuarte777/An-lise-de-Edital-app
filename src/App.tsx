@@ -2,12 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import {
   FileText, ShieldCheck, FolderGit, FileSpreadsheet, CloudLightning,
   HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser
+  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser, CalendarDays, ClipboardCheck
 } from "lucide-react";
 import { CompanyData, EditalAnalysis, SyncItem } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
 import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
 import DisputasSheetTab from "./components/DisputasSheetTab";
+import CalendarTab from "./components/CalendarTab";
+import { resetEditalHistory } from "./utils/editalHistory";
+import HabilitacaoChecklistTab from "./components/HabilitacaoChecklistTab";
 import CompanyDocsTab from "./components/CompanyDocsTab";
 import CreateDocTab from "./components/CreateDocTab";
 import PricingCalculatorTab from "./components/PricingCalculatorTab";
@@ -82,15 +85,17 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
   bankDetails: ""
 };
 
-type TabId = "analyzer" | "radar" | "disputasSheet" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
+type TabId = "analyzer" | "radar" | "disputasSheet" | "calendar" | "habilitacao" | "createDoc" | "documents" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
 
 const CORE_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
   { id: "analyzer", label: "Análise de Edital", icon: FileText },
   { id: "radar", label: "Radar de Oportunidades", icon: Search },
   { id: "disputasSheet", label: "Planilha de Disputas", icon: FileSpreadsheet },
+  { id: "calendar", label: "Calendário", icon: CalendarDays },
 ];
 
 const OPERATIONS_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
+  { id: "habilitacao", label: "Checklist de Habilitação", icon: ClipboardCheck },
   { id: "createDoc", label: "Criar Documentos", icon: FileEdit },
   { id: "documents", label: "Gestão de Certidões", icon: ListTodo },
   { id: "calculator", label: "Calculadora de Preços", icon: Calculator },
@@ -103,6 +108,8 @@ const TAB_LABELS: Record<TabId, string> = {
   analyzer: "Análise de Edital",
   radar: "Radar de Oportunidades",
   disputasSheet: "Planilha de Disputas",
+  calendar: "Calendário",
+  habilitacao: "Checklist de Habilitação",
   createDoc: "Criar Documentos",
   documents: "Gestão de Certidões",
   calculator: "Calculadora de Preços",
@@ -263,7 +270,7 @@ export default function App() {
         await saveUserConfigToSupabase({
           activeProvider: newProvider,
           geminiKey: currentConfig?.gemini_key || localStorage.getItem("ai_gemini_key") || "",
-          geminiModel: (currentConfig?.gemini_model === "gemini-3.6-flash" ? "gemini-3.7-flash" : currentConfig?.gemini_model) || (localStorage.getItem("ai_gemini_model") === "gemini-3.6-flash" ? "gemini-3.7-flash" : localStorage.getItem("ai_gemini_model")) || "gemini-3.7-flash",
+          geminiModel: currentConfig?.gemini_model || localStorage.getItem("ai_gemini_model") || "gemini-3.6-flash",
           openaiKey: currentConfig?.openai_key || localStorage.getItem("ai_openai_key") || "",
           openaiModel: currentConfig?.openai_model || localStorage.getItem("ai_openai_model") || "gpt-4o",
           anthropicKey: currentConfig?.anthropic_key || localStorage.getItem("ai_anthropic_key") || "",
@@ -504,7 +511,7 @@ export default function App() {
       localStorage.removeItem("aip_company_data");
       localStorage.removeItem("aip_active_edital");
       localStorage.removeItem("aip_certificates");
-      localStorage.removeItem("aip_edital_history");
+      resetEditalHistory();
       localStorage.removeItem("aip_competitors_history");
       localStorage.removeItem("aip_chat_sessions");
       localStorage.removeItem("ai_active_provider");
@@ -807,6 +814,15 @@ export default function App() {
               ) : activeTab === "disputasSheet" ? (
                 <DisputasSheetTab
                   activeEdital={activeEdital}
+                  onNavigateToAnalyzer={() => setActiveTab("analyzer")}
+                />
+              ) : activeTab === "calendar" ? (
+                <CalendarTab onNavigateToDisputas={() => setActiveTab("disputasSheet")} />
+              ) : activeTab === "habilitacao" ? (
+                <HabilitacaoChecklistTab
+                  activeEdital={activeEdital}
+                  onNavigateToDocs={() => setActiveTab("documents")}
+                  onNavigateToCreateDoc={() => setActiveTab("createDoc")}
                   onNavigateToAnalyzer={() => setActiveTab("analyzer")}
                 />
               ) : activeTab === "createDoc" ? (

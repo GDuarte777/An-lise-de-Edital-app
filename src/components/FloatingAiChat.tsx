@@ -8,7 +8,7 @@ import {
   ChevronDown, Search, AlertTriangle, Maximize2, Minimize2, Square
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { addSyncedItem } from "../utils/googleSync";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -19,9 +19,9 @@ import {
   saveChatSessionToSupabase,
   deleteChatSessionFromSupabase,
   clearAllChatSessionsInSupabase,
-  fetchEditaisFromSupabase,
   subscribeToSupabaseTable
 } from "../utils/supabaseClient";
+import { useEditalHistory, refreshEditalHistory } from "../utils/editalHistory";
 
 interface FloatingAiChatProps {
   companyData: CompanyData;
@@ -58,6 +58,15 @@ function addDeletedSessionId(id: string) {
   }
 }
 
+function removeDeletedSessionId(id: string) {
+  try {
+    const current = getDeletedSessionIds().filter(existing => existing !== id);
+    localStorage.setItem(DELETED_SESSIONS_KEY, JSON.stringify(current));
+  } catch (e) {
+    console.error(e);
+  }
+}
+
 function addMultipleDeletedSessionIds(ids: string[]) {
   try {
     const current = new Set(getDeletedSessionIds());
@@ -67,6 +76,41 @@ function addMultipleDeletedSessionIds(ids: string[]) {
     console.error(e);
   }
 }
+
+// Id fixo do canal que reaparece quando o usuário apaga o último chat.
+// Precisa ser estável: com `chat-${Date.now()}` cada clique em "apagar" gerava um id
+// novo e gravava mais uma linha em sessoes_chat — foi assim que a conta acumulou
+// dezenas de "Chat Principal" vazios.
+const DEFAULT_SESSION_ID = "chat-default";
+
+function buildDefaultSession(selectedEditalId: string): ChatSession {
+  return {
+    id: DEFAULT_SESSION_ID,
+    title: "Chat Principal",
+    selectedEditalId,
+    messages: [
+      {
+        id: "msg-init",
+        role: "assistant",
+        content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
+        timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+      }
+    ],
+    createdAt: new Date().toLocaleString("pt-BR")
+  };
+}
+
+/**
+ * Teto de anexo do chat.
+ *
+ * O chat manda o arquivo inline no corpo da requisição, sem envio em partes. Em
+ * base64 o arquivo cresce cerca de 33%, e a função serverless precisa segurar o
+ * corpo cru e o objeto já convertido ao mesmo tempo. O limite anterior, de
+ * 100MB, garantia estouro de memória. Editais grandes têm caminho próprio na
+ * aba de Análise de Edital, que envia em partes.
+ */
+const MAX_ANEXO_CHAT_MB = 8;
+const MAX_ANEXO_CHAT_BYTES = MAX_ANEXO_CHAT_MB * 1024 * 1024;
 
 const MAX_CHATS_PER_USER = 20;
 const MAX_MESSAGES_PER_CHAT = 200;
@@ -141,7 +185,7 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   });
 
   // Loaded edital history
-  const [editalHistory, setEditalHistory] = useState<any[]>([]);
+  const editalHistory = useEditalHistory();
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
   // States for the modernized custom selector
@@ -149,81 +193,16 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
   const [dropdownSearch, setDropdownSearch] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Load edital history from localStorage or Supabase dynamically
-  const reloadEditalHistory = async () => {
-    let list: any[] = [];
-    const saved = localStorage.getItem("aip_edital_history");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          list = parsed;
-        }
-      } catch (e) {
-        console.error("Erro ao carregar histórico de editais:", e);
-      }
-    }
-
-    if (list.length === 0) {
-      try {
-        const dbEditais = await fetchEditaisFromSupabase();
-        if (dbEditais && dbEditais.length > 0) {
-          list = dbEditais;
-          localStorage.setItem("aip_edital_history", JSON.stringify(dbEditais));
-        }
-      } catch (e) {
-        // silent fallback
-      }
-    }
-
-    setEditalHistory(prev => {
-      if (JSON.stringify(prev) === JSON.stringify(list)) {
-        return prev;
-      }
-      return list;
-    });
-  };
-
-  // Keep editalHistory always in sync via event listeners
+  // Ao analisar um edital novo, o chat já passa a apontar para ele.
   useEffect(() => {
-    reloadEditalHistory(); // Sync on mount
-
-    const handleStorageChange = (e: StorageEvent) => {
-      if (!e.key || e.key === "aip_edital_history") {
-        reloadEditalHistory();
-      }
-    };
-
-    const handleCustomUpdate = () => {
-      reloadEditalHistory();
-    };
-
     const handleEditalAnalyzed = (e: any) => {
-      reloadEditalHistory();
       if (e?.detail?.id) {
         setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, selectedEditalId: e.detail.id } : s));
       }
     };
-
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("aip_edital_history_updated", handleCustomUpdate);
     window.addEventListener("aip_edital_analyzed", handleEditalAnalyzed);
-    window.addEventListener("focus", handleCustomUpdate);
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("aip_edital_history_updated", handleCustomUpdate);
-      window.removeEventListener("aip_edital_analyzed", handleEditalAnalyzed);
-      window.removeEventListener("focus", handleCustomUpdate);
-    };
+    return () => window.removeEventListener("aip_edital_analyzed", handleEditalAnalyzed);
   }, [activeSessionId]);
-
-  // Sync again when chat is opened
-  useEffect(() => {
-    if (isOpen) {
-      reloadEditalHistory();
-    }
-  }, [isOpen]);
 
   // Click outside to close the custom selector dropdown
   useEffect(() => {
@@ -398,7 +377,7 @@ PARECER E ESTRATÉGIA:
   };
 
   const handleOpenSystemDocSelector = () => {
-    reloadEditalHistory();
+    refreshEditalHistory();
     const saved = localStorage.getItem("aip_certificates");
     if (saved) {
       try {
@@ -424,7 +403,7 @@ PARECER E ESTRATÉGIA:
   };
 
   const handleSelectSystemEdital = (editalItem: any) => {
-    const edital = editalItem.analysis || editalItem;
+    const edital = editalItem.analysis;
     const organName = edital.identificacaoCertame?.orgaoComprador || "OrgaoLicitante";
     const cleanOrganName = organName.replace(/[^a-zA-Z0-0]/g, "_").substring(0, 15);
     const title = editalItem.title || `Edital_${cleanOrganName}.txt`;
@@ -530,6 +509,13 @@ PARECER E ESTRATÉGIA:
     return titleWords.join(" ");
   };
 
+  // Espelho sempre atualizado de `sessions`, para handlers assíncronos não lerem
+  // a lista congelada no render em que foram criados.
+  const sessionsRef = useRef<ChatSession[]>(sessions);
+  sessionsRef.current = sessions;
+  // Exclusões em voo, para o mesmo chat não ser apagado duas vezes.
+  const deletingIdsRef = useRef<Set<string>>(new Set());
+
   const [isLoadedFromDb, setIsLoadedFromDb] = useState(false);
   // Ref to track the previous sessions for change detection (prevents unnecessary Supabase writes)
   const prevSessionsRef = useRef<string>("");
@@ -606,11 +592,15 @@ PARECER E ESTRATÉGIA:
 
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     syncTimerRef.current = setTimeout(() => {
-      validSessions.forEach(session => {
-        saveChatSessionToSupabase(session).catch(e =>
-          console.warn("[Chat Sync] Erro ao salvar sessão no Supabase:", e)
-        );
-      });
+      validSessions
+        // Um canal que só tem a saudação automática não é conversa nenhuma: gravá-lo
+        // era o que enchia sessoes_chat de "Chat Principal" vazios.
+        .filter(session => (session.messages || []).some(m => m.role === "user"))
+        .forEach(session => {
+          saveChatSessionToSupabase(session).catch(e =>
+            console.warn("[Chat Sync] Erro ao salvar sessão no Supabase:", e)
+          );
+        });
     }, 800); // 800ms debounce prevents cascading writes
   }, [sessions, isLoadedFromDb]); // ⚠️ isOpen and activeSessionId intentionally removed to prevent spurious syncs
 
@@ -622,7 +612,7 @@ PARECER E ESTRATÉGIA:
     }
     const item = editalHistory.find(h => h.id === selectedId);
     if (item) {
-      return item.analysis || item;
+      return item.analysis;
     }
     return null;
   };
@@ -659,49 +649,44 @@ PARECER E ESTRATÉGIA:
     setShowSidebarMobile(false);
   };
 
-  const handleDeleteChat = async (e: React.MouseEvent, idToDelete: string) => {
+  const handleDeleteChat = (e: React.MouseEvent, idToDelete: string) => {
     e.stopPropagation();
-    
+
+    // Cliques repetidos no mesmo botão chegavam todos aqui antes do primeiro
+    // terminar (o await do Supabase segurava o re-render), e cada um lia a lista
+    // ANTIGA de sessões. Com uma sessão só, todos entravam no ramo "acabou, cria
+    // outra" e criavam um canal novo cada — a origem dos chats em massa.
+    if (deletingIdsRef.current.has(idToDelete)) return;
+    deletingIdsRef.current.add(idToDelete);
+
     // 1. Grava no registro local de exclusões permanentes
     addDeletedSessionId(idToDelete);
 
-    // 2. Deleta permanentemente no Supabase
-    try {
-      await deleteChatSessionFromSupabase(idToDelete);
-    } catch (err) {
-      console.warn("Erro ao deletar sessão de chat do Supabase:", err);
+    // 2. Atualiza o estado ANTES de ir na rede, a partir da lista mais recente
+    //    (sessionsRef), nunca da capturada no render.
+    const remaining = sessionsRef.current.filter(s => s.id !== idToDelete);
+    let nextSessions: ChatSession[];
+    let nextActiveId: string | null = null;
+
+    if (remaining.length === 0) {
+      removeDeletedSessionId(DEFAULT_SESSION_ID);
+      nextSessions = [buildDefaultSession(activeEdital ? "active" : "")];
+      nextActiveId = DEFAULT_SESSION_ID;
+    } else {
+      nextSessions = remaining;
+      if (activeSessionId === idToDelete) nextActiveId = remaining[0].id;
     }
 
-    // 3. Atualiza estado local e localStorage
-    const updated = sessions.filter(s => s.id !== idToDelete);
-    
-    if (updated.length === 0) {
-      const newDefaultId = `chat-${Date.now()}`;
-      const defaultS: ChatSession = {
-        id: newDefaultId,
-        title: "Chat Principal",
-        selectedEditalId: activeEdital ? "active" : "",
-        messages: [
-          {
-            id: `msg-init-${Date.now()}`,
-            role: "assistant",
-            content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
-            timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-          }
-        ],
-        createdAt: new Date().toLocaleString("pt-BR")
-      };
-      setSessions([defaultS]);
-      setActiveSessionId(newDefaultId);
-      localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
-      await saveChatSessionToSupabase(defaultS).catch(() => {});
-    } else {
-      setSessions(updated);
-      localStorage.setItem("aip_chat_sessions", JSON.stringify(updated));
-      if (activeSessionId === idToDelete) {
-        setActiveSessionId(updated[0].id);
-      }
-    }
+    sessionsRef.current = nextSessions;
+    localStorage.setItem("aip_chat_sessions", JSON.stringify(nextSessions));
+    setSessions(nextSessions);
+
+    // 3. Deleta no Supabase em segundo plano (não bloqueia a interface)
+    deleteChatSessionFromSupabase(idToDelete)
+      .catch(err => console.warn("Erro ao deletar sessão de chat do Supabase:", err))
+      .finally(() => deletingIdsRef.current.delete(idToDelete));
+
+    if (nextActiveId) setActiveSessionId(nextActiveId);
 
     confetti({ particleCount: 30, spread: 40, colors: ["#ef4444", "#f87171"] });
     setShowSidebarMobile(true);
@@ -724,27 +709,17 @@ PARECER E ESTRATÉGIA:
     // 3. Limpa localStorage
     localStorage.removeItem("aip_chat_sessions");
 
-    // 4. Inicia um novo chat padrão com ID único
-    const newDefaultId = `chat-${Date.now()}`;
-    const defaultS: ChatSession = {
-      id: newDefaultId,
-      title: "Chat Principal",
-      selectedEditalId: activeEdital ? "active" : "",
-      messages: [
-        {
-          id: `msg-init-${Date.now()}`,
-          role: "assistant",
-          content: `Olá! Sou o seu **Assessor de Licitações Inteligente HORASIS**. Como posso te ajudar hoje?`,
-          timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
-        }
-      ],
-      createdAt: new Date().toLocaleString("pt-BR")
-    };
+    // 4. Reinicia no canal padrão, com id fixo — assim limpar o histórico várias
+    //    vezes seguidas não deixa uma trilha de "Chat Principal" órfãos no banco.
+    //    A sessão só chega ao Supabase quando o usuário realmente escrever nela
+    //    (o efeito de sincronização cuida disso).
+    removeDeletedSessionId(DEFAULT_SESSION_ID);
+    const defaultS = buildDefaultSession(activeEdital ? "active" : "");
 
-    setSessions([defaultS]);
-    setActiveSessionId(newDefaultId);
+    sessionsRef.current = [defaultS];
     localStorage.setItem("aip_chat_sessions", JSON.stringify([defaultS]));
-    await saveChatSessionToSupabase(defaultS).catch(() => {});
+    setSessions([defaultS]);
+    setActiveSessionId(DEFAULT_SESSION_ID);
 
     confetti({ particleCount: 50, spread: 60, colors: ["#ef4444", "#f87171"] });
   };
@@ -790,8 +765,8 @@ PARECER E ESTRATÉGIA:
         if (!file) continue;
 
         // Reject files larger than 100MB
-        if (file.size > 100 * 1024 * 1024) {
-          alert("A imagem colada excede o limite de 100MB.");
+        if (file.size > MAX_ANEXO_CHAT_BYTES) {
+          alert(`A imagem colada excede o limite de ${MAX_ANEXO_CHAT_MB}MB do chat. Para documentos grandes, use a aba "Análise de Edital".`);
           continue;
         }
 
@@ -818,8 +793,8 @@ PARECER E ESTRATÉGIA:
     if (!file) return;
 
     // Reject files larger than 100MB to support larger documents
-    if (file.size > 100 * 1024 * 1024) {
-      alert("O arquivo excede o limite de 100MB. Por favor, selecione uma imagem ou documento menor.");
+    if (file.size > MAX_ANEXO_CHAT_BYTES) {
+      alert(`O arquivo excede o limite de ${MAX_ANEXO_CHAT_MB}MB do chat. Para editais grandes, use a aba "Análise de Edital", que envia o arquivo em partes.`);
       return;
     }
 
@@ -914,11 +889,28 @@ PARECER E ESTRATÉGIA:
       const selectedEditalObj = activeSession.selectedEditalId ? getSelectedEditalObject(activeSession.selectedEditalId) : null;
       let replyText = "";
 
+      /**
+       * Só o anexo da mensagem ATUAL viaja com o base64.
+       *
+       * O histórico inteiro era reenviado a cada mensagem, com o base64 de todos
+       * os anexos anteriores junto. Uma conversa com um PDF de 40MB passava a
+       * mandar 40MB em TODA mensagem seguinte — o corpo da requisição estourava
+       * a memória da função serverless, que é morta de fora: nenhum tratador
+       * roda, nenhum log sobra, e o usuário recebe FUNCTION_INVOCATION_FAILED
+       * sem explicação. O servidor já sabe lidar com isso: anexo de mensagem
+       * antiga vira uma marcação de texto no contexto.
+       */
+      const mensagensParaEnviar = updatedMessages.map((m, idx) =>
+        idx === updatedMessages.length - 1 || !m.attachment?.data
+          ? m
+          : { ...m, attachment: { ...m.attachment, data: `[anexo anterior: ${m.attachment.name || "arquivo"}]` } }
+      );
+
       const response = await apiFetch("/api/chat", {
         method: "POST",
         signal: abortControllerRef.current.signal,
         body: {
-          messages: updatedMessages,
+          messages: mensagensParaEnviar,
           companyData: companyData,
           activeEditalAnalysis: selectedEditalObj,
           systemCertificates: loadSystemCertificates(),
@@ -926,7 +918,7 @@ PARECER E ESTRATÉGIA:
         }
       });
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         // Show server error message clearly to the user
@@ -1364,7 +1356,7 @@ PARECER E ESTRATÉGIA:
                     {activeSession.selectedEditalId !== "" && activeSession.selectedEditalId !== "active" && (
                       (() => {
                         const found = editalHistory.find(h => h.id === activeSession.selectedEditalId);
-                        const ed = found?.analysis || found;
+                        const ed = found?.analysis;
                         return `📄 ${found?.title || ed?.identificacaoCertame?.orgaoComprador?.substring(0, 20) || "Edital Histórico"}`;
                       })()
                     )}
@@ -1445,12 +1437,12 @@ PARECER E ESTRATÉGIA:
                       {/* Group: History */}
                       {(() => {
                         const filteredHistory = editalHistory.filter(item => {
-                          const ed = item.analysis || item;
+                          const ed = item.analysis;
                           const term = dropdownSearch.toLowerCase();
                           return (
                             (item.title || "").toLowerCase().includes(term) ||
                             (ed.identificacaoCertame?.orgaoComprador || "").toLowerCase().includes(term) ||
-                            (ed.identificacaoCertame?.modalidadeLicitacao || "").toLowerCase().includes(term)
+                            (ed.identificacaoCertame?.modalidade || "").toLowerCase().includes(term)
                           );
                         });
 
@@ -1461,10 +1453,10 @@ PARECER E ESTRATÉGIA:
                                 <span>📂 Editais Analisados ({filteredHistory.length})</span>
                               </div>
                               {filteredHistory.map((item, idx) => {
-                                const ed = item.analysis || item;
+                                const ed = item.analysis;
                                 const isSelected = activeSession.selectedEditalId === item.id;
                                 const title = item.title || ed.identificacaoCertame?.orgaoComprador || "Edital Histórico";
-                                const desc = ed.identificacaoCertame?.modalidadeLicitacao || "Pregão Eletrônico";
+                                const desc = ed.identificacaoCertame?.modalidade || "Pregão Eletrônico";
 
                                 return (
                                   <button
@@ -1936,7 +1928,7 @@ PARECER E ESTRATÉGIA:
                   {editalHistory.length > 0 ? (
                     <div className="space-y-1">
                       {editalHistory.map((item, idx) => {
-                        const ed = item.analysis || item;
+                        const ed = item.analysis;
                         const organ = ed.identificacaoCertame?.orgaoComprador || "Histórico";
                         const title = item.title || `Pregão de ${organ.substring(0, 15)}`;
                         return (

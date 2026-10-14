@@ -1,0 +1,20 @@
+# Configuração do projeto Supabase.
+#
+# O backend inteiro da plataforma vive em supabase/functions/api. A Vercel
+# publica apenas os arquivos estáticos do frontend.
+project_id = "cghlfhndoqohmrrvppjj"
+
+[functions.api]
+# O gateway NÃO exige JWT nesta função, e isso é deliberado:
+#
+#  - /api/pncp/* consulta dados públicos do Portal Nacional de Contratações e é
+#    aberto ao navegador, inclusive pelo download de edital em nova aba, que não
+#    carrega cabeçalho de autorização nenhum;
+#  - as rotas de IA fazem a checagem por dentro: sem um JWT válido não há como
+#    resolver a chave do usuário, e sem chave não há chamada a provedor. Quem não
+#    está autenticado não consegue gastar nada de ninguém.
+#
+# Exigir JWT no gateway devolveria um 401 com corpo que não é o JSON que o
+# frontend espera, e o usuário veria "resposta inválida do servidor" em vez do
+# motivo real — o tipo de erro mudo que esta migração existe para eliminar.
+verify_jwt = false

@@ -24,19 +24,18 @@ import {
   TableCell,
 } from "./ui/table";
 import { addSyncedItem, syncAnalysisToGoogleSheets } from "../utils/googleSync";
-import { 
-  syncEditalToSupabase, 
-  syncDocumentToSupabase, 
-  callSupabaseGeminiEdgeFunction,
-  fetchEditaisFromSupabase,
-  saveEditalToSupabase,
-  deleteEditalFromSupabase,
-  subscribeToSupabaseTable,
+import {
   saveDisputaToSupabase,
   generateUUID
 } from "../utils/supabaseClient";
+import {
+  useEditalHistory,
+  addEditalToHistory,
+  removeEditalFromHistory,
+  clearEditalHistory
+} from "../utils/editalHistory";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError, readJsonResponse, readJsonResponseSafe } from "../utils/aiClientHelper";
 
 function cleanMarkdownText(text: string | undefined): string {
   if (!text) return "";
@@ -321,6 +320,9 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  // Número de controle PNCP da contratação, quando a análise vem do Radar.
+  // Permite ao servidor sobrepor os campos factuais com o dado oficial.
+  const [pncpNumeroControle, setPncpNumeroControle] = useState<string>("");
 
   // File size error popup modal state (>60MB)
   const [fileSizeErrorModal, setFileSizeErrorModal] = useState<{
@@ -796,11 +798,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || "Erro de processamento da proposta.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data.markdown) {
         const finalTitle = data.title || proposalFileTitle || "Proposta Comercial de Licitação.md";
         onOpenDocPreview(finalTitle, data.markdown, "proposal");
@@ -820,47 +822,27 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   // Sub-tabs for edital analysis view
   const [analysisActiveTab, setAnalysisActiveTab] = useState<"report" | "struc" | "checklist">("report");
 
-  // Histórico de Editais (Supabase com fallback Local e Realtime)
-  const [history, setHistory] = useState<any[]>([]);
+  // Histórico de Editais — vem do store compartilhado, a mesma lista que todas
+  // as outras ferramentas enxergam.
+  const history = useEditalHistory();
   const [showConfirmClearHistory, setShowConfirmClearHistory] = useState(false);
 
   useEffect(() => {
-    async function loadHistory() {
-      try {
-        const dbEditais = await fetchEditaisFromSupabase();
-        if (dbEditais && dbEditais.length > 0) {
-          setHistory(dbEditais);
-          localStorage.setItem("aip_edital_history", JSON.stringify(dbEditais));
-          window.dispatchEvent(new Event("aip_edital_history_updated"));
-          return;
-        }
-      } catch (e) {
-        console.warn("Falha ao buscar editais do Supabase, tentando local:", e);
-      }
-
-      try {
-        const saved = localStorage.getItem("aip_edital_history");
-        if (saved) {
-          setHistory(JSON.parse(saved));
-        }
-      } catch (e) {
-        setHistory([]);
-      }
-    }
-    loadHistory();
-
-    // Subscribe to real-time events on editais_analisados
-    const unsubscribe = subscribeToSupabaseTable("editais_analisados", () => {
-      loadHistory();
-    });
-
     const handleExternalText = () => {
       const extText = localStorage.getItem("aip_auto_analyze_text");
-      if (extText) {
-        setTextInput(extText);
-        setAttachedFiles([]);
+      // O Radar pode repassar o PDF oficial do edital e o número de controle
+      // PNCP. O arquivo vem por variável de janela porque não caberia no
+      // localStorage; o número de controle faz o servidor completar os campos
+      // factuais com o dado publicado pelo órgão.
+      const pendente = (window as any).__aipPendingEdital;
+
+      if (extText || pendente?.file) {
+        setTextInput(extText || "");
+        setAttachedFiles(pendente?.file ? [pendente.file] : []);
+        setPncpNumeroControle(pendente?.numeroControlePNCP || "");
         localStorage.removeItem("aip_auto_analyze_text");
-        
+        delete (window as any).__aipPendingEdital;
+
         // Trigger auto analysis after a tiny delay so the state update is processed
         setTimeout(() => {
           const btn = document.getElementById("trigger-analyze-btn");
@@ -869,16 +851,12 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     };
 
-    const handleWindowFocus = () => loadHistory();
-    window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("aip_trigger_external_text", handleExternalText);
-    
+
     // Check on mount as well
     handleExternalText();
 
     return () => {
-      unsubscribe();
-      window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("aip_trigger_external_text", handleExternalText);
     };
   }, []);
@@ -1002,7 +980,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     setLoading(true);
     // AbortController for 120s timeout
     const abortCtrl = new AbortController();
-    const timeoutId = setTimeout(() => abortCtrl.abort(), 120_000);
+    // O servidor tem orçamento próprio de ~100s para falar com a IA e responde antes
+    // disso com o motivo real da falha. O timeout do navegador fica acima, cobrindo
+    // também o envio do arquivo e a partida a frio da função — se ele disparar
+    // primeiro, o usuário perde a explicação e vê só "excedeu o tempo".
+    const timeoutId = setTimeout(() => abortCtrl.abort(), 240_000);
 
     try {
       let data: any;
@@ -1016,16 +998,24 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         signal: abortCtrl.signal,
         body: {
           textInput: textInput,
-          attachments: preparedAttachments
+          attachments: preparedAttachments,
+          numeroControlePNCP: pncpNumeroControle || undefined
         }
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || `Erro na resposta do servidor (${response.status}).`);
       }
 
-      data = await response.json();
+      data = await readJsonResponse(response);
+
+      // O servidor responde 200 mesmo quando a IA falha, entregando uma extração local
+      // marcada com degraded/reason. Sem avisar, o usuário lê um relatório pobre achando
+      // que foi a IA que o produziu.
+      if (data?.degraded && data?.reason) {
+        alert(`⚠️ A IA não conseguiu analisar este edital.\n\n${data.reason}\n\nO que aparece abaixo é apenas uma extração local do texto, sem análise da IA.`);
+      }
 
       if (data && data.analysis) {
         const fileNamesSummary = attachedFiles.length > 0
@@ -1038,6 +1028,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           pontosAlerta: Array.isArray(data.analysis.pontosAlerta) ? data.analysis.pontosAlerta : [],
           documentosExigidos: Array.isArray(data.analysis.documentosExigidos) ? data.analysis.documentosExigidos : [],
           itensEdital: Array.isArray(data.analysis.itensEdital) ? data.analysis.itensEdital : [],
+          camposNaoIdentificados: Array.isArray(data.analysis.camposNaoIdentificados) ? data.analysis.camposNaoIdentificados : [],
           rawText: textInput || fileNamesSummary
         };
         
@@ -1047,18 +1038,14 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
         confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
 
-        // Salvar no Histórico Local e no Supabase Privado
+        // Salvar no histórico compartilhado (grava local + Supabase e avisa
+        // todas as outras ferramentas na mesma hora)
         const firstFileName = attachedFiles.length > 0 ? attachedFiles[0].name : null;
-        const newHistoryItem = {
-          id: Date.now().toString(),
-          title: analysisResult.descricaoProduto 
-            ? `Análise - ${analysisResult.descricaoProduto.slice(0, 45)}${analysisResult.descricaoProduto.length > 45 ? "..." : ""}` 
-            : (firstFileName ? `Anexo: ${firstFileName}` : `Análise S/N`),
-          date: new Date().toLocaleString("pt-BR"),
-          analysis: analysisResult
-        };
+        const historyTitle = analysisResult.descricaoProduto
+          ? `Análise - ${analysisResult.descricaoProduto.slice(0, 45)}${analysisResult.descricaoProduto.length > 45 ? "..." : ""}`
+          : (firstFileName ? `Anexo: ${firstFileName}` : `Análise S/N`);
 
-        saveEditalToSupabase(newHistoryItem).catch((e) => console.warn("Erro ao salvar edital no Supabase:", e));
+        addEditalToHistory(analysisResult, historyTitle).catch((e) => console.warn("Erro ao salvar edital no histórico:", e));
 
         // Auto-save to planilhas_disputas in Supabase in real-time
         try {
@@ -1066,16 +1053,37 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           const fin: any = analysisResult.viabilidadeFinanceira || {};
           const rawValStr = String(fin.valorEstimado || fin.valorEstimadoTotal || "");
           
-          // Extract the GLOBAL/TOTAL value (prefer the largest R$ value found)
-          const allPrices = rawValStr.match(/([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/g) || [];
-          const parsedPrices = allPrices.map(p =>
-            parseFloat(p.replace(/\./g, "").replace(",", "."))
-          ).filter(v => !isNaN(v) && v > 0);
-          
-          // Use the largest found value as the global estimated value
-          const numVal = parsedPrices.length > 0
-            ? Math.max(...parsedPrices)
-            : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
+          /**
+           * Valor global estimado do certame.
+           *
+           * Antes o código pegava o MAIOR número monetário que aparecesse no
+           * texto. Isso acerta por sorte quando só há unitário e total, e erra
+           * feio quando o texto menciona multa, garantia contratual ou
+           * faturamento mínimo — a planilha de disputa era salva com o valor da
+           * multa. Agora a busca é ancorada na expressão que qualifica o número
+           * como total/global, e só cai para o maior valor se nada estiver
+           * qualificado.
+           */
+          const dinheiroRegex = /([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/;
+          const paraNumero = (t: string) => parseFloat(t.replace(/\./g, "").replace(",", "."));
+
+          // Números precedidos por termos que NÃO são o valor estimado.
+          const ruido = /(multa|penalidade|san[çc][ãa]o|garantia|cau[çc][ãa]o|faturamento|patrim[ôo]nio|capital social)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/gi;
+          const valoresRuido = new Set<number>();
+          for (const m of rawValStr.matchAll(ruido)) valoresRuido.add(paraNumero(m[2]));
+
+          const qualificadoRegex = /(valor\s+(?:total|global|estimado\s+total)|total\s+estimado|valor\s+estimado\s+da\s+contrata[çc][ãa]o)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/i;
+          const qualificado = rawValStr.match(qualificadoRegex);
+
+          const todosValores = (rawValStr.match(new RegExp(dinheiroRegex, "g")) || [])
+            .map(paraNumero)
+            .filter(v => !isNaN(v) && v > 0 && !valoresRuido.has(v));
+
+          const numVal = qualificado
+            ? paraNumero(qualificado[2])
+            : todosValores.length > 0
+              ? Math.max(...todosValores)
+              : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
 
           const disputaRow = {
             id: generateUUID(),
@@ -1101,15 +1109,6 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
           console.warn("Could not auto-add disputa row:", e);
         }
 
-        setHistory(prev => {
-          const updated = [newHistoryItem, ...prev];
-          localStorage.setItem("aip_edital_history", JSON.stringify(updated));
-          return updated;
-        });
-
-        window.dispatchEvent(new Event("aip_edital_history_updated"));
-        window.dispatchEvent(new CustomEvent("aip_edital_analyzed", { detail: newHistoryItem }));
-
         // Auto-sync log results dynamically to Google Sheets/Drive simulation!
         syncAnalysisToGoogleSheets(`Análise Edital - ${(analysisResult.descricaoProduto || "").slice(0, 30)}`, analysisResult);
 
@@ -1124,7 +1123,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       }
     } catch (e: any) {
       if (e?.name === "AbortError" || e?.message?.includes("aborted")) {
-        alert("⏱️ A análise excedeu 120 segundos. O arquivo pode ser muito grande ou a IA está sobrecarregada. Tente novamente com um texto menor ou aguarde alguns instantes.");
+        alert("⏱️ A análise excedeu 4 minutos, contando o envio do arquivo e o processamento pela IA.\n\nNormalmente é sobrecarga temporária do Gemini (erro 503) ou uma conexão lenta para enviar o arquivo. Aguarde alguns minutos e tente de novo — ou selecione outro modelo em \"IA & Modelos\".");
       } else {
         alert(formatAiError(e));
       }
@@ -1274,11 +1273,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || "Erro de processamento no refinamento.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data && data.analysis) {
         const fileNamesSummary = attachedFiles.length > 0
           ? `Anexos (${attachedFiles.length}): ${attachedFiles.map(f => f.name).join(", ")}`
@@ -1334,11 +1333,11 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
+        const errData = await readJsonResponseSafe(response);
         throw new Error(errData.error || errData.message || "Erro de processamento do documento.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data.markdown) {
         const docTitle = docType === "proposal" ? "Proposta Comercial de Licitação.md" : 
                          docType === "joint_declaration" ? "Declaração Conjunta Unificada.md" : 
@@ -1500,12 +1499,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <button
                           onClick={() => {
                             // Delete all from Supabase
-                            history.forEach(item => {
-                              deleteEditalFromSupabase(item.id).catch(() => {});
-                            });
-                            setHistory([]);
-                            localStorage.removeItem("aip_edital_history");
-                            window.dispatchEvent(new Event("aip_edital_history_updated"));
+                            clearEditalHistory().catch(() => {});
                             setActiveEdital(null);
                             setShowConfirmClearHistory(false);
                           }}
@@ -1575,12 +1569,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            // Delete from Supabase
-                            deleteEditalFromSupabase(item.id).catch(() => {});
-                            const updated = history.filter((h: any) => h.id !== item.id);
-                            setHistory(updated);
-                            localStorage.setItem("aip_edital_history", JSON.stringify(updated));
-                            window.dispatchEvent(new Event("aip_edital_history_updated"));
+                            removeEditalFromHistory(item.id).catch(() => {});
                             if (isSelected) {
                               setActiveEdital(null);
                               setTextInput("");
@@ -2056,6 +2045,20 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
                     )}
+                  </div>
+                )}
+
+                {/* A análise deixou de preencher campos ausentes com conteúdo
+                    plausível. Quando algo não é encontrado no edital, o usuário
+                    precisa saber — silêncio aqui seria só outra forma de engano. */}
+                {Array.isArray((activeEdital as any).camposNaoIdentificados) && (activeEdital as any).camposNaoIdentificados.length > 0 && (
+                  <div className="mb-4 p-3 rounded-xl border border-warning/40 bg-warning/10 text-foreground text-[11px] leading-relaxed flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                    <span>
+                      <strong>A IA não localizou no documento:</strong>{" "}
+                      {(activeEdital as any).camposNaoIdentificados.join(", ")}. Esses campos ficaram em branco
+                      de propósito, em vez de preenchidos por suposição — confira direto no edital antes de decidir.
+                    </span>
                   </div>
                 )}
 

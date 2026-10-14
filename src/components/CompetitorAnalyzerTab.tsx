@@ -5,6 +5,7 @@ import {
   deleteCompetitorFromSupabase,
   subscribeToSupabaseTable
 } from "../utils/supabaseClient";
+import { useEditalHistory } from "../utils/editalHistory";
 import { 
   FileText, CheckCircle, AlertTriangle, Trash2, Loader2, Play, Sparkles, 
   Copy, Check, Scale, ShieldAlert, Users, Award, Download, ArrowRight, ClipboardPaste, Info, FileUp, ListTodo, History, Settings2, HelpCircle
@@ -12,7 +13,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import confetti from "canvas-confetti";
-import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError } from "../utils/aiClientHelper";
+import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError, readJsonResponse } from "../utils/aiClientHelper";
 import { CompetitorAnalysis, CompetitorHistoryItem, EditalAnalysis } from "../types";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
@@ -51,32 +52,8 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
   const [activeSubTab, setActiveSubTab] = useState<"report" | "irregularities" | "appeal">("report");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Local Edital history for dropdown
-  const [editalHistory, setEditalHistory] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem("aip_edital_history");
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
-
-  useEffect(() => {
-    const syncEditalHistory = () => {
-      try {
-        const saved = localStorage.getItem("aip_edital_history");
-        if (saved) {
-          setEditalHistory(JSON.parse(saved));
-        }
-      } catch (e) {}
-    };
-    window.addEventListener("aip_edital_history_updated", syncEditalHistory);
-    window.addEventListener("storage", syncEditalHistory);
-    return () => {
-      window.removeEventListener("aip_edital_history_updated", syncEditalHistory);
-      window.removeEventListener("storage", syncEditalHistory);
-    };
-  }, []);
+  // Histórico de editais — lista compartilhada com o resto da plataforma
+  const editalHistory = useEditalHistory();
 
   // Competitor audit history (Supabase with Local fallback)
   const [competitorHistory, setCompetitorHistory] = useState<CompetitorHistoryItem[]>([]);
@@ -267,7 +244,7 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
         throw new Error("Erro de comunicação com o servidor.");
       }
 
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (data.analysis) {
         const analysisResult: CompetitorAnalysis = data.analysis;
         

@@ -18,11 +18,15 @@ export interface Certificate {
   notes?: string;
   fileUploaded?: boolean;
   fileName?: string;
+  fileBase64?: string;
+  fileMimeType?: string;
   documentMatchesRow?: boolean;
   validationFeedback?: string;
 }
 
 export interface EditalAnalysis {
+  /** Campos que a IA não localizou no edital. Ficam em branco em vez de preenchidos por suposição. */
+  camposNaoIdentificados?: string[];
   pontosPositivos: string[];
   pontosAlerta: string[];
   prazoEntrega: string;
@@ -137,7 +141,17 @@ export interface CompetitorHistoryItem {
   analysis: CompetitorAnalysis;
 }
 
-export type DisputaStatus = "Agendada" | "Em Disputa" | "Vencida" | "Perdida" | "Em Recurso" | "Homologada" | "Cancelada";
+// Status livre: além dos padrões (Agendada, Em Disputa, Vencida, Perdida, Em Recurso,
+// Homologada, Cancelada), cada usuário pode criar seus próprios tipos de status —
+// ver DisputaStatusType abaixo.
+export type DisputaStatus = string;
+
+export interface DisputaStatusType {
+  id: string;
+  label: string;
+  color: string; // hex color, ex: "#f97316"
+  position: number;
+}
 
 export interface DisputaRow {
   id: string;
@@ -156,4 +170,3 @@ export interface DisputaRow {
   observacoes?: string; // Anotações / Estratégia
   linkPNCP?: string; // Link direto do edital/contratação no PNCP
 }
-
