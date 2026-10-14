@@ -12,7 +12,7 @@
     "start": "electron-vite preview",
     "dist:win": "electron-vite build && electron-builder --win",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx src/main/engine/strategy.test.ts && tsx src/main/engine/modelo-lance.test.ts && tsx src/main/engine/sniffer.test.ts && tsx src/main/auth/login.test.ts && tsx src/main/auth/endereco.test.ts && tsx src/main/engine/motor-extensao.test.ts && tsx src/main/bot/bot.test.ts && tsx src/main/bot/stomp/quadros.test.ts && tsx src/main/bot/stomp/cliente.test.ts && tsx src/compartilhado/painel.test.ts",
+    "test": "tsx src/main/engine/strategy.test.ts && tsx src/main/engine/modelo-lance.test.ts && tsx src/main/engine/sniffer.test.ts && tsx src/main/auth/login.test.ts && tsx src/main/auth/endereco.test.ts && tsx src/main/engine/motor-extensao.test.ts && tsx src/main/bot/bot.test.ts && tsx src/main/bot/stomp/quadros.test.ts && tsx src/main/bot/stomp/cliente.test.ts && tsx src/main/bot/rest/portal.test.ts && tsx src/compartilhado/painel.test.ts",
     "test:ui": "electron scripts/smoke-ui.cjs --no-sandbox",
     "test:sala": "electron scripts/teste-agente-sala.cjs --no-sandbox",
     "test:coletor": "electron scripts/teste-coletor.cjs --no-sandbox",
@@ -22,7 +22,7 @@
     "test:login": "electron scripts/teste-login-janelas.cjs --no-sandbox",
     "test:portal": "electron scripts/teste-pergunta-portal.cjs --no-sandbox",
     "test:margem": "node scripts/teste-margem-decimais.cjs",
-    "test:bot": "tsx src/main/bot/bot.test.ts && tsx src/main/bot/stomp/quadros.test.ts && tsx src/main/bot/stomp/cliente.test.ts",
+    "test:bot": "tsx src/main/bot/bot.test.ts && tsx src/main/bot/stomp/quadros.test.ts && tsx src/main/bot/stomp/cliente.test.ts && tsx src/main/bot/rest/portal.test.ts",
     "painel:preview": "vite --config vite.painel.config.ts",
     "painel:build": "vite build --config vite.painel.config.ts"
   },
