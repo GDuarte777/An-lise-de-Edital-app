@@ -147,6 +147,7 @@ export function criarDemonstracao(): FontePainel {
         variacaoMinimaMelhorLance: it.variacaoMinima === null ? null : paraMicro(it.variacaoMinima),
         variacaoMinimaFornecedor: null,
         permitirDizima: it.config.permitirDecimais || it.permitirDizima,
+        posicao: it.minhaPosicao,
         segundosRestantes: it.segundosRestantes
       };
 

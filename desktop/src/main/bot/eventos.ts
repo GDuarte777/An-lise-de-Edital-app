@@ -34,7 +34,9 @@ export const ALIASES = {
   segundos: ["segundosRestantes", "tempoRestanteSegundos", "tempoRestante"],
   milissegundos: ["tempoRestanteMs", "milissegundosRestantes"],
   encerramento: ["dataHoraEncerramento", "horaEncerramento", "dataEncerramento", "fimDisputa"],
-  compra: ["numeroCompra", "idCompra", "compra", "numeroProcesso"]
+  compra: ["numeroCompra", "idCompra", "compra", "numeroProcesso"],
+  descricao: ["descricaoItem", "descricao", "objeto", "nomeItem", "especificacao"],
+  posicao: ["posicao", "classificacao", "colocacao", "posicaoFornecedor"]
 } as const;
 
 export interface LeituraItem {
@@ -49,6 +51,8 @@ export interface LeituraItem {
   /** Vai no corpo do lance (`faseItem`). `null` quando o portal não disse. */
   fase: string | null;
   compra: string | null;
+  /** Texto do item, só para a tela. Nada aqui entra em decisão. */
+  descricao: string | null;
   recebidoEm: number;
   /** O que não pôde ser lido. A UI mostra isto em vez de inventar número. */
   camposIlegiveis: string[];
@@ -82,6 +86,12 @@ export function lerDinheiro(valor: unknown): Micro | null {
   }
   if (micro === null || micro <= 0n) return null;
   return micro;
+}
+
+/** Posição na classificação. Zero, negativo ou ilegível viram `null`, nunca "1º". */
+export function lerPosicao(valor: unknown): number | null {
+  const n = typeof valor === "number" ? valor : typeof valor === "string" ? Number(valor.replace(/\D/g, "")) : NaN;
+  return Number.isFinite(n) && n >= 1 ? Math.round(n) : null;
 }
 
 /** Booleano explícito. Texto "true"/"false"/"S"/"N" também vale; o resto é `null`. */
@@ -170,6 +180,7 @@ export function normalizarItem(bruto: unknown, opcoes: { agora?: number } = {}):
     variacaoMinimaMelhorLance,
     variacaoMinimaFornecedor,
     permitirDizima: dizimaLida === true,
+    posicao: lerPosicao(campo(fonte, ALIASES.posicao)),
     segundosRestantes
   };
 
@@ -180,6 +191,7 @@ export function normalizarItem(bruto: unknown, opcoes: { agora?: number } = {}):
     aceitaLida: aceita,
     dizimaLida,
     fase: typeof situacao === "string" && situacao.trim() ? situacao.trim() : null,
+    descricao: ((d) => (typeof d === "string" && d.trim() ? d.trim() : null))(campo(fonte, ALIASES.descricao)),
     compra: typeof compraCru === "string" || typeof compraCru === "number" ? String(compraCru) : null,
     recebidoEm: agora,
     camposIlegiveis

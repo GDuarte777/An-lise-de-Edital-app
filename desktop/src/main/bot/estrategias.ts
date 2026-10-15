@@ -46,6 +46,12 @@ export interface EstadoItem {
   variacaoMinimaFornecedor: Micro | null;
   /** Item que aceita dízima opera em 4 casas; o resto, 2. */
   permitirDizima: boolean;
+  /**
+   * Nossa posição no item, quando dá para saber. Existe por causa do empate: com valores
+   * iguais, o portal classifica na frente quem lançou primeiro. Empatar em 1º é posição
+   * boa; empatar em 2º é estar atrás com o mesmo número na tela.
+   */
+  posicao: number | null;
   segundosRestantes: number | null;
 }
 
@@ -71,6 +77,12 @@ export type Decisao =
   | { acao: "enviar"; valor: Micro; casas: Casas; porque: string }
   | { acao: "aguardar"; porque: string }
   | { acao: "parar"; codigo: CodigoRecusa; porque: string };
+
+/** Um centavo em micro-unidades: o passo do desempate. */
+const CENTAVO = 100n;
+
+/** Modos cujo objetivo é ficar na frente — os únicos em que liderar significa parar. */
+const MODOS_PARA_VENCER: ModoDisputa[] = ["assumir-primeiro", "posicionar", "manter"];
 
 function casasDoItem(item: EstadoItem): Casas {
   return item.permitirDizima ? 4 : 2;
@@ -203,6 +215,60 @@ export function decidir(item: EstadoItem, cfg: ConfiguracaoDisputa): Decisao {
 
   const janela = avaliarJanela(item.segundosRestantes, cfg.janelaFinal ?? { ativo: false, segundos: 0 });
   if (!janela.ofertar) return { acao: "aguardar", porque: janela.porque };
+
+  /*
+   * Já lideramos?
+   *
+   * Nos modos que disputam para vencer, baixar preço estando na frente é disputar
+   * contra si mesmo — queima margem sem concorrente nenhum do outro lado. Esta guarda
+   * é a diferença entre um robô e uma torneira aberta: sem ela, o item desceria do
+   * melhor lance até o piso sozinho.
+   *
+   * O empate é o caso limite: ali ainda há o que fazer, mas só um centavo, e só se o
+   * operador tiver ligado a disputa em casas decimais.
+   */
+  if (MODOS_PARA_VENCER.includes(cfg.modo) && item.nossoMelhorValor !== null && item.melhorValorGeral !== null) {
+    if (item.nossoMelhorValor < item.melhorValorGeral) {
+      return {
+        acao: "aguardar",
+        porque:
+          `Já lideramos com ${formatar(item.nossoMelhorValor, casas)} contra ` +
+          `${formatar(item.melhorValorGeral, casas)}. Nada a fazer até alguém cobrir.`
+      };
+    }
+    if (item.nossoMelhorValor === item.melhorValorGeral) {
+      // Empate. Descer um centavo só faz sentido se estivermos ATRÁS no empate: se o
+      // melhor lance do item é o nosso, baixar de novo seria leiloar contra a própria
+      // margem, um centavo por leitura, até o piso.
+      if (item.posicao === null) {
+        return {
+          acao: "aguardar",
+          porque:
+            `Nosso lance empata com o melhor do item (${formatar(item.melhorValorGeral, casas)}), e não ` +
+            `consegui ler nossa posição. Sem saber se o empate está a nosso favor, não baixo o preço.`
+        };
+      }
+      if (item.posicao <= 1) {
+        return {
+          acao: "aguardar",
+          porque:
+            `Nosso lance é o melhor do item (${formatar(item.melhorValorGeral, casas)}). ` +
+            `Nada a fazer até alguém cobrir.`
+        };
+      }
+      if (!item.permitirDizima) {
+        return {
+          acao: "aguardar",
+          porque:
+            `Empate em ${formatar(item.melhorValorGeral, casas)} e estamos em ${item.posicao}º — no ` +
+            `empate ganha quem lançou primeiro. Ligue "permitir lances em casas decimais" para brigar ` +
+            `no centavo.`
+        };
+      }
+      // Atrás no empate, com centavos liberados: desce um centavo, nunca o passo cheio.
+      return validar(item.melhorValorGeral - CENTAVO, item, pisoMinimo, casas);
+    }
+  }
 
   switch (cfg.modo) {
     case "fechado": {

@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+import type { ConfigItem, EstadoPainel, LinhaClassificacao } from "../compartilhado/painel.js";
+
 /**
  * Ponte entre a interface e o processo principal.
  *
@@ -145,6 +147,20 @@ export interface ApiLanceBot {
   sala: {
     conferir(ref: { pregaoId: string; itemNum: string }, valorEnsaio?: number): Promise<ConferenciaSala>;
   };
+  /**
+   * Painel de disputa — a tela do robô novo. O estado chega empurrado pelo canal
+   * `painel:estado` a cada leitura da sala; os comandos devolvem o estado já atualizado.
+   */
+  painel: {
+    iniciar(pregaoId?: string): Promise<EstadoPainel>;
+    encerrar(): Promise<{ encerrado: boolean }>;
+    estado(): Promise<EstadoPainel>;
+    configurar(item: string, mudanca: Partial<ConfigItem>): Promise<EstadoPainel>;
+    armar(item: string): Promise<EstadoPainel>;
+    desarmar(item: string, motivo?: string): Promise<EstadoPainel>;
+    classificacao(item: string): Promise<LinhaClassificacao[]>;
+    aoEstado(cb: (e: EstadoPainel) => void): () => void;
+  };
   robo: {
     iniciar(cfg: unknown): Promise<{ iniciado: boolean; portal: string; ehSimulacao: boolean }>;
     parar(): Promise<{ parado: boolean }>;
@@ -190,6 +206,16 @@ const api: ApiLanceBot = {
   },
   sala: {
     conferir: (ref, valorEnsaio) => ipcRenderer.invoke("sala:conferir", ref, valorEnsaio)
+  },
+  painel: {
+    iniciar: (pregaoId) => ipcRenderer.invoke("painel:iniciar", pregaoId),
+    encerrar: () => ipcRenderer.invoke("painel:encerrar"),
+    estado: () => ipcRenderer.invoke("painel:estado"),
+    configurar: (item, mudanca) => ipcRenderer.invoke("painel:configurar", item, mudanca),
+    armar: (item) => ipcRenderer.invoke("painel:armar", item),
+    desarmar: (item, motivo) => ipcRenderer.invoke("painel:desarmar", item, motivo),
+    classificacao: (item) => ipcRenderer.invoke("painel:classificacao", item),
+    aoEstado: (cb) => assinar<EstadoPainel>("painel:estado", cb)
   },
   robo: {
     iniciar: (cfg) => ipcRenderer.invoke("robo:iniciar", cfg),

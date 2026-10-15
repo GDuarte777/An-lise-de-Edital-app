@@ -49,6 +49,7 @@ function prever(item: ItemPainel): { texto: string; tom: "ok" | "alerta" | "neut
     variacaoMinimaMelhorLance: item.variacaoMinima === null ? null : paraMicro(item.variacaoMinima),
     variacaoMinimaFornecedor: null,
     permitirDizima: item.config.permitirDecimais || item.permitirDizima,
+    posicao: item.minhaPosicao,
     segundosRestantes: item.segundosRestantes
   };
   const d = decidir(leitura, {

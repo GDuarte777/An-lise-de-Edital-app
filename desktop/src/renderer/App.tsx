@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Painel from "./painel/Painel.js";
 import { criarDemonstracao } from "./painel/demonstracao.js";
+import { criarFonteIpc } from "./painel/fonte-ipc.js";
 import type { FontePainel } from "../compartilhado/painel.js";
 import type { ApiLanceBot, Calibracao, ConferenciaSala, Disputa, Usuario } from "../preload/index.js";
 
@@ -137,10 +138,11 @@ function Portao({ aoEntrar, avisoInicial }: { aoEntrar: (u: Usuario) => void; av
 /* ----------------------------------------------------------------- Cockpit */
 
 function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) {
-  // O painel de disputa é a tela do produto; o cockpit abaixo continua sendo o
-  // diagnóstico de sessão e calibração. Hoje a fonte é a demonstração — quando o
-  // cliente STOMP entrar, só esta linha muda.
+  // O painel de disputa é a tela de operação do robô; o cockpit abaixo continua sendo o
+  // diagnóstico de sessão e calibração. A fonte real vem do processo principal, que lê a
+  // sala aberta e decide com o motor novo; a demonstração fica como ensaio, rotulada.
   const [fontePainel, setFontePainel] = useState<FontePainel | null>(null);
+  const [abrindoPainel, setAbrindoPainel] = useState(false);
   const [conectado, setConectado] = useState(false);
   const [calib, setCalib] = useState<Calibracao | null>(null);
   const [disputas, setDisputas] = useState<Disputa[]>([]);
@@ -272,6 +274,27 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     }
   }, [selecionada, piso, tipo, decremento, intervalo, modo]);
 
+  /**
+   * Abre o painel sobre a disputa de verdade. A sala selecionada é a referência; sem
+   * seleção, abre a sala que o portal mostrar — é o mesmo caminho do "Abrir sala".
+   */
+  const abrirPainelDeDisputa = useCallback(async () => {
+    setErro("");
+    setAbrindoPainel(true);
+    try {
+      const status = await api().comprasnet.status(true);
+      if (!status.autenticado) {
+        setErro(`Entre no Compras.gov.br antes de abrir o painel. ${status.evidencia}`);
+        return;
+      }
+      setFontePainel(await criarFonteIpc(selecionada?.pregaoId));
+    } catch (e) {
+      setErro(`Não foi possível abrir o painel de disputa: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setAbrindoPainel(false);
+    }
+  }, [selecionada]);
+
   const rodando = estadoRobo === "rodando";
   const pronto = calib?.pronto ?? false;
   const emLances = disputas.filter((d) => d.emFaseDeLances);
@@ -297,8 +320,19 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
           LanceBot
         </div>
         <div className="row tight">
-          <button className="btn primary" onClick={() => setFontePainel(criarDemonstracao())}>
-            Abrir painel de disputa
+          <button
+            className="btn primary"
+            disabled={abrindoPainel}
+            onClick={() => void abrirPainelDeDisputa()}
+          >
+            {abrindoPainel ? "Abrindo a sala…" : "Abrir painel de disputa"}
+          </button>
+          <button
+            className="btn ghost"
+            title="Ensaio com dados fictícios, para conhecer a tela sem disputa aberta."
+            onClick={() => setFontePainel(criarDemonstracao())}
+          >
+            Ensaio
           </button>
           <EstadoPill estado={estadoRobo} />
           <span className="faint">{usuario.email}</span>

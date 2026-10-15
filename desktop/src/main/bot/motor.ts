@@ -313,6 +313,9 @@ export class Motor {
             estado: {
               ...alvo.leitura.estado,
               nossoMelhorValor: decisao.valor,
+              // Acabamos de assumir o melhor lance: até o portal ecoar, a posição é 1ª.
+              // Sem isto, o empate contra o nosso próprio lance pediria mais um centavo.
+              posicao: 1,
               melhorValorGeral:
                 alvo.leitura.estado.melhorValorGeral === null ||
                 decisao.valor < alvo.leitura.estado.melhorValorGeral
@@ -405,6 +408,7 @@ function fundir(anterior: LeituraItem | null, nova: LeituraItem): LeituraItem {
       nossoMelhorValor: n.nossoMelhorValor ?? a.nossoMelhorValor,
       variacaoMinimaMelhorLance: n.variacaoMinimaMelhorLance ?? a.variacaoMinimaMelhorLance,
       variacaoMinimaFornecedor: n.variacaoMinimaFornecedor ?? a.variacaoMinimaFornecedor,
+      posicao: n.posicao ?? a.posicao,
       segundosRestantes: n.segundosRestantes ?? a.segundosRestantes
     }
   };

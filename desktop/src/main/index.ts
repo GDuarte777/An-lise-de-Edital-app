@@ -22,6 +22,8 @@ import { listarDisputas } from "./engine/disputas.js";
 import { observarSala, extrairValores, type EventoSala } from "./engine/sniffer.js";
 import { MotorLances, type ConfiguracaoRobo, type EntradaLog, type EstadoRobo } from "./engine/engine.js";
 import { GerenciadorSalas, SalaDisputaAdapter } from "./engine/sala.js";
+import { FonteSalaViva } from "./painel/fonte-sala.js";
+import type { ConfigItem } from "../compartilhado/painel.js";
 import { SimulacaoAdapter } from "./engine/simulation.js";
 import type { PortalAdapter, ReferenciaItem } from "./engine/portal.js";
 
@@ -32,6 +34,7 @@ let motor: MotorLances | null = null;
 let descobridor: DescobridorApi | null = null;
 let salas: GerenciadorSalas | null = null;
 let guardiao: GuardiaoSessao | null = null;
+let painel: FonteSalaViva | null = null;
 
 const auth = new AutenticacaoPlataforma(
   SUPABASE_URL,
@@ -282,6 +285,55 @@ ipcMain.handle("robo:parar", async () => {
   return { parado: true };
 });
 
+// --- Painel de disputa (robô novo) ------------------------------------------
+/**
+ * O painel é a tela de operação do robô novo. Ele não fala com o portal por conta
+ * própria: a sala aberta é o olho e a mão (é lá que vivem o token da sessão e o captcha),
+ * e a decisão é do motor novo — aritmética inteira, piso do operador, cinco modos e a
+ * janela dos segundos finais.
+ */
+function exigirPainel(): FonteSalaViva {
+  if (!painel) throw new Error("O painel de disputa não está aberto.");
+  return painel;
+}
+
+ipcMain.handle("painel:iniciar", async (_e, pregaoId?: string) => {
+  obterDescobridor();
+  const s = obterSalas();
+  const id = (pregaoId ?? "").trim();
+
+  painel?.encerrar();
+  painel = new FonteSalaViva({
+    garantirSala: async () => {
+      const janela = await s.garantir(id);
+      ligarObservador(janela.id);
+      return janela.webContents;
+    },
+    obterConteudo: () => {
+      const janela = s.janelaDe(id);
+      return janela && !janela.isDestroyed() ? janela.webContents : null;
+    },
+    aoEstado: (estado) => emitir("painel:estado", estado)
+  });
+  return painel.iniciar();
+});
+
+ipcMain.handle("painel:encerrar", async () => {
+  painel?.encerrar();
+  painel = null;
+  return { encerrado: true };
+});
+
+ipcMain.handle("painel:estado", async () => exigirPainel().estadoAtual());
+ipcMain.handle("painel:configurar", async (_e, item: string, mudanca: Partial<ConfigItem>) =>
+  exigirPainel().configurar(item, mudanca)
+);
+ipcMain.handle("painel:armar", async (_e, item: string) => exigirPainel().armar(item));
+ipcMain.handle("painel:desarmar", async (_e, item: string, motivo?: string) =>
+  exigirPainel().desarmar(item, motivo)
+);
+ipcMain.handle("painel:classificacao", async (_e, item: string) => exigirPainel().classificacao(item));
+
 app.whenReady().then(() => {
   habilitarCertificadoDigital();
   criarJanela();
@@ -292,5 +344,6 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   motor?.parar("Aplicativo encerrado.");
+  painel?.encerrar();
   if (process.platform !== "darwin") app.quit();
 });

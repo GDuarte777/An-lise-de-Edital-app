@@ -34,6 +34,7 @@ const item = (p: Partial<EstadoItem> = {}): EstadoItem => ({
   variacaoMinimaMelhorLance: null,
   variacaoMinimaFornecedor: null,
   permitirDizima: false,
+  posicao: null,
   segundosRestantes: 600,
   ...p
 });
@@ -79,8 +80,15 @@ console.log("\n[3] Variação mínima do edital");
   const d = decidir(item({ variacaoMinimaMelhorLance: paraMicro(50) }), cfg());
   ok("usa a variação do edital quando ela é maior que o passo", d.acao === "enviar" && paraNumero(d.valor) === 950, d);
 
+  // Nosso lance (990) foi coberto por 960: estamos atrás, então há lance a dar — e é
+  // aqui que a variação mínima sobre o PRÓPRIO lance entra. (Se estivéssemos na frente,
+  // a guarda de liderança pararia antes, e é o que o bloco [10] prova.)
   const d2 = decidir(
-    item({ nossoMelhorValor: paraMicro(990), variacaoMinimaFornecedor: paraMicro(50) }),
+    item({
+      melhorValorGeral: paraMicro(960),
+      nossoMelhorValor: paraMicro(990),
+      variacaoMinimaFornecedor: paraMicro(50)
+    }),
     cfg()
   );
   ok(
@@ -188,6 +196,70 @@ console.log("\n[9] Dinheiro em texto, sem passar por float");
   ok("grupo de milhar inválido volta null", m("1.23.456,78") === null, String(m("1.23.456,78")));
   // O teste que importa: o caminho de texto não herda erro de representação.
   ok("4.35 em texto é exato", m("4.35") === 43_500n && truncar(m("4.35") as bigint, 2) === 43_500n, String(m("4.35")));
+}
+
+console.log("\n[10] Liderando, o robô para de baixar — e o empate vale um centavo");
+{
+  // Sem esta guarda o item desceria do melhor lance até o piso sozinho, sem concorrente
+  // nenhum do outro lado.
+  const liderando = decidir(
+    item({ melhorValorGeral: paraMicro(1000), nossoMelhorValor: paraMicro(990) }),
+    cfg({ pisoMinimo: 500, passo: { tipo: "fixo", valor: 10 } })
+  );
+  ok("já na frente: aguarda", liderando.acao === "aguardar", liderando);
+  ok("e explica que lidera", /já lideramos/i.test(liderando.porque ?? ""), liderando);
+
+  for (const modo of ["posicionar", "manter"] as const) {
+    const d = decidir(
+      item({ melhorValorGeral: paraMicro(1000), nossoMelhorValor: paraMicro(990) }),
+      cfg({ modo, pisoMinimo: 500, passo: { tipo: "fixo", valor: 10 } })
+    );
+    ok(`modo ${modo} também para quando lidera`, d.acao === "aguardar", d);
+  }
+
+  const empateSemPosicao = decidir(
+    item({ melhorValorGeral: paraMicro(1000), nossoMelhorValor: paraMicro(1000), permitirDizima: true }),
+    cfg({ pisoMinimo: 500 })
+  );
+  ok("empate sem posição legível: não baixa preço", empateSemPosicao.acao === "aguardar", empateSemPosicao);
+  ok("e diz por quê", /posição/i.test(empateSemPosicao.porque ?? ""), empateSemPosicao);
+
+  const empateNaFrente = decidir(
+    item({ melhorValorGeral: paraMicro(1000), nossoMelhorValor: paraMicro(1000), posicao: 1, permitirDizima: true }),
+    cfg({ pisoMinimo: 500 })
+  );
+  ok("empate em 1º: o melhor lance é nosso, aguarda", empateNaFrente.acao === "aguardar", empateNaFrente);
+  ok("sem gastar centavo contra nós mesmos", /melhor do item/i.test(empateNaFrente.porque ?? ""), empateNaFrente);
+
+  const empateSemDecimais = decidir(
+    item({ melhorValorGeral: paraMicro(1000), nossoMelhorValor: paraMicro(1000), posicao: 2 }),
+    cfg({ pisoMinimo: 500, passo: { tipo: "fixo", valor: 10 } })
+  );
+  ok("empate atrás, sem decimais: aguarda", empateSemDecimais.acao === "aguardar", empateSemDecimais);
+  ok("e ensina a ligar os centavos", /casas decimais/i.test(empateSemDecimais.porque ?? ""), empateSemDecimais);
+
+  const empateComDecimais = decidir(
+    item({ melhorValorGeral: paraMicro(1000), nossoMelhorValor: paraMicro(1000), posicao: 2, permitirDizima: true }),
+    cfg({ pisoMinimo: 500, passo: { tipo: "fixo", valor: 10 } })
+  );
+  ok(
+    "empate com decimais: desce um centavo, não o passo cheio",
+    empateComDecimais.acao === "enviar" && paraNumero(empateComDecimais.valor) === 999.99,
+    empateComDecimais.acao === "enviar" ? paraNumero(empateComDecimais.valor) : empateComDecimais
+  );
+
+  const empateNoPiso = decidir(
+    item({ melhorValorGeral: paraMicro(550), nossoMelhorValor: paraMicro(550), posicao: 3, permitirDizima: true }),
+    cfg({ pisoMinimo: 550, passo: { tipo: "fixo", valor: 1 } })
+  );
+  ok("centavo que furaria o piso é recusado", empateNoPiso.acao === "parar", empateNoPiso);
+
+  // Margem não entra na guarda: ali ofertar acima do melhor valor é o objetivo.
+  const margem = decidir(
+    item({ melhorValorGeral: paraMicro(1000), nossoMelhorValor: paraMicro(1200) }),
+    cfg({ modo: "margem", margemPercentual: 5, pisoMinimo: 500 })
+  );
+  ok("modo margem segue com sua própria regra", margem.acao === "enviar", margem);
 }
 
 console.log(falhas === 0 ? "\n🎉 núcleo do robô: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);

@@ -10,7 +10,7 @@
  * tabela só (`TOPICOS`), como os nomes de campo em `eventos.ts`: a primeira captura de
  * disputa real corrige a tabela, e nada mais no código precisa mudar.
  */
-import { formatarSegundos, type ConfigItem, type DisputaPainel, type EstadoPainel, type EventoLog, type FaseItem, type ItemPainel, type LinhaClassificacao, type MensagemChat, type NivelLog } from "../../compartilhado/painel.js";
+import { formatarSegundos, type ConfigItem, type FontePainel, type OrigemEstado, type DisputaPainel, type EstadoPainel, type EventoLog, type FaseItem, type ItemPainel, type LinhaClassificacao, type MensagemChat, type NivelLog } from "../../compartilhado/painel.js";
 import { formatar, paraNumero } from "./decimal.js";
 import { normalizarItem, normalizarItens, lerDinheiro, type LeituraItem } from "./eventos.js";
 import type { ConfiguracaoDisputa } from "./estrategias.js";
@@ -38,6 +38,11 @@ export interface OpcoesFonteViva {
   /** Identificação da compra para o cabeçalho do painel. Só texto, nada de decisão. */
   cabecalho?: Partial<Pick<DisputaPainel, "titulo" | "modalidade" | "numero" | "uasg" | "orgao">>;
   temporizador?: Temporizador;
+  /**
+   * Força a etiqueta de origem do estado. Serve para a bancada de ensaio se anunciar
+   * como "demonstracao": a tela precisa dizer ao operador que aquilo não é o portal.
+   */
+  origemForcada?: OrigemEstado;
 }
 
 export class FonteViva {
@@ -148,6 +153,7 @@ export class FonteViva {
   private absorver(leitura: LeituraItem): void {
     const numero = leitura.estado.numero;
     this.leituras.set(numero, leitura);
+    if (leitura.descricao) this.descricoes.set(numero, leitura.descricao);
     this.fases.set(numero, faseDe(leitura));
     this.motor.aplicarLeitura(this.compor(numero, leitura));
   }
@@ -239,7 +245,7 @@ export class FonteViva {
         tempoRestante: formatarSegundos(menor),
         segundosRestantes: menor,
         conexao: this.conexao,
-        origem: this.origem
+        origem: this.opcoes.origemForcada ?? this.origem
       },
       itens,
       chat: this.chat,
@@ -252,6 +258,21 @@ export class FonteViva {
     this.ouvintes.add(ouvinte);
     ouvinte(this.estadoAtual());
     return () => this.ouvintes.delete(ouvinte);
+  }
+
+  /** A mesma fonte, no contrato que o componente do painel consome. */
+  comoFontePainel(): FontePainel {
+    return {
+      estadoAtual: () => this.estadoAtual(),
+      assinar: (ouvinte) => this.assinar(ouvinte),
+      comandos: {
+        configurar: (numero, mudanca) => this.configurar(numero, mudanca),
+        armar: (numero) => this.armar(numero),
+        desarmar: (numero, motivo) => this.desarmar(numero, motivo),
+        classificacao: (numero) => this.classificacao(numero)
+      },
+      encerrar: () => this.encerrar()
+    };
   }
 
   encerrar(): void {
