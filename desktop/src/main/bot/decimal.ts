@@ -104,3 +104,75 @@ export function paraCorpoRequisicao(m: Micro, casas: Casas): string {
   const frac = (t % ESCALA).toString().padStart(4, "0").slice(0, casas);
   return `${inteiro}.${frac}`;
 }
+
+/**
+ * Texto → micro, por aritmética inteira (sem passar por `number` em nenhuma etapa).
+ *
+ * Existe porque o portal entrega dinheiro como texto ("1.234,56", "550.99") e converter
+ * com `Number()` reintroduz exatamente o erro de representação que este módulo evita.
+ *
+ * Devolve `null` em vez de lançar: quem lê evento do portal precisa poder tratar campo
+ * ilegível como "não li" e falhar fechado. E o caso ambíguo é ilegível de propósito —
+ * "1.234" pode ser mil duzentos e trinta e quatro ou um e duzentos e trinta e quatro, e
+ * adivinhar aqui custaria o lance.
+ */
+export function paraMicroDeTexto(texto: unknown): Micro | null {
+  if (typeof texto !== "string") return null;
+  let t = texto.replace(/[\s ]/g, "").replace(/^R\$/i, "");
+  if (!t) return null;
+
+  const negativo = t.startsWith("-");
+  if (negativo) t = t.slice(1);
+  if (!/^[\d.,]+$/.test(t) || !/\d/.test(t)) return null;
+
+  const pontos = (t.match(/\./g) ?? []).length;
+  const virgulas = (t.match(/,/g) ?? []).length;
+
+  let inteiroTxt: string;
+  let fracTxt = "";
+
+  if (pontos > 0 && virgulas > 0) {
+    // Os dois símbolos presentes: o último é o decimal, o outro é milhar.
+    const decimal = t.lastIndexOf(".") > t.lastIndexOf(",") ? "." : ",";
+    const milhar = decimal === "." ? "," : ".";
+    const corte = t.lastIndexOf(decimal);
+    inteiroTxt = t.slice(0, corte);
+    fracTxt = t.slice(corte + 1);
+    if (!/^\d{1,4}$/.test(fracTxt)) return null;
+    if (inteiroTxt.includes(decimal)) return null;
+    if (!grupoDeMilharValido(inteiroTxt, milhar)) return null;
+    inteiroTxt = inteiroTxt.split(milhar).join("");
+  } else if (pontos + virgulas === 0) {
+    inteiroTxt = t;
+  } else {
+    const simbolo = pontos > 0 ? "." : ",";
+    const quantos = pontos + virgulas;
+    const depois = t.slice(t.lastIndexOf(simbolo) + 1);
+    const separadorDeMilhar =
+      quantos > 1 || (simbolo === "." && depois.length === 3 && !t.startsWith("0."));
+    if (separadorDeMilhar) {
+      if (!grupoDeMilharValido(t, simbolo)) return null;
+      // Um único ponto com três dígitos é ambíguo: não se adivinha dinheiro.
+      if (quantos === 1) return null;
+      inteiroTxt = t.split(simbolo).join("");
+    } else {
+      if (!/^\d{1,4}$/.test(depois)) return null;
+      inteiroTxt = t.slice(0, t.lastIndexOf(simbolo));
+      fracTxt = depois;
+    }
+  }
+
+  if (inteiroTxt === "") inteiroTxt = "0";
+  if (!/^\d+$/.test(inteiroTxt)) return null;
+  if (inteiroTxt.length > 13) return null;
+
+  const micro = BigInt(inteiroTxt) * ESCALA + BigInt(fracTxt.padEnd(4, "0"));
+  return negativo ? -micro : micro;
+}
+
+function grupoDeMilharValido(texto: string, simbolo: string): boolean {
+  const partes = texto.split(simbolo);
+  if (partes.length === 1) return true;
+  if (!/^\d{1,3}$/.test(partes[0])) return false;
+  return partes.slice(1).every((p) => /^\d{3}$/.test(p));
+}

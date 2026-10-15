@@ -7,6 +7,7 @@ import {
   formatar,
   paraCorpoRequisicao,
   paraMicro,
+  paraMicroDeTexto,
   paraNumero,
   reduzirPercentual,
   acrescerPercentual,
@@ -165,6 +166,28 @@ console.log("\n[8] Freio de requisições — sem desligamento");
   ok("3ª falha espera 4s", r.registrarFalha() === 4_000);
   r.registrarSucesso();
   ok("sucesso zera o recuo", r.nivel === 0);
+}
+
+console.log("\n[9] Dinheiro em texto, sem passar por float");
+{
+  const m = (t: unknown) => paraMicroDeTexto(t);
+  ok("formato BR com milhar", m("1.234,56") === 12_345_600n, String(m("1.234,56")));
+  ok("formato do JSON (ponto decimal)", m("550.99") === 5_509_900n, String(m("550.99")));
+  ok("quatro casas (dízima)", m("550.9999") === 5_509_999n, String(m("550.9999")));
+  ok("vírgula decimal simples", m("550,99") === 5_509_900n, String(m("550,99")));
+  ok("inteiro puro", m("550") === 5_500_000n, String(m("550")));
+  ok("com R$ e espaço", m("R$ 1.234,56") === 12_345_600n, String(m("R$ 1.234,56")));
+  ok("milhar com vírgula e ponto decimal", m("1,234.56") === 12_345_600n, String(m("1,234.56")));
+  ok("milhares múltiplos", m("1.234.567,89") === 12_345_678_900n, String(m("1.234.567,89")));
+  ok("zero e centavos", m("0.99") === 9_900n, String(m("0.99")));
+  ok('"1.234" é ambíguo e volta null', m("1.234") === null, String(m("1.234")));
+  ok("texto não-numérico volta null", m("abc") === null);
+  ok("vazio volta null", m("") === null);
+  ok("número (não texto) volta null", m(550.99) === null);
+  ok("mais de 4 decimais volta null", m("550.99999") === null, String(m("550.99999")));
+  ok("grupo de milhar inválido volta null", m("1.23.456,78") === null, String(m("1.23.456,78")));
+  // O teste que importa: o caminho de texto não herda erro de representação.
+  ok("4.35 em texto é exato", m("4.35") === 43_500n && truncar(m("4.35") as bigint, 2) === 43_500n, String(m("4.35")));
 }
 
 console.log(falhas === 0 ? "\n🎉 núcleo do robô: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);

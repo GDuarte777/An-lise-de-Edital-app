@@ -10,6 +10,7 @@
  * Log existe para o operador entender a conexão, não para guardar sessão em disco.
  */
 import { Recuo } from "../limites.js";
+import { TEMPORIZADOR_REAL, type Temporizador } from "../tempo.js";
 import { HOSTS, WEBSOCKET, type Ambiente } from "../endpoints.js";
 import { analisarFluxo, negociarPulso, serializar, PULSO, type Quadro } from "./quadros.js";
 
@@ -33,19 +34,9 @@ export type AbrirSocket = (
   manipuladores: ManipuladoresSocket
 ) => SocketStomp;
 
-/** Relógio e timers injetáveis: em teste o tempo anda na mão. */
-export interface Temporizador {
-  agora(): number;
-  agendar(ms: number, acao: () => void): () => void;
-}
-
-export const TEMPORIZADOR_REAL: Temporizador = {
-  agora: () => Date.now(),
-  agendar: (ms, acao) => {
-    const t = setTimeout(acao, ms);
-    return () => clearTimeout(t);
-  }
-};
+/** Relógio e timers injetáveis vivem em `tempo.ts`; aqui só se reexporta. */
+export type { Temporizador } from "../tempo.js";
+export { TEMPORIZADOR_REAL } from "../tempo.js";
 
 export type EventoStomp =
   | { tipo: "conectando"; tentativa: number }
