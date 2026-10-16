@@ -200,6 +200,7 @@ import {
   MAX_CHAMADAS_PROVEDOR,
   TIMEOUT_POR_CHAMADA_MS,
 } from "./modelosGemini.ts";
+import { descobrirModelos, escolherCadeia } from "./modelosDisponiveis.ts";
 
 /**
  * Server-side API keys are a shared cost: every request that falls back to one is billed
@@ -1234,7 +1235,29 @@ export async function generateAiResponse(params: {
         },
       });
 
-      for (const geminiModelName of uniqueModels) {
+      /**
+       * A cadeia sai do que ESTA CHAVE serve, não de uma lista fixa no código.
+       *
+       * A lista fixa já tirou a IA do ar três vezes — 3.7, depois 3.6, depois
+       * 3.8 e flash-latest — sempre com o mesmo disfarce: o Google responde 503
+       * "high demand", e não 404, para um modelo que a chave não serve, então a
+       * indisponibilidade permanente parece pico passageiro. Perguntar custa uma
+       * chamada curta, fica em cache por chave, e acaba com o ciclo de adivinhar
+       * nome de modelo toda vez que a família é renomeada.
+       *
+       * Descoberta indisponível (rede, chave inválida) mantém a lista fixa:
+       * tentar o que se sabe é melhor do que não tentar nada.
+       */
+      const disponiveis = await descobrirModelos(keyToUse);
+      const cadeiaDescoberta = escolherCadeia(primaryModel, disponiveis, MAX_CHAMADAS_PROVEDOR);
+      const modelosDaVez = cadeiaDescoberta.length > 0 ? cadeiaDescoberta : uniqueModels;
+      if (cadeiaDescoberta.length > 0) {
+        console.log(`[Dynamic AI Router] Modelos servidos por esta chave: ${modelosDaVez.join(" → ")}`);
+      } else {
+        console.warn(`[Dynamic AI Router] Não foi possível descobrir os modelos da chave; usando a lista padrão: ${modelosDaVez.join(" → ")}`);
+      }
+
+      for (const geminiModelName of modelosDaVez) {
         if (remainingMs() <= 0) {
           budgetExhausted = true;
           console.warn(`[Dynamic AI Router] Orçamento de ${budgetMs}ms esgotado após ${elapsedMs()}ms. Interrompendo a rotação de modelos.`);
