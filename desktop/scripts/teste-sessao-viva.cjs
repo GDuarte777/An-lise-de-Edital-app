@@ -21,7 +21,15 @@ const ok = (r, c, x) => {
 };
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const VIDA_MS = 2500;          // a sessão falsa morre depois disto sem visita
+/*
+ * Tempo de vida da sessão falsa.
+ *
+ * Eram 2500 ms, e isso quebrou o build num runner carregado: criar a primeira janela do
+ * Electron no Windows pode levar mais que isso, então a sessão já nascia expirada e o
+ * teste acusava falha onde não havia. O prazo agora é folgado — o que o teste prova
+ * (sem guardião morre, com guardião atravessa três expirações) não depende de ser curto.
+ */
+const VIDA_MS = 6000;          // a sessão falsa morre depois disto sem visita
 
 let expiraEm = Date.now() + VIDA_MS;
 let sempreMorta = false;
@@ -92,8 +100,10 @@ app.whenReady().then(async () => {
 
   try {
     console.log("\n[1] Sem guardiao, a sessao do portal falso morre sozinha");
-    expiraEm = Date.now() + VIDA_MS;
     const solta = new BrowserWindow({ show: false, webPreferences: { partition: "persist:teste-sessao-solta", sandbox: true } });
+    // O relógio da sessão só começa DEPOIS de a janela existir: abrir janela é lento em
+    // runner de CI, e contar esse tempo como vida da sessão media a máquina, não o código.
+    expiraEm = Date.now() + VIDA_MS;
     await solta.loadURL(base1);
     let temSair = await solta.webContents.executeJavaScript('/Sair/.test(document.body.innerText)', true);
     ok("comeca logado", temSair === true);
@@ -104,8 +114,8 @@ app.whenReady().then(async () => {
     solta.destroy();
 
     console.log("\n[2] Com guardiao, a sessao atravessa varias expiracoes");
-    expiraEm = Date.now() + VIDA_MS;
     const g = new GuardiaoSessao(comum);
+    expiraEm = Date.now() + VIDA_MS;
     const inicial = await g.iniciar();
     ok("guardiao iniciou autenticado", inicial.ativo === true && inicial.autenticado === true, inicial);
 
