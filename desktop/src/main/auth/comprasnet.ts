@@ -557,18 +557,32 @@ export async function verificarSessao(forcar = false): Promise<StatusSessao> {
  * É o gancho para ligar o observador em tempo real nesta mesma janela: o operador tende
  * a continuar navegando pelo portal aqui mesmo depois de logar.
  */
+/** Em que ponto do acesso o aplicativo está — a tela mostra isto enquanto espera. */
+export type EtapaLogin = "abrindo" | "login" | "concluindo";
+
 export async function abrirLogin(
   paiId?: number,
-  aoAbrirJanela?: (idJanela: number) => void
+  aoAbrirJanela?: (idJanela: number) => void,
+  aoProgresso?: (etapa: EtapaLogin) => void
 ): Promise<StatusSessao> {
   const pai = typeof paiId === "number" ? BrowserWindow.fromId(paiId) : null;
 
+  /*
+   * A janela nasce OCULTA.
+   *
+   * Entre o clique do operador e a tela de CPF e senha existem passos do portal —
+   * "Acesso não autorizado" com o botão Efetuar Login, redirecionamentos, escolha de
+   * perfil. Nenhum deles é assunto dele, e vê-los passar dá a impressão (justa) de que
+   * o aplicativo está perdido. Então o caminho é percorrido no escuro e a janela só
+   * aparece no instante em que há algo para ELE fazer: digitar CPF e senha.
+   */
   const janela = new BrowserWindow({
+    show: false,
     width: 1100,
     height: 800,
     parent: pai ?? undefined,
     modal: false,
-    title: "Entrar no Compras.gov.br",
+    title: "Entrar no gov.br",
     autoHideMenuBar: true,
     webPreferences: {
       partition: PARTITION,
@@ -582,6 +596,22 @@ export async function abrirLogin(
 
   aprenderEnderecoDe(janela);
   aoAbrirJanela?.(janela.id);
+  aoProgresso?.("abrindo");
+
+  let janelaVisivel = false;
+  const mostrar = (alvo: BrowserWindow) => {
+    if (janelaVisivel || alvo.isDestroyed()) return;
+    janelaVisivel = true;
+    alvo.show();
+    alvo.focus();
+    aoProgresso?.("login");
+  };
+  const esconder = () => {
+    if (!janelaVisivel) return;
+    janelaVisivel = false;
+    for (const j of janelas) if (!j.isDestroyed()) j.hide();
+    aoProgresso?.("concluindo");
+  };
 
   // Todas as janelas do fluxo de login, não só esta.
   const janelas: BrowserWindow[] = [janela];
@@ -621,6 +651,13 @@ export async function abrirLogin(
       void (async () => {
         const abertas = vivas();
         if (abertas.length === 0) return void concluir();
+
+        // Nunca deixar o operador esperando no escuro: passados 25 segundos sem chegar
+        // ao gov.br, a janela aparece como está. Melhor ele ver onde o portal parou do
+        // que encarar um carregando que não termina.
+        if (!janelaVisivel && Date.now() - abertaEm > 25_000 && !coletor.tokenAtual()) {
+          mostrar(abertas[0]);
+        }
 
         /*
          * Escolha de perfil: o portal desenha "Acesse sua Conta — Fornecedor Brasileiro /
@@ -684,6 +721,18 @@ export async function abrirLogin(
          * dizendo que ela se fecha sozinha. Qualquer página do portal que o operador
          * abrir dali faz o token aparecer, e aí sim ela fecha.
          */
+        /*
+         * A janela aparece só quando há o que o operador fazer: a tela de CPF e senha
+         * do gov.br. Antes disso, tudo acontece no escuro; depois do login, ela some de
+         * novo enquanto o portal termina o vaivém.
+         */
+        for (const j of abertas) {
+          const sonda = await sondar(j.webContents);
+          const naTelaDeLogin = Boolean(sonda && (sonda.noSso || sonda.temSenha || sonda.escolhendoPerfil));
+          if (naTelaDeLogin && !sonda?.escolhendoPerfil) mostrar(j);
+          if (!naTelaDeLogin && janelaVisivel) esconder();
+        }
+
         /*
          * "Acesso não autorizado" do aplicativo novo não é erro: é a porta. A própria
          * tela traz o botão **Efetuar Login**, que leva ao gov.br com um identificador

@@ -146,7 +146,9 @@ ipcMain.handle("comprasnet:entrar", async () => {
   obterSalas();
   // Liga também o observador de DOM nesta janela: o operador costuma continuar
   // navegando pelo portal aqui mesmo depois de logar.
-  const status = await abrirLogin(janelaPrincipal?.id, ligarObservador);
+  const status = await abrirLogin(janelaPrincipal?.id, ligarObservador, (etapa) =>
+    emitir("comprasnet:progresso", etapa)
+  );
   // Entrou: a partir daqui é o aplicativo que segura a sessão de pé.
   if (status.autenticado) void obterGuardiao().iniciar();
   return status;

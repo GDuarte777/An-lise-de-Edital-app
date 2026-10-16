@@ -147,6 +147,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   // sala aberta e decide com o motor novo; a demonstração fica como ensaio, rotulada.
   const [fontePainel, setFontePainel] = useState<FontePainel | null>(null);
   const [abrindoPainel, setAbrindoPainel] = useState(false);
+  const [etapaAcesso, setEtapaAcesso] = useState<"abrindo" | "login" | "concluindo" | null>(null);
   const [aviso, setAviso] = useState<{ titulo: string; texto: string; escolhas?: Disputa[] } | null>(null);
 
   /** Detalhe técnico vai para o log de auditoria, não para o aviso do operador. */
@@ -238,6 +239,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
   const conectar = useCallback(async () => {
     setErro("");
+    setEtapaAcesso("abrindo");
     try {
       // A janela do portal se fecha sozinha quando o login é reconhecido; esta promessa
       // só resolve depois disso, então já dá para buscar as disputas em seguida.
@@ -253,6 +255,8 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     } catch (e) {
       // Sem isto, uma falha ao abrir a janela de login não deixava rastro na tela.
       setErro(`Não foi possível abrir o login do gov.br: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setEtapaAcesso(null);
     }
   }, [carregarDisputas]);
 
@@ -364,6 +368,12 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     }
   }, [selecionada, abrirPainelComDisputa, anotar]);
 
+  // Enquanto o acesso ao gov.br acontece, a janela do portal fica oculta nos passos que
+  // não são do operador. Esta etapa é o que a tela mostra no lugar.
+  useEffect(() => {
+    return api().comprasnet.aoProgresso((etapa) => setEtapaAcesso(etapa));
+  }, []);
+
   // O painel pode parar sozinho — sala fechada pelo operador é o caso normal. Quando
   // isso acontece a tela volta para o cockpit e diz o motivo, em vez de congelar.
   useEffect(() => {
@@ -392,6 +402,27 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
   return (
     <div className="app">
+      {etapaAcesso && (
+        <div className="modal-fundo">
+          <div className="carregando">
+            <div className="carregando-anel" />
+            <h3 className="modal-titulo">
+              {etapaAcesso === "abrindo"
+                ? "Preparando o acesso ao gov.br"
+                : etapaAcesso === "login"
+                  ? "Entre com seu CPF e senha"
+                  : "Concluindo o acesso"}
+            </h3>
+            <p className="muted" style={{ fontSize: 13, textAlign: "center", margin: 0 }}>
+              {etapaAcesso === "abrindo"
+                ? "Abrindo a porta do Compras.gov.br. Leva alguns segundos."
+                : etapaAcesso === "login"
+                  ? "A janela do gov.br está aberta. Assim que você entrar, ela fecha sozinha."
+                  : "Confirmando a sessão com o portal. Já termina."}
+            </p>
+          </div>
+        </div>
+      )}
       {aviso && (
         <div className="modal-fundo" onClick={() => setAviso(null)}>
           <div className="modal" onClick={(ev) => ev.stopPropagation()}>

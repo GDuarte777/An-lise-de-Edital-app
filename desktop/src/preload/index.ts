@@ -139,6 +139,8 @@ export interface ApiLanceBot {
     sair(): Promise<void>;
     abrirSala(pregaoId?: string): Promise<number>;
     abrirPainel(): Promise<number>;
+    /** Em que ponto do acesso o aplicativo está: "abrindo", "login" ou "concluindo". */
+    aoProgresso(cb: (etapa: "abrindo" | "login" | "concluindo") => void): () => void;
   };
   /**
    * Manutenção da sessão do gov.br. É o que diferencia este aplicativo de uma extensão:
@@ -204,7 +206,8 @@ const api: ApiLanceBot = {
     diagnostico: () => ipcRenderer.invoke("comprasnet:diagnostico"),
     sair: () => ipcRenderer.invoke("comprasnet:sair"),
     abrirSala: (pregaoId) => ipcRenderer.invoke("comprasnet:abrirSala", pregaoId),
-    abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel")
+    abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel"),
+    aoProgresso: (cb) => assinar<"abrindo" | "login" | "concluindo">("comprasnet:progresso", cb)
   },
   sessao: {
     manterViva: () => ipcRenderer.invoke("sessao:manterViva"),
