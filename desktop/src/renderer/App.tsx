@@ -135,6 +135,10 @@ function Portao({ aoEntrar, avisoInicial }: { aoEntrar: (u: Usuario) => void; av
   );
 }
 
+function primeiraMaiuscula(texto: string): string {
+  return texto ? texto[0].toUpperCase() + texto.slice(1) : texto;
+}
+
 /* ----------------------------------------------------------------- Cockpit */
 
 function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) {
@@ -144,6 +148,11 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [fontePainel, setFontePainel] = useState<FontePainel | null>(null);
   const [abrindoPainel, setAbrindoPainel] = useState(false);
   const [aviso, setAviso] = useState<{ titulo: string; texto: string; escolhas?: Disputa[] } | null>(null);
+
+  /** Detalhe técnico vai para o log de auditoria, não para o aviso do operador. */
+  const anotar = useCallback((nivel: Log["nivel"], msg: string) => {
+    setLogs((a) => [...a.slice(-399), { em: new Date().toISOString(), nivel, msg }]);
+  }, []);
   const [conectado, setConectado] = useState(false);
   const [calib, setCalib] = useState<Calibracao | null>(null);
   const [disputas, setDisputas] = useState<Disputa[]>([]);
@@ -302,14 +311,15 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     try {
       setFontePainel(await criarFonteIpc(alvo.pregaoId));
     } catch (e) {
+      anotar("alerta", `Painel: ${e instanceof Error ? e.message : String(e)}`);
       setAviso({
         titulo: "Não consegui abrir o painel",
-        texto: e instanceof Error ? e.message : String(e)
+        texto: "A sala da disputa não abriu. Confira se você está conectado ao Compras.gov.br."
       });
     } finally {
       setAbrindoPainel(false);
     }
-  }, []);
+  }, [anotar]);
 
   const abrirPainelDeDisputa = useCallback(async () => {
     if (selecionada) return void abrirPainelComDisputa(selecionada);
@@ -322,14 +332,12 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       const vivas = lista.filter((d) => d.emFaseDeLances);
 
       if (vivas.length === 0) {
+        // Texto curto, de produto. O detalhe técnico vai para o log de auditoria, que é
+        // onde ele serve — no aviso ele só assusta quem está tentando trabalhar.
+        anotar("sistema", `Painel: nenhuma disputa em fase de lances (${lista.length} na lista).`);
         setAviso({
-          titulo: "Nenhuma disputa ao vivo agora",
-          texto:
-            lista.length > 0
-              ? `Encontrei ${lista.length} ${lista.length === 1 ? "disputa" : "disputas"} suas, mas nenhuma ` +
-                "está em fase de lances neste momento. O robô só tem o que fazer com a disputa aberta — " +
-                "volte quando a sessão começar."
-              : "O portal não listou nenhuma disputa para este CNPJ."
+          titulo: "Nenhuma disputa ao vivo",
+          texto: "Nenhuma disputa sua está em fase de lances agora."
         });
         return;
       }
@@ -341,22 +349,25 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
         escolhas: vivas
       });
     } catch (e) {
-      // `disputas.listar()` já explica o motivo (sem token, sem captcha, sessão expirada).
+      // O motivo técnico (sem token, sem captcha, sessão expirada) é registrado no log;
+      // o operador vê uma frase.
+      const detalhe = e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : String(e);
+      anotar("alerta", `Painel: ${detalhe}`);
       setAviso({
-        titulo: "Nenhuma disputa ao vivo agora",
-        texto: e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : String(e)
+        titulo: "Nenhuma disputa ao vivo",
+        texto: "Nenhuma disputa sua está em fase de lances agora."
       });
     } finally {
       setAbrindoPainel(false);
     }
-  }, [selecionada, abrirPainelComDisputa]);
+  }, [selecionada, abrirPainelComDisputa, anotar]);
 
   // O painel pode parar sozinho — sala fechada pelo operador é o caso normal. Quando
   // isso acontece a tela volta para o cockpit e diz o motivo, em vez de congelar.
   useEffect(() => {
     return api().painel.aoEncerrar((motivo) => {
       setFontePainel(null);
-      setAviso({ titulo: "O painel parou", texto: `Motivo: ${motivo}.` });
+      setAviso({ titulo: "O painel foi fechado", texto: primeiraMaiuscula(motivo) + "." });
     });
   }, []);
 

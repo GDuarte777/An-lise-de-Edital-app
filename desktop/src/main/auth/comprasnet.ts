@@ -1,7 +1,15 @@
 import { app, BrowserWindow, dialog, net, session, type Session, type WebContents } from "electron";
 import { join } from "node:path";
 
-import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, SEMENTES_PORTAL, URL_API_USUARIO, URL_LOGIN_SSO } from "./endereco.js";
+import {
+  CANDIDATOS_APLICATIVO,
+  DOMINIOS_COOKIE,
+  FONTE_REGEX_HOST,
+  RegistroEnderecos,
+  lembrarAutorizacaoSso,
+  urlLoginSso,
+  URL_API_USUARIO
+} from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
 import { ColetorSessaoPortal, ehTokenPlausivel, type EstadoSessaoPortal } from "./token.js";
 
@@ -37,7 +45,7 @@ const PARTITION = "persist:comprasnet";
  * SSO emitir o seu; se por qualquer motivo essa página não abrir, caímos na sala de
  * disputa, que redireciona para o mesmo login com os parâmetros corretos.
  */
-const URL_LOGIN = URL_LOGIN_SSO;
+
 
 /**
  * Endereço do portal. NÃO é constante de propósito — ver `endereco.ts`. O valor fixo que
@@ -68,7 +76,11 @@ export function registroEnderecos(): RegistroEnderecos {
  * muda de host, em vez de quebrar como quebrou.
  */
 export function aprenderEnderecoDe(janela: BrowserWindow): void {
-  const anotar = (url: string) => void registroEnderecos().aprender(url);
+  const anotar = (url: string) => {
+    // O identificador do SSO vence; o que passar na janela vale para a próxima vez.
+    lembrarAutorizacaoSso(url);
+    void registroEnderecos().aprender(url);
+  };
   janela.webContents.on("did-navigate", (_e, url) => anotar(url));
   janela.webContents.on("did-navigate-in-page", (_e, url) => anotar(url));
 }
@@ -504,30 +516,10 @@ export async function verificarSessao(forcar = false): Promise<StatusSessao> {
 
 /* ------------------------------------------------------------------ login */
 
-/**
- * Aviso dentro da própria janela do portal antes de fechá-la. Sem isto, a janela some
- * do nada no meio de um passo que o operador ainda queria ver — e "some do nada" é
- * exatamente o defeito que fez a versão de dois releases atrás ser revertida.
+/*
+ * O aviso "Manter aberta" saiu junto com a espera: a janela do login agora fecha
+ * assim que a sessão é provada, que é o que o operador pediu — entrar uma vez.
  */
-const SCRIPT_AVISO = `
-(() => {
-  if (window.__lancebotAviso) return;
-  window.__lancebotAviso = true;
-  const cx = document.createElement("div");
-  cx.setAttribute("style", "position:fixed;z-index:2147483647;right:16px;bottom:16px;background:#0B0D12;" +
-    "color:#E9EDF5;font:14px/1.4 system-ui,sans-serif;padding:14px 16px;border-radius:10px;" +
-    "box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:320px");
-  const t = document.createElement("div");
-  t.textContent = "Login reconhecido. Fechando esta janela e devolvendo o controle ao LanceBot…";
-  const b = document.createElement("button");
-  b.textContent = "Manter aberta";
-  b.setAttribute("style", "margin-top:10px;background:#1E2635;color:#E9EDF5;border:0;border-radius:6px;" +
-    "padding:6px 10px;cursor:pointer;font:13px system-ui,sans-serif");
-  b.addEventListener("click", () => { window.__lancebotManter = true; cx.remove(); });
-  cx.appendChild(t); cx.appendChild(b);
-  document.body.appendChild(cx);
-})()
-`;
 
 /**
  * Abre a janela de login oficial e resolve quando a autenticação é reconhecida — ou
@@ -567,7 +559,9 @@ export async function abrirLogin(
   const janelas: BrowserWindow[] = [janela];
 
   try {
-    await janela.loadURL(URL_LOGIN);
+    // Direto na página de CPF e senha. Sem o authorization_id o SSO devolve para a tela
+    // de escolha de perfil, que é um passo a mais na mão do operador.
+    await janela.loadURL(urlLoginSso());
   } catch {
     try {
       await janela.loadURL(enderecoPortal());
@@ -579,7 +573,7 @@ export async function abrirLogin(
   const abertaEm = Date.now();
   let positivas = 0;
   let fechandoPorNos = false;
-  let encaminhado = false;
+  const perfisEscolhidos = new Set<number>();
 
   return new Promise<StatusSessao>((resolve) => {
     let resolvido = false;
@@ -608,39 +602,36 @@ export async function abrirLogin(
         if (abertas.length === 0) return void concluir();
 
         /*
-         * Prova definitiva: o token da sessão.
-         *
-         * Antes, o fim do login era adivinhado lendo a tela ("tem botão Sair?", "tem
-         * CPF?") — e num SPA essas marcas só aparecem depois que o JavaScript roda, às
-         * vezes nunca. O resultado foi o operador logando e a janela não fechando mais,
-         * forçando-o a navegar pelo portal sem saber o que o aplicativo queria dele.
-         *
-         * Agora o sinal é o mesmo que a API usa: o token que a própria página manda.
-         * Apareceu e o portal confirmou, acabou — fecha e não pergunta de novo.
+         * Escolha de perfil: o portal desenha "Acesse sua Conta — Fornecedor Brasileiro /
+         * Estrangeiro / Governo". É um clique que o aplicativo dá pelo operador, uma vez
+         * por janela: a versão anterior deixava essa escolha na mão dele, e era mais um
+         * passo entre "entrei" e "o aplicativo reconheceu".
          */
-        /*
-         * O SSO devolve o operador ao portal ANTIGO (intro.htm é o caso visto na tela
-         * dele). O token da sessão, porém, só nasce quando o aplicativo NOVO roda. Sem
-         * isto o login terminava numa página que não produz token, a janela não fechava
-         * e o operador saía navegando pelo portal à procura do que o aplicativo queria.
-         *
-         * Então, uma vez só, a janela é levada ao aplicativo novo. Nada é clicado por
-         * ele: só a página que o navegador abriria de qualquer forma.
-         */
-        if (!encaminhado && !coletor.tokenAtual() && Date.now() - abertaEm > 5000) {
-          const atual = abertas[0];
-          const urlAtual = atual.isDestroyed() ? "" : atual.webContents.getURL();
-          if (/comprasnet\.gov\.br\/(intro|popup|$)|comprasnet\.gov\.br\/?$/i.test(urlAtual)) {
-            encaminhado = true;
-            try {
-              await atual.loadURL(SEMENTES_PORTAL[0]);
-            } catch {
-              // Sem rede o diagnóstico abaixo explica; não é motivo para abortar o login.
-            }
-            return;
+        for (const j of abertas) {
+          if (perfisEscolhidos.has(j.id)) continue;
+          const sonda = await sondar(j.webContents);
+          if (!sonda?.escolhendoPerfil) continue;
+          perfisEscolhidos.add(j.id);
+          try {
+            await j.webContents.executeJavaScript(SCRIPT_ESCOLHER_FORNECEDOR, true);
+          } catch {
+            // Se não der para clicar, o operador clica; nada se perde.
           }
+          return;
         }
 
+        /*
+         * Prova de que o login terminou. Três sinais, em ordem de confiança:
+         *   1. o token da sessão, confirmado pela API — é o portal novo respondendo;
+         *   2. a tela mostrando identificação ou botão de sair — serve ao portal antigo;
+         *   3. o SSO ter ficado para trás E existirem cookies de sessão.
+         *
+         * O terceiro existe porque o token só nasce quando o aplicativo NOVO roda, e
+         * depois do login o portal às vezes para numa página antiga. Nesse caso a janela
+         * do operador fecha na mesma hora e o token é colhido depois, numa janela
+         * OCULTA. Levar a janela DELE a uma rota do aplicativo foi erro meu: quando a
+         * rota não existe, ele leva "Página não encontrada" na cara.
+         */
         if (!fechandoPorNos && coletor.tokenAtual()) {
           const confirmacao = await perguntarAoPortal();
           if (confirmacao.ok) {
@@ -650,17 +641,20 @@ export async function abrirLogin(
           }
         }
 
-        // Caminho de reserva, para o portal antigo e para o caso de o token demorar:
-        // procura o login em QUALQUER janela do fluxo, não só na que abrimos.
         let logada: BrowserWindow | null = null;
         let manter = false;
+        let saiuDoSso = false;
         for (const j of abertas) {
-          const s = await sondar(j.webContents);
-          if (s?.manterAberta) manter = true;
-          if (!logada && autenticadoPor(s)) logada = j;
+          const sonda = await sondar(j.webContents);
+          if (sonda?.manterAberta) manter = true;
+          if (sonda && !sonda.noSso && sonda.noPortal && !sonda.temSenha) saiuDoSso = true;
+          if (!logada && autenticadoPor(sonda)) logada = j;
         }
 
         if (manter) { positivas = 0; return; }
+
+        const porCookie = !logada && saiuDoSso && (await contarCookiesDeSessao()) > 0;
+        if (porCookie) logada = abertas[0];
 
         // Duas leituras positivas seguidas, e nunca nos primeiros segundos. É o que
         // separa "logou" de "a SPA piscou uma tela intermediária".
@@ -668,27 +662,85 @@ export async function abrirLogin(
         if (!logada || positivas < 2 || Date.now() - abertaEm < 4000 || fechandoPorNos) return;
 
         fechandoPorNos = true;
-        const alvo = logada;
-        try {
-          await alvo.webContents.executeJavaScript(SCRIPT_AVISO, true);
-        } catch {
-          // Aviso é cortesia; a ausência dele não impede o fechamento.
-        }
-        setTimeout(() => {
-          void (async () => {
-            const ainda = await sondar(alvo.webContents);
-            if (ainda?.manterAberta) {
-              fechandoPorNos = false;
-              positivas = 0;
-              return;
-            }
-            for (const j of vivas()) j.close();
-            await concluir();
-          })();
-        }, 2200);
+        for (const j of vivas()) j.close();
+        // Em segundo plano, e invisível: faz o aplicativo novo rodar uma vez para a
+        // sessão virar token. Se falhar, o diagnóstico mostra "token ainda não apareceu"
+        // e nada é mentido ao operador.
+        void colherTokenEmSegundoPlano();
+        await concluir();
       })();
     }, 1200);
   });
+}
+
+/**
+ * Clica em "Fornecedor Brasileiro" na tela de escolha de perfil.
+ *
+ * Procura pelo texto, não por seletor fixo: a tela do portal muda de marcação com
+ * frequência, e um seletor inventado clicaria no lugar errado — ou em nada.
+ */
+const SCRIPT_ESCOLHER_FORNECEDOR = `
+(() => {
+  const alvos = Array.from(document.querySelectorAll('a,button,[role="button"],li,div'));
+  const querido = alvos.find((el) => {
+    const t = (el.innerText || el.textContent || "").trim();
+    if (!t || t.length > 60) return false;
+    if (!/fornecedor/i.test(t)) return false;
+    if (/estrangeir/i.test(t)) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+  if (!querido) return false;
+  querido.click();
+  return true;
+})()`;
+
+/**
+ * Faz a sessão virar token sem o operador ver nada.
+ *
+ * O portal não publica a rota de entrada do aplicativo, e ela já mudou de lugar. Então
+ * aqui se tenta uma lista curta, em janela oculta, e a que funcionar é aprendida — na
+ * próxima vez ela é a primeira. Página inexistente desenha 404 nesta janela invisível,
+ * e ninguém vê.
+ */
+export async function colherTokenEmSegundoPlano(): Promise<boolean> {
+  if (coletor.tokenAtual()) return true;
+
+  const registro = registroEnderecos();
+  await registro.carregar();
+  const candidatos = [...new Set([registro.paraAbrir(), ...CANDIDATOS_APLICATIVO])];
+
+  const janela = new BrowserWindow({
+    show: false,
+    width: 1200,
+    height: 800,
+    webPreferences: { partition: PARTITION, nodeIntegration: false, contextIsolation: true, sandbox: true }
+  });
+
+  try {
+    for (const url of candidatos) {
+      if (janela.isDestroyed()) return false;
+      try {
+        await janela.loadURL(url);
+      } catch {
+        continue;
+      }
+      for (let i = 0; i < 16; i++) {
+        if (coletor.tokenAtual()) {
+          await registro.aprender(url);
+          return true;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!janela.isDestroyed() && (await colherTokenDaJanela(janela.webContents))) {
+        await registro.aprender(url);
+        return true;
+      }
+    }
+    return false;
+  } finally {
+    if (!janela.isDestroyed()) janela.destroy();
+  }
 }
 
 function abrirNoPortal(titulo: string, url: string): Promise<number> {

@@ -74,7 +74,47 @@ export function urlDaSala(pregaoId: string): string {
   return `https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=${encodeURIComponent(pregaoId)}`;
 }
 
-export const URL_LOGIN_SSO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
+/**
+ * Entrada de login, exatamente a que o operador pediu.
+ *
+ * Sem o `authorization_id` o SSO devolve para a tela "Acesse sua Conta / Selecione o
+ * perfil", e o operador tem de clicar antes de chegar ao login de verdade — foi o que a
+ * tela dele mostrou. Com ele, a página de CPF e senha abre direto.
+ *
+ * O identificador é emitido pelo portal e pode vencer. Por isso ele não é só uma
+ * constante: toda vez que uma janela do login passa por um endereço do SSO com um
+ * `authorization_id` novo, esse valor passa a ser o usado (ver `lembrarAutorizacaoSso`).
+ */
+export const AUTHORIZATION_ID_PADRAO = "1a144fa9cea";
+
+let autorizacaoSso = AUTHORIZATION_ID_PADRAO;
+
+export function lembrarAutorizacaoSso(url: string): void {
+  const m = /[?&]authorization_id=([\w-]{6,})/i.exec(url);
+  if (m && /sso\.acesso\.gov\.br/i.test(url)) autorizacaoSso = m[1];
+}
+
+export function urlLoginSso(): string {
+  return `https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=${autorizacaoSso}`;
+}
+
+/** Mantida para quem importa a constante; o valor vivo está em `urlLoginSso()`. */
+export const URL_LOGIN_SSO = `https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=${AUTHORIZATION_ID_PADRAO}`;
+
+/**
+ * Páginas do aplicativo novo tentadas, EM JANELA OCULTA, só para a sessão se
+ * materializar em token. O operador não vê nenhuma delas.
+ *
+ * São candidatas porque o portal não documenta a rota de entrada e ela já mudou: a que
+ * funcionar é aprendida e passa a ser a primeira da próxima vez. Levar a janela VISÍVEL
+ * do operador a uma dessas foi erro meu — a que não existe desenha "Página não
+ * encontrada" na cara dele.
+ */
+export const CANDIDATOS_APLICATIVO = [
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras",
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor",
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/"
+];
 
 /**
  * Domínios onde procurar cookie de sessão.

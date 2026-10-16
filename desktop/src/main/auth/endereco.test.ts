@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ehEnderecoNavegavel,
+import { urlLoginSso, lembrarAutorizacaoSso, ehEnderecoNavegavel,
   aprenderCom, ehEnderecoDoPortal, ehHostDoPortal, ehSalaDeDisputa,
   RegistroEnderecos, SEMENTES_PORTAL
 } from "./endereco.js";
@@ -126,6 +126,19 @@ console.log("\n[Endereços que o aplicativo pode reabrir]");
       "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1").portal ===
       "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1"
   );
+}
+
+console.log("\n[Entrada do login]");
+{
+  ok("abre direto na página de CPF e senha do gov.br", urlLoginSso().startsWith("https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br"));
+  ok("leva o authorization_id, sem o qual o SSO devolve para a escolha de perfil", urlLoginSso().includes("authorization_id="));
+
+  // O identificador vence. O que passar na janela do login vale para a próxima vez — é
+  // o que impede a URL de virar bomba-relógio.
+  lembrarAutorizacaoSso("https://sso.acesso.gov.br/authorize?client_id=comprasnet.gov.br&authorization_id=abc123def");
+  ok("aprende o identificador novo", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
+  lembrarAutorizacaoSso("https://exemplo.com/x?authorization_id=invasor999");
+  ok("só aprende do próprio SSO", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
 }
 
 console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);
