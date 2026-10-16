@@ -4,6 +4,7 @@
  * estado que vai para a interface.
  */
 import {
+  acharJwtEm,
   ColetorSessaoPortal,
   ehTokenPlausivel,
   extrairCaptcha,
@@ -101,6 +102,18 @@ console.log("\n[7] Lixo observado não vira sessão");
   c.observar({ url: `${API}/x`, autorizacao: "Bearer undefined" });
   ok("nada guardado", c.tokenAtual() === null, c.estado());
   ok("nenhuma observação aproveitada", c.estado().observadas === 0, c.estado());
+}
+
+console.log("\n[8] Achar o token dentro da resposta do portal");
+{
+  ok("campo token", acharJwtEm({ token: JWT }) === JWT);
+  ok("com Bearer, devolve nu", acharJwtEm({ access_token: `Bearer ${JWT}` }) === JWT);
+  ok("aninhado", acharJwtEm({ dados: { sessao: { jwt: JWT } } }) === JWT);
+  ok("dentro de lista", acharJwtEm([{ x: 1 }, { token: JWT }]) === JWT);
+  ok("campo de nome óbvio tem preferência", acharJwtEm({ outroCampo: JWT.replace("aG9yYXNpcw", "b3V0cm8"), token: JWT }) === JWT);
+  ok("resposta sem token", acharJwtEm({ mensagem: "ok", codigo: 200 }) === null);
+  ok("texto qualquer não vira token", acharJwtEm("bom dia") === null);
+  ok("não entra em loop em objeto fundo", acharJwtEm({ a: { b: { c: { d: { e: { f: { g: { token: JWT } } } } } } } }) === null);
 }
 
 console.log(falhas === 0 ? "\n🎉 coletor de sessão: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);

@@ -159,3 +159,44 @@ function hostDe(url: string): string | null {
   const m = /^[a-z]+:\/\/([^/?#]+)/i.exec(url);
   return m ? m[1].toLowerCase() : null;
 }
+
+/**
+ * Procura um JWT dentro de qualquer resposta, por mais aninhada que ela venha.
+ *
+ * Existe porque o portal não documenta onde põe o token: pode ser `{token}`,
+ * `{access_token}`, `{dados:{jwt}}`. Em vez de apostar num nome de campo, varre-se o
+ * objeto inteiro atrás de algo que TENHA FORMA de JWT — e forma é checada por
+ * `ehTokenPlausivel`, não por adivinhação.
+ */
+export function acharJwtEm(valor: unknown, profundidade = 0): string | null {
+  if (profundidade > 6) return null;
+
+  if (typeof valor === "string") {
+    const limpo = valor.trim();
+    if (ehTokenPlausivel(limpo)) return limpo.replace(/^Bearer\s+/i, "");
+    return null;
+  }
+  if (Array.isArray(valor)) {
+    for (const item of valor) {
+      const achado = acharJwtEm(item, profundidade + 1);
+      if (achado) return achado;
+    }
+    return null;
+  }
+  if (valor && typeof valor === "object") {
+    // Campos de nome óbvio primeiro: num payload grande isso evita pegar outro JWT
+    // qualquer (um id_token do SSO, por exemplo) no lugar do token de sessão.
+    const objeto = valor as Record<string, unknown>;
+    const preferidos = ["token", "accessToken", "access_token", "jwt", "authorization", "bearer"];
+    for (const chave of Object.keys(objeto)) {
+      if (!preferidos.includes(chave)) continue;
+      const achado = acharJwtEm(objeto[chave], profundidade + 1);
+      if (achado) return achado;
+    }
+    for (const chave of Object.keys(objeto)) {
+      const achado = acharJwtEm(objeto[chave], profundidade + 1);
+      if (achado) return achado;
+    }
+  }
+  return null;
+}

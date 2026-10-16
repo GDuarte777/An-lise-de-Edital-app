@@ -12,7 +12,7 @@ import {
   URL_API_USUARIO
 } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
-import { ColetorSessaoPortal, ehTokenPlausivel, type EstadoSessaoPortal } from "./token.js";
+import { acharJwtEm, ColetorSessaoPortal, ehTokenPlausivel, type EstadoSessaoPortal } from "./token.js";
 
 /**
  * Login no Compras.gov.br.
@@ -350,6 +350,8 @@ export interface DiagnosticoSessao {
   status: StatusSessao;
   /** Presença e idade da credencial colhida — nunca o valor dela. */
   sessaoPortal: EstadoSessaoPortal;
+  /** Rotas tentadas para obter o token e o que o portal respondeu em cada uma. */
+  tentativasDeToken: TentativaDeToken[];
   /** A resposta do portal à pergunta "quem está logado?" — a evidência principal. */
   api: RespostaDoPortal;
   tentativas: TentativaSessao[];
@@ -408,7 +410,11 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
   // O portal novo só revela a sessão quando o SPA dele fala com a API. Se nenhuma
   // requisição passou ainda, abre a base do portal e deixa ele falar — é assim que o
   // token aparece, sem adivinhar rota nem interpretar HTML.
-  if (!coletor.tokenAtual()) await aquecerToken(janela, registro);
+  if (!coletor.tokenAtual()) {
+    // Pede o token à API com os cookies do login (caminho do SIGA). Só se não vier é que
+    // se abre uma página do portal para ele aparecer.
+    if (!(await obterTokenPelaApi())) await aquecerToken(janela, registro);
+  }
 
   // Agora a pergunta direta, já com o cabeçalho de sessão. Se o portal disser que há
   // usuário, acabou.
@@ -426,6 +432,7 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
       status,
       api,
       sessaoPortal: coletor.estado(),
+      tentativasDeToken: tentativasDeToken(),
       tentativas: [],
       enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
       dominiosDeCookie: DOMINIOS_SESSAO
@@ -480,6 +487,7 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
     status,
     api,
     sessaoPortal: coletor.estado(),
+    tentativasDeToken: tentativasDeToken(),
     tentativas,
     enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
     dominiosDeCookie: DOMINIOS_SESSAO
@@ -801,6 +809,118 @@ const SCRIPT_ESCOLHER_FORNECEDOR = `
 })()`;
 
 /**
+ * Pede o token à API do portal, com os cookies do login — é o caminho do SIGA.
+ *
+ * Por que isto existe: o token da sessão é emitido pelo serviço de usuário do portal, e
+ * quem normalmente o pede é o JavaScript da página. Eu vinha tentando fazer uma PÁGINA
+ * rodar para que ela pedisse por nós — e gastei três versões adivinhando qual página.
+ * Pedir direto ao serviço elimina a adivinhação: a rota de sessão é irmã da de renovação
+ * (`/sessao/fornecedor/retoken`), que foi confirmada na análise.
+ *
+ * Nada é forjado: quem autentica a chamada são os cookies que o gov.br acabou de dar ao
+ * operador, nesta máquina. O token volta e fica em memória, nunca em disco nem em log.
+ */
+const ROTAS_DE_TOKEN: Array<{ caminho: string; metodos: Array<"POST" | "GET"> }> = [
+  { caminho: "/comprasnet-usuario/v1/sessao/fornecedor", metodos: ["POST", "GET"] },
+  { caminho: "/comprasnet-usuario/v1/sessao/fornecedor/retoken", metodos: ["POST", "GET"] },
+  { caminho: "/comprasnet-usuario/v1/sessao", metodos: ["POST", "GET"] },
+  { caminho: "/comprasnet-usuario/v1/usuario", metodos: ["GET"] }
+];
+
+/**
+ * O que foi tentado na última busca de token, e o que o portal respondeu.
+ *
+ * Existe para a próxima rodada de suporte não ser adivinhação: com o status de cada
+ * rota em mãos, a rota certa aparece sem mais um ciclo de instalar-e-testar. Só rota,
+ * método e status — nada de corpo, nada de credencial.
+ */
+export interface TentativaDeToken {
+  rota: string;
+  metodo: string;
+  status: number;
+}
+
+let trilhaDeToken: TentativaDeToken[] = [];
+
+export function tentativasDeToken(): TentativaDeToken[] {
+  return [...trilhaDeToken];
+}
+
+export async function obterTokenPelaApi(): Promise<boolean> {
+  if (coletor.tokenAtual()) return true;
+  trilhaDeToken = [];
+
+  const base = "https://cnetmobile.estaleiro.serpro.gov.br";
+  for (const rota of ROTAS_DE_TOKEN) {
+    for (const metodo of rota.metodos) {
+      const url = `${base}${rota.caminho}`;
+      const resposta = await pedirAoPortal(url, metodo);
+      trilhaDeToken.push({ rota: rota.caminho, metodo, status: resposta?.status ?? 0 });
+      if (!resposta) continue;
+
+      // O token pode vir no cabeçalho (é como o portal devolve na renovação) ou no corpo.
+      const doCabecalho = resposta.autorizacao;
+      if (doCabecalho && ehTokenPlausivel(doCabecalho)) {
+        coletor.observar({ url, autorizacao: doCabecalho });
+        return true;
+      }
+      try {
+        const achado = acharJwtEm(JSON.parse(resposta.corpo));
+        if (achado) {
+          coletor.observar({ url, autorizacao: `Bearer ${achado}` });
+          return true;
+        }
+      } catch {
+        // resposta não era JSON; tenta a próxima rota
+      }
+    }
+  }
+  return false;
+}
+
+interface RespostaCrua {
+  status: number;
+  corpo: string;
+  autorizacao?: string;
+}
+
+function pedirAoPortal(url: string, metodo: "GET" | "POST"): Promise<RespostaCrua | null> {
+  return new Promise((resolve) => {
+    let respondido = false;
+    const responder = (r: RespostaCrua | null) => { if (!respondido) { respondido = true; resolve(r); } };
+    const desistir = setTimeout(() => responder(null), 12_000);
+
+    try {
+      const req = net.request({ method: metodo, url, session: sessaoComprasnet(), useSessionCookies: true });
+      req.setHeader("Accept", "application/json");
+      if (metodo === "POST") req.setHeader("Content-Type", "application/json");
+      req.on("response", (res) => {
+        const partes: Buffer[] = [];
+        const cabecalho = res.headers["authorization"] ?? res.headers["Authorization"];
+        res.on("data", (c: Buffer) => {
+          // Teto de 1 MB: resposta gigante aqui é sinal de que não é o que se procura.
+          if (partes.reduce((n, p) => n + p.length, 0) < 1_000_000) partes.push(c);
+        });
+        res.on("end", () => {
+          clearTimeout(desistir);
+          responder({
+            status: res.statusCode,
+            corpo: Buffer.concat(partes).toString("utf-8"),
+            autorizacao: Array.isArray(cabecalho) ? cabecalho[0] : cabecalho
+          });
+        });
+        res.on("error", () => { clearTimeout(desistir); responder(null); });
+      });
+      req.on("error", () => { clearTimeout(desistir); responder(null); });
+      req.end();
+    } catch {
+      clearTimeout(desistir);
+      responder(null);
+    }
+  });
+}
+
+/**
  * Faz a sessão virar token sem o operador ver nada.
  *
  * O portal não publica a rota de entrada do aplicativo, e ela já mudou de lugar. Então
@@ -810,6 +930,8 @@ const SCRIPT_ESCOLHER_FORNECEDOR = `
  */
 export async function colherTokenEmSegundoPlano(): Promise<boolean> {
   if (coletor.tokenAtual()) return true;
+  // Primeiro o caminho direto: pedir à API. Só se ele falhar é que se roda uma página.
+  if (await obterTokenPelaApi()) return true;
 
   const registro = registroEnderecos();
   await registro.carregar();

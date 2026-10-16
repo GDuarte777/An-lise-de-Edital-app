@@ -174,6 +174,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [diag, setDiag] = useState<{
     status: { autenticado: boolean; cookiesEncontrados: number; evidencia: string };
     api: { status: number; ok: boolean; erro?: string };
+    tentativasDeToken?: Array<{ rota: string; metodo: string; status: number }>;
     sessaoPortal?: {
       temToken: boolean;
       idadeTokenS: number | null;
@@ -527,6 +528,16 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                   {diag.sessaoPortal?.hostApi ? ` · API em ${diag.sessaoPortal.hostApi}` : ""}
                 </div>
                 <div>Endereço aprendido: <b>{diag.enderecosAprendidos.portal ?? "nenhum ainda"}</b></div>
+                {diag.tentativasDeToken && diag.tentativasDeToken.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    Rotas tentadas para pegar o token:
+                    {diag.tentativasDeToken.map((t, i) => (
+                      <div key={i} style={{ paddingLeft: 8, opacity: 0.8 }}>
+                        {t.metodo} {t.rota} → {t.status === 0 ? "sem resposta" : `HTTP ${t.status}`}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {diag.tentativas.map((t, i) => (
                   <div key={i} style={{ marginTop: 8, paddingLeft: 8, borderLeft: "2px solid #2b3444" }}>
                     <div style={{ wordBreak: "break-all" }}>{t.urlFinal || t.url}</div>
