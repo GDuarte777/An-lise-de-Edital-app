@@ -86,55 +86,48 @@ export function urlDaSala(pregaoId: string): string {
  * `authorization_id` novo, esse valor passa a ser o usado (ver `lembrarAutorizacaoSso`).
  */
 /**
- * Identificador da entrada do SSO, APRENDIDO — nunca fixo.
+ * A porta de entrada do login, dada pelo próprio operador depois de observar o fluxo
+ * real no navegador dele:
  *
- * Com um `authorization_id` válido, o gov.br abre direto na tela de CPF e senha, que é o
- * que o operador quer. Sem ele, o SSO manda para a escolha de perfil, um clique a mais.
+ *   1. https://www.comprasnet.gov.br/seguro/loginportal.asp
+ *   2. → sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=<novo>
+ *   3. → www.comprasnet.gov.br/intro.htm  (já logado)
+ *   4. → cnetmobile.../comprasnet-web/seguro/fornecedor/compras   (o aplicativo novo)
  *
- * O que não dá é embutir um valor: ele é emitido por tentativa de login e vence. Um
- * identificador vencido faz o SSO devolver página VAZIA — tela branca, sem erro. Foi
- * exatamente o que aconteceu com o valor fixo que estava aqui: em toda primeira entrada
- * o operador via branco.
- *
- * Então começa vazio. O primeiro login entra pela via genérica (que sempre responde), e
- * na volta o identificador real é aprendido e guardado: do segundo login em diante, a
- * tela de CPF e senha abre direto.
+ * O passo 1 é o que importa e é o que eu não tinha: é ELE que emite o
+ * `authorization_id`. Montar a URL do SSO à mão, com um identificador escrito no
+ * código, era o que fazia o gov.br devolver página em branco — identificador vencido
+ * não dá erro, dá vazio. Aqui não se monta mais nada: pede-se ao portal, e ele emite.
  */
-let autorizacaoSso = "";
+export const URL_ENTRADA_LOGIN = "https://www.comprasnet.gov.br/seguro/loginportal.asp";
 
-export function lembrarAutorizacaoSso(url: string): void {
-  const m = /[?&]authorization_id=([\w-]{6,})/i.exec(url);
-  if (m && /sso\.acesso\.gov\.br/i.test(url)) autorizacaoSso = m[1];
-}
+/** Onde o portal deixa o operador depois do login (sistema antigo). */
+export const RETORNO_POS_LOGIN = /comprasnet\.gov\.br\/(intro\.htm|seguro\/)/i;
 
-/** Sem identificador: o SSO decide o caminho e emite um novo. Sempre existe. */
-export const URL_LOGIN_SEM_AUTORIZACAO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
+/** Mantida para quem ainda importa a constante antiga. */
+export const URL_LOGIN_SSO = URL_ENTRADA_LOGIN;
+export const URL_LOGIN_SEM_AUTORIZACAO = URL_ENTRADA_LOGIN;
 
 export function urlLoginSso(): string {
-  return autorizacaoSso
-    ? `https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=${autorizacaoSso}`
-    : URL_LOGIN_SEM_AUTORIZACAO;
+  return URL_ENTRADA_LOGIN;
 }
 
-/**
- * Descarta o identificador quando ele não abre nada.
- *
- * O `authorization_id` é emitido por tentativa de login e vence. Vencido, o SSO devolve
- * uma página VAZIA — tela branca, sem erro, sem nada. Insistir nele deixaria o operador
- * olhando para o branco em todo login; então ele cai fora e a entrada passa a ser a que
- * sempre funciona, que por sua vez emite um identificador novo (aprendido na volta).
+/*
+ * As funções de identificador do SSO viraram no-op de propósito, e ficam aqui como
+ * lembrete: identificador do SSO é de uso único. Guardá-lo para "abrir direto da próxima
+ * vez" reintroduz exatamente a tela branca — o valor guardado já foi gasto.
  */
+export function lembrarAutorizacaoSso(_url: string): void {
+  /* identificador do SSO é de uso único: não se guarda */
+}
+
 export function esquecerAutorizacaoSso(): void {
-  autorizacaoSso = "";
+  /* idem */
 }
 
-/** Para a tela de diagnóstico: por onde o login vai entrar agora. */
 export function autorizacaoSsoAtual(): string {
-  return autorizacaoSso;
+  return "";
 }
-
-/** Mantida para quem importa a constante; o valor vivo está em `urlLoginSso()`. */
-export const URL_LOGIN_SSO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
 
 /**
  * Páginas do aplicativo novo tentadas, EM JANELA OCULTA, só para a sessão se
@@ -146,6 +139,7 @@ export const URL_LOGIN_SSO = "https://sso.acesso.gov.br/login?client_id=comprasn
  * encontrada" na cara dele.
  */
 export const CANDIDATOS_APLICATIVO = [
+  // Rota que o próprio operador usa (ele mandou a URL, com `compra=` no fim).
   "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras",
   "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor",
   "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/"

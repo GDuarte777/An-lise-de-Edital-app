@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CANDIDATOS_APLICATIVO, esquecerAutorizacaoSso, URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso, lembrarAutorizacaoSso, ehEnderecoNavegavel,
+import { RETORNO_POS_LOGIN, URL_ENTRADA_LOGIN, CANDIDATOS_APLICATIVO, urlLoginSso, ehEnderecoNavegavel,
   aprenderCom, ehEnderecoDoPortal, ehHostDoPortal, ehSalaDeDisputa,
   RegistroEnderecos
 } from "./endereco.js";
@@ -134,30 +134,22 @@ console.log("\n[Endereços que o aplicativo pode reabrir]");
 
 console.log("\n[Entrada do login]");
 {
-  // Nada de identificador embutido: um valor fixo vence e faz o SSO devolver página
-  // vazia. A primeira entrada é a genérica, que sempre responde.
-  esquecerAutorizacaoSso();
-  ok("primeira entrada é a genérica do SSO", urlLoginSso() === URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso());
-  ok("sem identificador inventado", !urlLoginSso().includes("authorization_id"));
+  // A porta é a do próprio portal: é ela que emite o authorization_id do gov.br. Montar
+  // a URL do SSO à mão, com identificador escrito no código, dava página em branco —
+  // identificador vencido não devolve erro, devolve vazio.
+  ok("entra pela porta do portal", urlLoginSso() === URL_ENTRADA_LOGIN, urlLoginSso());
+  ok("sem identificador montado por nós", !urlLoginSso().includes("authorization_id"));
+  ok("é o endereço que o operador usa", urlLoginSso() === "https://www.comprasnet.gov.br/seguro/loginportal.asp");
 
-  lembrarAutorizacaoSso("https://sso.acesso.gov.br/authorize?client_id=comprasnet.gov.br&authorization_id=abc123def");
-  ok("aprendido na volta, passa a abrir direto no CPF e senha", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
-  lembrarAutorizacaoSso("https://exemplo.com/x?authorization_id=invasor999");
-  ok("só aprende do próprio SSO", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
-}
+  ok("reconhece o retorno pós-login", RETORNO_POS_LOGIN.test("https://www.comprasnet.gov.br/intro.htm"));
+  ok("e a área segura do sistema antigo", RETORNO_POS_LOGIN.test("https://www.comprasnet.gov.br/seguro/algo.asp"));
+  ok("não confunde o SSO com retorno", !RETORNO_POS_LOGIN.test("https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br"));
 
-console.log("\n[Identificador do SSO que vence]");
-{
-  // Com identificador morto o SSO devolve página em branco. O aplicativo descarta e
-  // passa a entrar pela via genérica, que sempre existe e emite um novo.
-  lembrarAutorizacaoSso("https://sso.acesso.gov.br/login?authorization_id=vencido123");
-  ok("entra com o identificador enquanto ele vale", urlLoginSso().includes("vencido123"));
-  esquecerAutorizacaoSso();
-  ok("descartado, cai na entrada genérica", urlLoginSso() === URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso());
-  ok("e a genérica não leva identificador", !urlLoginSso().includes("authorization_id"));
-
-  lembrarAutorizacaoSso("https://sso.acesso.gov.br/authorize?client_id=comprasnet.gov.br&authorization_id=novo456");
-  ok("o novo identificador, aprendido na volta, volta a valer", urlLoginSso().includes("novo456"), urlLoginSso());
+  ok(
+    "a rota do aplicativo novo que o operador usa é a primeira candidata",
+    CANDIDATOS_APLICATIVO[0] === "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras",
+    CANDIDATOS_APLICATIVO[0]
+  );
 }
 
 console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);

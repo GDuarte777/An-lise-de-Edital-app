@@ -8,7 +8,7 @@ import {
   RegistroEnderecos,
   lembrarAutorizacaoSso,
   urlLoginSso,
-  URL_LOGIN_SEM_AUTORIZACAO,
+  RETORNO_POS_LOGIN,
   URL_API_USUARIO
 } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
@@ -591,6 +591,7 @@ export async function abrirLogin(
   let fechandoPorNos = false;
   const perfisEscolhidos = new Set<number>();
   let avisoPosto = false;
+  let encaminhado = false;
 
   return new Promise<StatusSessao>((resolve) => {
     let resolvido = false;
@@ -680,6 +681,28 @@ export async function abrirLogin(
          * dizendo que ela se fecha sozinha. Qualquer página do portal que o operador
          * abrir dali faz o token aparecer, e aí sim ela fecha.
          */
+        /*
+         * Depois do login o portal deixa o operador no sistema ANTIGO (intro.htm). O
+         * token da sessão só nasce no aplicativo NOVO. Então, uma vez, a janela segue
+         * para lá — preferindo um LINK da própria página, e não um endereço meu: o
+         * portal sabe onde fica a área dele melhor do que eu, e foi adivinhar isso que
+         * produziu 404 na cara do operador nas versões anteriores.
+         */
+        if (!coletor.tokenAtual() && !encaminhado) {
+          const atual = abertas[0];
+          const urlAtual = atual.isDestroyed() ? "" : atual.webContents.getURL();
+          if (RETORNO_POS_LOGIN.test(urlAtual)) {
+            encaminhado = true;
+            const destino = (await linkParaAplicativoNovo(atual)) ?? CANDIDATOS_APLICATIVO[0];
+            try {
+              await atual.loadURL(destino);
+            } catch {
+              // segue o laço; o aviso abaixo explica ao operador
+            }
+            return;
+          }
+        }
+
         if (!logada && saiuDoSso && !avisoPosto) {
           avisoPosto = true;
           for (const j of abertas) {
@@ -720,34 +743,18 @@ export async function abrirLogin(
  */
 async function abrirEntradaDeLogin(janela: BrowserWindow): Promise<void> {
   /*
-   * A ordem é: identificador aprendido (abre direto no CPF e senha), depois a entrada
-   * genérica do SSO (que sempre responde e leva à escolha de perfil, clicada sozinha).
-   *
-   * O que NÃO entra mais nesta lista é endereço do aplicativo do portal. A versão
-   * anterior usava a base do SPA como último recurso, e essa base responde 404 — era a
-   * página de erro que o operador via depois de esperar.
+   * Uma porta só: a do próprio portal. Ela redireciona para o gov.br com um
+   * `authorization_id` recém-emitido, que é a tela de CPF e senha que o operador quer
+   * ver. Montar essa URL à mão com identificador fixo era o que dava página em branco.
    */
-  const comIdentificador = urlLoginSso();
-  const tentativas =
-    comIdentificador === URL_LOGIN_SEM_AUTORIZACAO
-      ? [URL_LOGIN_SEM_AUTORIZACAO]
-      : [comIdentificador, URL_LOGIN_SEM_AUTORIZACAO];
-
-  for (const [posicao, url] of tentativas.entries()) {
-    if (janela.isDestroyed()) return;
-    try {
-      await janela.loadURL(url);
-    } catch {
-      continue; // rota morta ou rede caindo: tenta a próxima
-    }
-    if (await paginaAbriuDeVerdade(janela)) return;
-    // Só a primeira tentativa depende do identificador; se ela veio vazia, ele morreu.
-    if (posicao === 0 && tentativas.length > 1) await registroEnderecos().esquecerAutorizacao();
+  try {
+    await janela.loadURL(urlLoginSso());
+  } catch {
+    if (!janela.isDestroyed()) await janela.loadURL(PAGINA_LOGIN_INDISPONIVEL).catch(() => undefined);
+    return;
   }
-
-  if (!janela.isDestroyed()) {
-    await janela.loadURL(PAGINA_LOGIN_INDISPONIVEL).catch(() => undefined);
-  }
+  if (await paginaAbriuDeVerdade(janela)) return;
+  if (!janela.isDestroyed()) await janela.loadURL(PAGINA_LOGIN_INDISPONIVEL).catch(() => undefined);
 }
 
 /**
@@ -821,6 +828,28 @@ const PAGINA_LOGIN_INDISPONIVEL =
   <p>O serviço de acesso do governo não respondeu agora. Feche esta janela e tente entrar
      de novo em alguns instantes.</p>
 </div>`);
+
+/**
+ * Procura, na página em que o operador está, o link para o aplicativo novo.
+ *
+ * É a diferença entre seguir o portal e adivinhar o portal: o menu do sistema antigo
+ * aponta para a área nova, e esse endereço é verdadeiro por construção.
+ */
+async function linkParaAplicativoNovo(janela: BrowserWindow): Promise<string | null> {
+  try {
+    const achado = (await janela.webContents.executeJavaScript(
+      `(() => {
+         const links = Array.from(document.querySelectorAll("a[href]"));
+         const bom = links.find((a) => /estaleiro\\.serpro\\.gov\\.br\\/comprasnet-web/i.test(a.href));
+         return bom ? bom.href : null;
+       })()`,
+      true
+    )) as string | null;
+    return typeof achado === "string" && achado ? achado : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Aviso dentro da janela do portal, enquanto o aplicativo espera a sessão aparecer.

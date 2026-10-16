@@ -244,11 +244,11 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       const s = await api().comprasnet.entrar();
       setConectado(s.autenticado);
       setEvidencia(s.evidencia);
-      if (!s.autenticado) {
-        setErro(`Ainda não há sessão do gov.br. ${s.evidencia}`);
-      } else {
-        void carregarDisputas();
-      }
+      // Lista as disputas de qualquer jeito: é o que o operador quer ver depois de
+      // entrar, e a própria listagem diz o que falta quando falta. Condicionar isso a
+      // um "autenticado" que chega segundos atrasado só produzia tela vazia.
+      void carregarDisputas();
+      if (!s.autenticado) setErro(`Ainda não há sessão do gov.br. ${s.evidencia}`);
       void api().calibracao.estado().then(setCalib);
     } catch (e) {
       // Sem isto, uma falha ao abrir a janela de login não deixava rastro na tela.
