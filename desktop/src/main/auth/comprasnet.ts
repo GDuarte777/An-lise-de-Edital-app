@@ -675,7 +675,19 @@ export async function abrirLogin(
  * um identificador NOVO é aprendido para o próximo login.
  */
 async function abrirEntradaDeLogin(janela: BrowserWindow): Promise<void> {
-  const tentativas = [urlLoginSso(), URL_LOGIN_SEM_AUTORIZACAO, enderecoPortal()];
+  /*
+   * A ordem é: identificador aprendido (abre direto no CPF e senha), depois a entrada
+   * genérica do SSO (que sempre responde e leva à escolha de perfil, clicada sozinha).
+   *
+   * O que NÃO entra mais nesta lista é endereço do aplicativo do portal. A versão
+   * anterior usava a base do SPA como último recurso, e essa base responde 404 — era a
+   * página de erro que o operador via depois de esperar.
+   */
+  const comIdentificador = urlLoginSso();
+  const tentativas =
+    comIdentificador === URL_LOGIN_SEM_AUTORIZACAO
+      ? [URL_LOGIN_SEM_AUTORIZACAO]
+      : [comIdentificador, URL_LOGIN_SEM_AUTORIZACAO];
 
   for (const [posicao, url] of tentativas.entries()) {
     if (janela.isDestroyed()) return;
@@ -684,37 +696,68 @@ async function abrirEntradaDeLogin(janela: BrowserWindow): Promise<void> {
     } catch {
       continue; // rota morta ou rede caindo: tenta a próxima
     }
-    if (await paginaTemConteudo(janela)) return;
-    // A primeira tentativa é a única que depende do identificador. Descartá-lo é
-    // gravado em disco: reiniciar o aplicativo não traz a tela branca de volta.
-    if (posicao === 0) await registroEnderecos().esquecerAutorizacao();
+    if (await paginaAbriuDeVerdade(janela)) return;
+    // Só a primeira tentativa depende do identificador; se ela veio vazia, ele morreu.
+    if (posicao === 0 && tentativas.length > 1) await registroEnderecos().esquecerAutorizacao();
   }
 
   if (!janela.isDestroyed()) {
-    // Nem a entrada genérica abriu. Melhor dizer isso do que deixar o operador olhando
-    // para uma janela branca sem saber se travou.
     await janela.loadURL(PAGINA_LOGIN_INDISPONIVEL).catch(() => undefined);
   }
 }
 
-/** Página em branco é página que não abriu. Texto, formulário ou campo de senha servem. */
-async function paginaTemConteudo(janela: BrowserWindow): Promise<boolean> {
-  for (let i = 0; i < 8; i++) {
+/**
+ * A página abriu de verdade?
+ *
+ * Duas lições de uma tela branca que virou 404 na cara do operador:
+ *
+ *  1. ESPERAR O FIM. A versão anterior olhava a página 3 segundos depois de pedir, e o
+ *     SSO às vezes ainda estava redirecionando. Declarar "veio vazia" e navegar para
+ *     outro lugar INTERROMPIA uma página que estava chegando.
+ *  2. Só julgar quando o carregamento parar. Enquanto `isLoading()` for verdadeiro,
+ *     espera-se — até o limite, que é generoso de propósito: o gov.br em hora de pico é
+ *     lento, e lentidão não é erro.
+ */
+async function paginaAbriuDeVerdade(janela: BrowserWindow, limiteMs = 30_000): Promise<boolean> {
+  const ate = Date.now() + limiteMs;
+
+  while (Date.now() < ate) {
     if (janela.isDestroyed()) return false;
+
+    if (janela.webContents.isLoading()) {
+      await new Promise((r) => setTimeout(r, 500));
+      continue;
+    }
+
     try {
       const tem = (await janela.webContents.executeJavaScript(
         `(() => {
            const t = ((document.body && document.body.innerText) || "").trim();
            return t.length > 40 ||
-                  Boolean(document.querySelector('input[type="password"],form,button'));
+                  Boolean(document.querySelector('input[type="password"],form,button,a[href]'));
          })()`,
         true
       )) as boolean;
       if (tem) return true;
     } catch {
-      // Página ainda carregando ou navegando: tenta de novo.
+      // Navegando no meio da leitura: não é resposta, é "ainda não".
     }
-    await new Promise((r) => setTimeout(r, 400));
+
+    // Parou de carregar e está vazia. Dá mais um tempo: SPA pinta depois do load.
+    await new Promise((r) => setTimeout(r, 700));
+    if (janela.isDestroyed()) return false;
+    if (!janela.webContents.isLoading()) {
+      try {
+        const tem = (await janela.webContents.executeJavaScript(
+          `(((document.body && document.body.innerText) || "").trim().length > 40)`,
+          true
+        )) as boolean;
+        if (tem) return true;
+      } catch {
+        // idem
+      }
+      return false;
+    }
   }
   return false;
 }

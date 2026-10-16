@@ -85,9 +85,22 @@ export function urlDaSala(pregaoId: string): string {
  * constante: toda vez que uma janela do login passa por um endereço do SSO com um
  * `authorization_id` novo, esse valor passa a ser o usado (ver `lembrarAutorizacaoSso`).
  */
-export const AUTHORIZATION_ID_PADRAO = "1a144fa9cea";
-
-let autorizacaoSso = AUTHORIZATION_ID_PADRAO;
+/**
+ * Identificador da entrada do SSO, APRENDIDO — nunca fixo.
+ *
+ * Com um `authorization_id` válido, o gov.br abre direto na tela de CPF e senha, que é o
+ * que o operador quer. Sem ele, o SSO manda para a escolha de perfil, um clique a mais.
+ *
+ * O que não dá é embutir um valor: ele é emitido por tentativa de login e vence. Um
+ * identificador vencido faz o SSO devolver página VAZIA — tela branca, sem erro. Foi
+ * exatamente o que aconteceu com o valor fixo que estava aqui: em toda primeira entrada
+ * o operador via branco.
+ *
+ * Então começa vazio. O primeiro login entra pela via genérica (que sempre responde), e
+ * na volta o identificador real é aprendido e guardado: do segundo login em diante, a
+ * tela de CPF e senha abre direto.
+ */
+let autorizacaoSso = "";
 
 export function lembrarAutorizacaoSso(url: string): void {
   const m = /[?&]authorization_id=([\w-]{6,})/i.exec(url);
@@ -121,7 +134,7 @@ export function autorizacaoSsoAtual(): string {
 }
 
 /** Mantida para quem importa a constante; o valor vivo está em `urlLoginSso()`. */
-export const URL_LOGIN_SSO = `https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=${AUTHORIZATION_ID_PADRAO}`;
+export const URL_LOGIN_SSO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
 
 /**
  * Páginas do aplicativo novo tentadas, EM JANELA OCULTA, só para a sessão se
@@ -335,10 +348,17 @@ export class RegistroEnderecos {
   }
 
   /** Melhor endereço para abrir o portal agora. */
+  /**
+   * Endereço para ABRIR numa janela que o operador vê.
+   *
+   * Sem nada aprendido, vai para a primeira rota candidata do aplicativo e não para a
+   * base do SPA: a base responde 404, e 404 na cara de quem acabou de entrar foi
+   * exatamente a reclamação. A base continua servindo para sondagem em janela oculta.
+   */
   paraAbrir(): string {
     return this.dados.portal && ehEnderecoNavegavel(this.dados.portal)
       ? this.dados.portal
-      : SEMENTES_PORTAL[0];
+      : CANDIDATOS_APLICATIVO[0];
   }
 
   /**

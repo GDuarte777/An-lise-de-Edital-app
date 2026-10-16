@@ -3,9 +3,9 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { esquecerAutorizacaoSso, URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso, lembrarAutorizacaoSso, ehEnderecoNavegavel,
+import { CANDIDATOS_APLICATIVO, esquecerAutorizacaoSso, URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso, lembrarAutorizacaoSso, ehEnderecoNavegavel,
   aprenderCom, ehEnderecoDoPortal, ehHostDoPortal, ehSalaDeDisputa,
-  RegistroEnderecos, SEMENTES_PORTAL
+  RegistroEnderecos
 } from "./endereco.js";
 
 let falhas = 0;
@@ -59,7 +59,10 @@ const dir = await mkdtemp(join(tmpdir(), "lancebot-"));
 const caminho = join(dir, "sub", "endereco.json");
 const reg = new RegistroEnderecos(caminho);
 await reg.carregar();
-ok("sem nada aprendido, cai na semente", reg.paraAbrir() === SEMENTES_PORTAL[0]);
+// Sem nada aprendido, abre uma ROTA candidata — não a base do SPA, que responde 404.
+ok("sem nada aprendido, abre rota candidata e não a base 404",
+   reg.paraAbrir() === CANDIDATOS_APLICATIVO[0] && !reg.paraAbrir().endsWith("/comprasnet-web/"),
+   reg.paraAbrir());
 
 await reg.aprender("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/disputa/900");
 ok("passa a usar o aprendido", reg.paraAbrir().includes("/disputa/900"), reg.aprendidos);
@@ -104,7 +107,8 @@ console.log("\n[limpeza do que ja estava no disco]");
   await r.carregar();
   ok("descarta endereco ruim que ja estava salvo",
      !r.paraAbrir().includes("compra="), r.paraAbrir());
-  ok("e cai na semente boa", r.paraAbrir().endsWith("/comprasnet-web/"), r.paraAbrir());
+  ok("e cai numa rota candidata que não é a base 404",
+     r.paraAbrir() === CANDIDATOS_APLICATIVO[0], r.paraAbrir());
 }
 
 console.log("\n[Endereços que o aplicativo pode reabrir]");
@@ -130,13 +134,14 @@ console.log("\n[Endereços que o aplicativo pode reabrir]");
 
 console.log("\n[Entrada do login]");
 {
-  ok("abre direto na página de CPF e senha do gov.br", urlLoginSso().startsWith("https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br"));
-  ok("leva o authorization_id, sem o qual o SSO devolve para a escolha de perfil", urlLoginSso().includes("authorization_id="));
+  // Nada de identificador embutido: um valor fixo vence e faz o SSO devolver página
+  // vazia. A primeira entrada é a genérica, que sempre responde.
+  esquecerAutorizacaoSso();
+  ok("primeira entrada é a genérica do SSO", urlLoginSso() === URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso());
+  ok("sem identificador inventado", !urlLoginSso().includes("authorization_id"));
 
-  // O identificador vence. O que passar na janela do login vale para a próxima vez — é
-  // o que impede a URL de virar bomba-relógio.
   lembrarAutorizacaoSso("https://sso.acesso.gov.br/authorize?client_id=comprasnet.gov.br&authorization_id=abc123def");
-  ok("aprende o identificador novo", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
+  ok("aprendido na volta, passa a abrir direto no CPF e senha", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
   lembrarAutorizacaoSso("https://exemplo.com/x?authorization_id=invasor999");
   ok("só aprende do próprio SSO", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
 }
