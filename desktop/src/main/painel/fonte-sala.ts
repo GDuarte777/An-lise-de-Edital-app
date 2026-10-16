@@ -31,6 +31,9 @@ import { extrairMensagens, paraConfiguracaoMotor } from "../bot/fonte-viva.js";
 import { Motor, type EventoMotor } from "../bot/motor.js";
 import { extrairCodigoRecusa, type ResultadoLance } from "../bot/rest/portal.js";
 import { INTERVALO_MINIMO_MS } from "../bot/limites.js";
+import { ClienteStomp, montarUrlWebSocket, type AbrirSocket } from "../bot/stomp/cliente.js";
+import { TOPICOS } from "../bot/fonte-viva.js";
+import type { Ambiente } from "../bot/endpoints.js";
 
 /** Leitura crua que o agente da página devolve. Nada de nó do DOM passa por aqui. */
 interface ItemDaTela {
@@ -69,6 +72,20 @@ export interface OpcoesFonteSala {
   /** Entre duas leituras da tela. Nunca abaixo do piso do freio. */
   intervaloMs?: number;
   aoEstado: (estado: EstadoPainel) => void;
+  /**
+   * Canal de disputa do portal (STOMP sobre WebSocket) — o caminho do SIGA.
+   *
+   * Nesta versão ele entra em modo de escuta: conecta com o token da sessão, assina os
+   * tópicos e REGISTRA o que chega, sem alimentar o motor. O motivo é honesto: os nomes
+   * dos tópicos são inferidos, e dado empurrado por um tópico errado decidindo lance
+   * seria pior que nenhum dado. Com o log de uma disputa real, os nomes se confirmam e a
+   * decisão passa a vir do canal — que é o que torna a leitura instantânea.
+   */
+  canal?: {
+    token: () => string | null;
+    abrirSocket: AbrirSocket;
+    ambiente: Ambiente;
+  };
 }
 
 const LIMITE_LOG = 300;
@@ -83,6 +100,8 @@ export class FonteSalaViva {
   private log: EventoLog[] = [];
   private cabecalho: NonNullable<TelaDaSala["disputa"]> = {};
   private relogio: NodeJS.Timeout | null = null;
+  private cliente: ClienteStomp | null = null;
+  private mensagensDoCanal = 0;
   private lendo = false;
   private vivo = false;
   private semAgente = 0;
@@ -107,7 +126,59 @@ export class FonteSalaViva {
     this.vivo = false;
     if (this.relogio) clearTimeout(this.relogio);
     this.relogio = null;
+    this.cliente?.desconectar("painel fechado");
+    this.cliente = null;
     this.motor.pararTudo("painel fechado");
+  }
+
+  /**
+   * Liga o canal de disputa, em escuta. Uma vez por painel, e só quando já se sabe o
+   * número da compra — sem ele não há tópico a assinar.
+   */
+  private ligarCanal(compra: string): void {
+    const canal = this.opcoes.canal;
+    if (!canal || this.cliente) return;
+    const token = canal.token();
+    if (!token) {
+      this.registrar(
+        "sistema",
+        "Canal de disputa do portal não ligado: o token da sessão ainda não apareceu."
+      );
+      return;
+    }
+
+    this.cliente = new ClienteStomp({
+      url: montarUrlWebSocket(canal.ambiente),
+      autorizacao: () => canal.token() ?? "",
+      abrirSocket: canal.abrirSocket,
+      aoEvento: (evento) => {
+        if (evento.tipo === "conectado") {
+          this.registrar("sistema", "Canal de disputa do portal conectado (em escuta).");
+        } else if (evento.tipo === "desconectado") {
+          this.registrar("sistema", `Canal de disputa caiu: ${evento.motivo}.`);
+        } else if (evento.tipo === "erro-servidor") {
+          this.registrar("alerta", `Canal de disputa recusado pelo portal: ${evento.mensagem}.`);
+        }
+        this.publicar();
+      }
+    });
+
+    for (const padrao of Object.values(TOPICOS)) {
+      const destino = padrao.replace("{compra}", compra);
+      this.cliente.assinar(destino, (quadro) => {
+        this.mensagensDoCanal++;
+        // Primeiras mensagens inteiras (recortadas): é com elas que os nomes de tópico e
+        // de campo deixam de ser inferência. Depois disso, só a contagem.
+        if (this.mensagensDoCanal <= 12) {
+          this.registrar("sistema", `Canal ${destino}: ${quadro.corpo.slice(0, 400)}`);
+        } else if (this.mensagensDoCanal % 50 === 0) {
+          this.registrar("sistema", `Canal: ${this.mensagensDoCanal} mensagens recebidas.`);
+        }
+        this.publicar();
+      });
+    }
+
+    this.cliente.conectar();
   }
 
   // ---------- laço de leitura ----------
@@ -160,6 +231,9 @@ export class FonteSalaViva {
 
   private absorver(tela: TelaDaSala): void {
     if (tela.disputa) this.cabecalho = tela.disputa;
+
+    const numeroDaCompra = (this.cabecalho.compra ?? "").trim();
+    if (numeroDaCompra) this.ligarCanal(numeroDaCompra);
 
     const mensagens = extrairMensagens(tela.chat ?? []);
     if (mensagens.length > 0) this.absorverChat(mensagens);

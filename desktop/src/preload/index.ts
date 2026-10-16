@@ -102,8 +102,19 @@ export interface TentativaSessao {
   } | null;
 }
 
+/** Presença e idade da credencial da sessão do portal — nunca o valor dela. */
+export interface EstadoSessaoPortal {
+  temToken: boolean;
+  idadeTokenS: number | null;
+  temCaptcha: boolean;
+  idadeCaptchaS: number | null;
+  hostApi: string | null;
+  observadas: number;
+}
+
 export interface DiagnosticoSessao {
   status: StatusSessao;
+  sessaoPortal: EstadoSessaoPortal;
   /** Resposta do portal a "quem está logado?" — a evidência principal. */
   api: { status: number; ok: boolean; erro?: string };
   tentativas: TentativaSessao[];

@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, URL_API_USUARIO, URL_LOGIN_SSO } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
+import { ColetorSessaoPortal, ehTokenPlausivel, type EstadoSessaoPortal } from "./token.js";
 
 /**
  * Login no Compras.gov.br.
@@ -99,10 +100,43 @@ const USER_AGENT_CHROMIUM =
 
 let sessaoPreparada = false;
 
+/**
+ * Credencial da sessão do portal, colhida do tráfego do próprio portal.
+ *
+ * O Compras.gov.br novo não guarda sessão em cookie: a sessão é um token que o SPA manda
+ * no `Authorization`. Era por isso que o aplicativo via "1 cookie" e levava 403 com o
+ * operador logado. Aqui o token é observado passando — a mesma credencial que a página
+ * dele acabou de usar. Valor nenhum sai deste par de módulos.
+ */
+const coletor = new ColetorSessaoPortal();
+
+export function coletorSessaoPortal(): ColetorSessaoPortal {
+  return coletor;
+}
+
+export function estadoSessaoPortal(): EstadoSessaoPortal {
+  return coletor.estado();
+}
+
 export function sessaoComprasnet(): Session {
   const ses = session.fromPartition(PARTITION);
   if (!sessaoPreparada) {
     ses.setUserAgent(USER_AGENT_CHROMIUM);
+    // Observa os cabeçalhos que a página do portal manda. É leitura: os cabeçalhos
+    // seguem intactos para o portal.
+    ses.webRequest.onBeforeSendHeaders((detalhes, callback) => {
+      try {
+        const cabecalhos = detalhes.requestHeaders ?? {};
+        const chave = Object.keys(cabecalhos).find((k) => k.toLowerCase() === "authorization");
+        coletor.observar({
+          url: detalhes.url,
+          autorizacao: chave ? String(cabecalhos[chave]) : undefined
+        });
+      } catch {
+        // Observar nunca pode atrapalhar a navegação do operador.
+      }
+      callback({ requestHeaders: detalhes.requestHeaders });
+    });
     sessaoPreparada = true;
   }
   return ses;
@@ -272,6 +306,10 @@ export function perguntarAoPortal(url = URL_API_USUARIO): Promise<RespostaDoPort
     try {
       const req = net.request({ method: "GET", url, session: sessaoComprasnet(), useSessionCookies: true });
       req.setHeader("Accept", "application/json");
+      // O cabeçalho que faltava. Sem ele a API responde 403 mesmo com a sessão viva,
+      // porque a sessão do portal novo mora no token, não no cookie.
+      const token = coletor.tokenAtual();
+      if (token) req.setHeader("Authorization", token.startsWith("Bearer") ? token : `Bearer ${token}`);
       req.on("response", (res) => {
         const status = res.statusCode;
         res.on("data", () => { /* o corpo não interessa: nada dele é lido nem guardado */ });
@@ -297,6 +335,8 @@ export interface TentativaSessao {
 /** Diagnóstico completo — é o que a interface mostra quando o operador pede. */
 export interface DiagnosticoSessao {
   status: StatusSessao;
+  /** Presença e idade da credencial colhida — nunca o valor dela. */
+  sessaoPortal: EstadoSessaoPortal;
   /** A resposta do portal à pergunta "quem está logado?" — a evidência principal. */
   api: RespostaDoPortal;
   tentativas: TentativaSessao[];
@@ -352,8 +392,13 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
     }
   });
 
-  // Primeiro a pergunta direta. Se o portal disser que há usuário, acabou: não há HTML
-  // para interpretar nem rota para acertar.
+  // O portal novo só revela a sessão quando o SPA dele fala com a API. Se nenhuma
+  // requisição passou ainda, abre a base do portal e deixa ele falar — é assim que o
+  // token aparece, sem adivinhar rota nem interpretar HTML.
+  if (!coletor.tokenAtual()) await aquecerToken(janela, registro);
+
+  // Agora a pergunta direta, já com o cabeçalho de sessão. Se o portal disser que há
+  // usuário, acabou.
   const api = await perguntarAoPortal();
   if (api.ok) {
     const status: StatusSessao = {
@@ -367,6 +412,7 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
     return {
       status,
       api,
+      sessaoPortal: coletor.estado(),
       tentativas: [],
       enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
       dominiosDeCookie: DOMINIOS_SESSAO
@@ -402,7 +448,13 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
     evidencia: boa
       ? `Sessão ativa em ${new URL(boa.urlFinal).host}.`
       : api.status === 401 || api.status === 403
-        ? "O portal respondeu que não há usuário logado (HTTP " + api.status + ")."
+        ? coletor.tokenAtual()
+          ? "O portal recusou a sessão (HTTP " + api.status + ") mesmo com o token em mãos — " +
+            "provavelmente ela expirou. Entre no gov.br outra vez."
+          : "O portal ainda não revelou o token desta sessão (HTTP " + api.status + "). " +
+            "A sessão do Compras.gov.br novo vive num token, não em cookie: abra uma página " +
+            "do portal (o painel de disputas, por exemplo) e tente de novo — o token aparece " +
+            "na primeira chamada que a própria página faz."
         : api.status === 0
           ? `Não consegui falar com o portal: ${api.erro ?? "sem resposta"}.`
           : tentativas.length === 0
@@ -414,10 +466,35 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
   return {
     status,
     api,
+    sessaoPortal: coletor.estado(),
     tentativas,
     enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
     dominiosDeCookie: DOMINIOS_SESSAO
   };
+}
+
+/**
+ * Faz o portal falar, para o token aparecer.
+ *
+ * Abrir a base do SPA basta: ele mesmo chama a API para saber quem está logado, e é essa
+ * chamada que carrega o `Authorization`. Se nada passar em alguns segundos, tenta o
+ * armazenamento da página como último recurso.
+ */
+async function aquecerToken(janela: BrowserWindow, registro: RegistroEnderecos): Promise<void> {
+  const url = registro.paraVerificar()[0];
+  if (!url || janela.isDestroyed()) return;
+
+  try {
+    await janela.loadURL(url);
+  } catch {
+    // Endereço pode estar fora do ar; o diagnóstico abaixo dirá.
+  }
+
+  for (let i = 0; i < 16; i++) {
+    if (coletor.tokenAtual()) return;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (!janela.isDestroyed()) await colherTokenDaJanela(janela.webContents);
 }
 
 export async function verificarSessao(forcar = false): Promise<StatusSessao> {
@@ -596,5 +673,60 @@ export function abrirPainelDisputas(): Promise<number> {
 export async function sair(): Promise<void> {
   const ses = sessaoComprasnet();
   await ses.clearStorageData({ storages: ["cookies", "localstorage", "indexdb"] });
+  // Credencial de sessão encerrada não fica em memória.
+  coletor.esquecer();
   cache = null;
 }
+
+/**
+ * Última tentativa de achar o token quando nenhuma requisição do portal passou ainda:
+ * o SPA guarda a sessão no armazenamento da própria página.
+ *
+ * [inferido] A chave varia entre versões do portal, então nada de nome fixo: varre as
+ * chaves e aproveita só o que tem cara de JWT. Devolve se achou — nunca o valor.
+ */
+export async function colherTokenDaJanela(conteudo: WebContents): Promise<boolean> {
+  try {
+    const achado = (await conteudo.executeJavaScript(SCRIPT_TOKEN_DO_ARMAZENAMENTO, true)) as string | null;
+    if (typeof achado === "string" && ehTokenPlausivel(achado)) {
+      coletor.observar({ url: conteudo.getURL(), autorizacao: achado });
+      return true;
+    }
+  } catch {
+    // Página sem acesso ao armazenamento: segue sem token, e o 403 dirá isso.
+  }
+  return false;
+}
+
+const SCRIPT_TOKEN_DO_ARMAZENAMENTO = `
+(() => {
+  const ehJwt = (v) => typeof v === "string" && /^(Bearer\s+)?eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(v.trim());
+  const cofres = [];
+  try { cofres.push(window.sessionStorage); } catch (e) { /* bloqueado */ }
+  try { cofres.push(window.localStorage); } catch (e) { /* bloqueado */ }
+
+  for (const cofre of cofres) {
+    if (!cofre) continue;
+    for (let i = 0; i < cofre.length; i++) {
+      const chave = cofre.key(i);
+      if (!chave) continue;
+      const cru = cofre.getItem(chave);
+      if (!cru) continue;
+      if (ehJwt(cru)) return cru.trim();
+      // Valor pode ser um JSON com o token dentro.
+      if (cru.length < 20000 && (cru[0] === "{" || cru[0] === "[")) {
+        try {
+          const pilha = [JSON.parse(cru)];
+          while (pilha.length) {
+            const no = pilha.pop();
+            if (ehJwt(no)) return String(no).trim();
+            if (no && typeof no === "object") {
+              for (const k of Object.keys(no)) pilha.push(no[k]);
+            }
+          }
+        } catch (e) { /* não era JSON */ }
+      }
+    }
+  }
+  return null;
+})()`;

@@ -2,7 +2,9 @@ import type { Session } from "electron";
 import type { DescobridorApi } from "./discovery.js";
 import type { GerenciadorSalas } from "./sala.js";
 import type { ItemVisivel } from "./sala-script.js";
-import { enderecoPortal } from "../auth/comprasnet.js";
+import { coletorSessaoPortal, enderecoPortal } from "../auth/comprasnet.js";
+import { PortalRest } from "../bot/rest/portal.js";
+import { criarTransporteElectron } from "../integracao/transporte-electron.js";
 
 /**
  * Lista as disputas do operador.
@@ -88,6 +90,91 @@ function extrairRegistros(dados: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
+/** Nossa lista de disputas vinda da API do portal, no modelo do SIGA: token + captcha. */
+export interface ResultadoApiPortal {
+  disputas: Disputa[];
+  /** Por que não deu, quando não deu. A interface mostra isto em vez de "lista vazia". */
+  motivo: string | null;
+}
+
+/**
+ * A lista pela API oficial do portal — o caminho do SIGA.
+ *
+ * Duas credenciais, as duas do próprio operador: o token da sessão (que o SPA dele manda
+ * em toda chamada) e, nas rotas de leitura, o token de captcha que a página dele acabou
+ * de usar. Não existe fazenda de captcha aqui: sem captcha recente, esta via diz que não
+ * pode ler, e a leitura de tela assume.
+ */
+export async function pelaApiDoPortal(sessao: Session): Promise<ResultadoApiPortal> {
+  const coletor = coletorSessaoPortal();
+  const token = coletor.tokenAtual();
+  if (!token) {
+    return {
+      disputas: [],
+      motivo:
+        "o portal ainda não revelou o token desta sessão — abra uma página do Compras.gov.br " +
+        "pelo aplicativo para o token aparecer"
+    };
+  }
+
+  const host = coletor.hostApi() ?? "";
+  const portal = new PortalRest({
+    ambiente: /(^|\.)tre-/.test(host) ? "treinamento" : "producao",
+    transporte: criarTransporteElectron(sessao),
+    autorizacao: () => token,
+    captcha: async () => coletor.captchaAtual()
+  });
+
+  let semCaptcha = false;
+  let falha: string | null = null;
+
+  for (const rota of ["participacoes", "comprasEmDisputa", "emSelecaoFornecedores"]) {
+    const r = await portal.ler(rota);
+    if (r.estado === "ok") {
+      const achadas = normalizarDisputasDaApi(r.dados);
+      if (achadas.length > 0) return { disputas: achadas, motivo: null };
+      continue;
+    }
+    if (r.estado === "sem-captcha") {
+      semCaptcha = true;
+      continue;
+    }
+    if (r.estado === "sessao-caiu") {
+      return { disputas: [], motivo: "a sessão do portal expirou — entre no gov.br outra vez" };
+    }
+    falha = `${rota}: HTTP ${r.status}`;
+  }
+
+  if (semCaptcha) {
+    return {
+      disputas: [],
+      motivo:
+        "as leituras do portal exigem o captcha da sua janela, e nenhum recente passou por aqui — " +
+        "abra o painel de disputas do portal pelo aplicativo e tente de novo"
+    };
+  }
+  return { disputas: [], motivo: falha ?? "a API do portal não devolveu disputa nenhuma" };
+}
+
+/** Registros da API → disputas, pelas mesmas pistas de nome usadas na leitura de tela. */
+export function normalizarDisputasDaApi(dados: unknown): Disputa[] {
+  return extrairRegistros(dados).flatMap((registro) => {
+    const pregaoId = pegar(registro, CHAVES.pregao);
+    if (!pregaoId) return [];
+    const situacao = pegar(registro, CHAVES.situacao) ?? "";
+    return [
+      {
+        pregaoId,
+        itemNum: pegar(registro, CHAVES.item) ?? "",
+        descricao: pegar(registro, CHAVES.descricao) ?? "",
+        situacao,
+        emFaseDeLances: estaEmFaseDeLances(situacao),
+        origem: "api" as const
+      }
+    ];
+  });
+}
+
 async function pelaApi(sessao: Session, descobridor: DescobridorApi): Promise<Disputa[]> {
   const endpoint = descobridor.calibracao.listaDisputas;
   if (!endpoint) return [];
@@ -163,7 +250,13 @@ export async function listarDisputas(
   descobridor: DescobridorApi,
   salas: GerenciadorSalas
 ): Promise<Disputa[]> {
-  const [tela, api] = await Promise.all([
+  // A API oficial do portal vem primeiro — é a via do SIGA, e a única que não depende de
+  // interpretar tela. As outras duas continuam atrás dela, porque funcionam sem captcha.
+  const [oficial, tela, api] = await Promise.all([
+    pelaApiDoPortal(sessao).catch((erro: unknown) => ({
+      disputas: [] as Disputa[],
+      motivo: erro instanceof Error ? erro.message : String(erro)
+    })),
     salas.coletarDisputas(paginasDoFornecedor()).then(daTela).catch(() => [] as Disputa[]),
     pelaApi(sessao, descobridor).catch((erro: unknown) => {
       // Sessão expirada é a única falha de API que precisa interromper: sem ela, nem a
@@ -173,12 +266,15 @@ export async function listarDisputas(
     })
   ]);
 
-  const disputas = fundir(tela, api);
+  const disputas = fundir(oficial.disputas, tela, api);
   if (disputas.length === 0) {
     throw new Error(
-      "Não encontrei nenhuma disputa nas páginas do fornecedor. Confirme que a sessão do gov.br " +
-        "está ativa e que existe pregão com proposta cadastrada — se houver, abra o portal pelo " +
-        "aplicativo e navegue até a lista uma vez, para o app reconhecer o endereço dela."
+      oficial.motivo
+        ? `Não encontrei disputas. A API do portal não respondeu porque ${oficial.motivo}. ` +
+          "A leitura das páginas do fornecedor também não achou nada — confirme que existe pregão " +
+          "com proposta cadastrada para este CNPJ."
+        : "Não encontrei nenhuma disputa nas páginas do fornecedor nem na API do portal. " +
+          "Confirme que a sessão do gov.br está ativa e que existe pregão com proposta cadastrada."
     );
   }
   return disputas;

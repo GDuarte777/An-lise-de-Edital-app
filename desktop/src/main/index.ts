@@ -6,6 +6,7 @@ import { AutenticacaoPlataforma, caminhoPadraoSessao } from "./auth/platform.js"
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "./config.js";
 import {
   abrirLogin,
+  coletorSessaoPortal,
   abrirPainelDisputas,
   diagnosticarSessao,
   enderecoPortal,
@@ -23,6 +24,7 @@ import { observarSala, extrairValores, type EventoSala } from "./engine/sniffer.
 import { MotorLances, type ConfiguracaoRobo, type EntradaLog, type EstadoRobo } from "./engine/engine.js";
 import { GerenciadorSalas, SalaDisputaAdapter } from "./engine/sala.js";
 import { FonteSalaViva } from "./painel/fonte-sala.js";
+import { criarAbrirSocketEmJanela } from "./integracao/socket-janela.js";
 import type { ConfigItem } from "../compartilhado/painel.js";
 import { SimulacaoAdapter } from "./engine/simulation.js";
 import type { PortalAdapter, ReferenciaItem } from "./engine/portal.js";
@@ -303,17 +305,27 @@ ipcMain.handle("painel:iniciar", async (_e, pregaoId?: string) => {
   const id = (pregaoId ?? "").trim();
 
   painel?.encerrar();
+  const conteudoDaSala = () => {
+    const janela = s.janelaDe(id);
+    return janela && !janela.isDestroyed() ? janela.webContents : null;
+  };
+  const hostApi = coletorSessaoPortal().hostApi() ?? "";
+
   painel = new FonteSalaViva({
     garantirSala: async () => {
       const janela = await s.garantir(id);
       ligarObservador(janela.id);
       return janela.webContents;
     },
-    obterConteudo: () => {
-      const janela = s.janelaDe(id);
-      return janela && !janela.isDestroyed() ? janela.webContents : null;
-    },
-    aoEstado: (estado) => emitir("painel:estado", estado)
+    obterConteudo: conteudoDaSala,
+    aoEstado: (estado) => emitir("painel:estado", estado),
+    canal: {
+      token: () => coletorSessaoPortal().tokenAtual(),
+      abrirSocket: criarAbrirSocketEmJanela(conteudoDaSala, {
+        aoRegistrar: (nivel, msg) => registrar(nivel, msg)
+      }),
+      ambiente: /(^|\.)tre-/.test(hostApi) ? "treinamento" : "producao"
+    }
   });
   return painel.iniciar();
 });

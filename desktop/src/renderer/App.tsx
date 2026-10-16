@@ -164,6 +164,14 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [diag, setDiag] = useState<{
     status: { autenticado: boolean; cookiesEncontrados: number; evidencia: string };
     api: { status: number; ok: boolean; erro?: string };
+    sessaoPortal?: {
+      temToken: boolean;
+      idadeTokenS: number | null;
+      temCaptcha: boolean;
+      idadeCaptchaS: number | null;
+      hostApi: string | null;
+      observadas: number;
+    };
     tentativas: Array<{ url: string; urlFinal: string; autenticado: boolean; motivo: string | null;
       sondagem: null | { noSso: boolean; noPortal: boolean; temSenha: boolean; temSair: boolean;
         temIdentidade: boolean; escolhendoPerfil: boolean; tamanho: number } }>;
@@ -282,10 +290,16 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     setErro("");
     setAbrindoPainel(true);
     try {
+      // Deliberadamente NÃO bloqueia. A sessão do portal novo só se revela quando uma
+      // página dele fala com a API, e é justamente o painel que abre essa página — exigir
+      // a prova antes de abrir era uma porta trancada por dentro. Se a sessão estiver de
+      // fato morta, a própria sala mostra o login e o log do painel diz isso.
       const status = await api().comprasnet.status(true);
       if (!status.autenticado) {
-        setErro(`Entre no Compras.gov.br antes de abrir o painel. ${status.evidencia}`);
-        return;
+        setErro(
+          `Aviso: o portal ainda não confirmou a sessão (${status.evidencia}) — abrindo a sala ` +
+            "para o próprio portal se identificar. Se a sala pedir login, entre no gov.br e tente de novo."
+        );
       }
       setFontePainel(await criarFonteIpc(selecionada?.pregaoId));
     } catch (e) {
@@ -401,6 +415,26 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                   <b>{diag.api.ok ? "respondeu OK" : diag.api.status ? `HTTP ${diag.api.status}` : (diag.api.erro ?? "sem resposta")}</b>
                 </div>
                 <div>Cookies do portal encontrados: <b>{diag.status.cookiesEncontrados}</b></div>
+                {/* A sessão do portal novo mora num token, não em cookie. É este o número
+                    que diz se o aplicativo consegue falar com a API — e por isso ele vem
+                    antes do resto do diagnóstico. */}
+                <div>
+                  Token da sessão (é ele que vale, não o cookie):{" "}
+                  <b>
+                    {diag.sessaoPortal?.temToken
+                      ? `colhido há ${diag.sessaoPortal.idadeTokenS ?? 0}s`
+                      : "ainda não apareceu — abra uma página do portal pelo aplicativo"}
+                  </b>
+                </div>
+                <div>
+                  Captcha recente (só as leituras precisam):{" "}
+                  <b>
+                    {diag.sessaoPortal?.temCaptcha
+                      ? `sim, há ${diag.sessaoPortal.idadeCaptchaS ?? 0}s`
+                      : "nenhum"}
+                  </b>
+                  {diag.sessaoPortal?.hostApi ? ` · API em ${diag.sessaoPortal.hostApi}` : ""}
+                </div>
                 <div>Endereço aprendido: <b>{diag.enderecosAprendidos.portal ?? "nenhum ainda"}</b></div>
                 {diag.tentativas.map((t, i) => (
                   <div key={i} style={{ marginTop: 8, paddingLeft: 8, borderLeft: "2px solid #2b3444" }}>
