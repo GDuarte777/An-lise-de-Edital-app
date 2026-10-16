@@ -9,6 +9,8 @@
 import type { AplicativoExpresso } from "./expresso.ts";
 import { titularConversa } from "./tituloConversa.ts";
 import { montarAcervo } from "./acervo.ts";
+import { descobrirModelos, escolherCadeia } from "./modelosDisponiveis.ts";
+import { MAX_CHAMADAS_PROVEDOR } from "./modelosGemini.ts";
 import { normalizarCodigoUasg, extrairCodigoUasg } from "./identificacaoEdital.ts";
 import {
   Buffer,
@@ -225,11 +227,29 @@ export function registrarRotas(app: AplicativoExpresso): void {
         hint: "A chave deve ser salva no localStorage via 'Salvar Configurações'. Verifique se o provedor ativo está correto."
       });
     }
+    // Mostra o que a chave REALMENTE serve. Sem isto, um modelo indisponível se
+    // manifesta como 503 "sobrecarregado" e vira investigação às cegas — foi o
+    // que aconteceu três vezes seguidas com 3.7, 3.6 e 3.8.
+    let modelosDisponiveis: string[] | null = null;
+    let cadeia: string[] = [];
+    if (resolved.provider === "gemini") {
+      modelosDisponiveis = await descobrirModelos(resolved.apiKey);
+      cadeia = escolherCadeia(resolved.model, modelosDisponiveis, MAX_CHAMADAS_PROVEDOR);
+    }
+
+    const modeloServido = modelosDisponiveis ? modelosDisponiveis.includes(resolved.model) : null;
+
     return res.json({
       configured: true,
       provider: resolved.provider,
       model: resolved.model,
-      message: `IA configurada: ${resolved.provider} / ${resolved.model}`
+      modeloServidoPelaChave: modeloServido,
+      modelosDisponiveis,
+      cadeiaQueSeraUsada: cadeia,
+      message:
+        modeloServido === false
+          ? `A chave não serve o modelo "${resolved.model}". A plataforma vai usar: ${cadeia.join(" → ") || "nenhum modelo disponível"}.`
+          : `IA configurada: ${resolved.provider} / ${resolved.model}`
     });
   });
 
