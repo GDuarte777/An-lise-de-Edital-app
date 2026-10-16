@@ -72,6 +72,8 @@ export interface OpcoesFonteSala {
   /** Entre duas leituras da tela. Nunca abaixo do piso do freio. */
   intervaloMs?: number;
   aoEstado: (estado: EstadoPainel) => void;
+  /** Avisado quando o painel para sozinho — a sala fechada é o caso principal. */
+  aoEncerrar?: (motivo: string) => void;
   /**
    * Canal de disputa do portal (STOMP sobre WebSocket) — o caminho do SIGA.
    *
@@ -120,6 +122,13 @@ export class FonteSalaViva {
     await this.opcoes.garantirSala();
     this.agendar(0);
     return this.estadoAtual();
+  }
+
+  /** Para o painel por um motivo nosso e avisa quem abriu. */
+  private pararPorFora(motivo: string): void {
+    if (!this.vivo) return;
+    this.encerrar();
+    this.opcoes.aoEncerrar?.(motivo);
   }
 
   encerrar(): void {
@@ -213,8 +222,15 @@ export class FonteSalaViva {
   private async lerTela(): Promise<TelaDaSala | null> {
     const conteudo = this.opcoes.obterConteudo();
     if (!conteudo || conteudo.isDestroyed()) {
-      this.registrar("alerta", "A janela da sala foi fechada. Reabrindo.");
-      await this.opcoes.garantirSala();
+      /*
+       * A sala fechou. NÃO se reabre.
+       *
+       * A versão anterior reabria, e o efeito na mão do operador foi uma janela que não
+       * fechava nunca: ele clicava no X, o laço notava a ausência meio segundo depois e
+       * abria outra. Fechar a sala é uma ordem — o robô para junto e diz por quê.
+       */
+      this.registrar("alerta", "A janela da sala foi fechada. O robô parou.");
+      this.pararPorFora("a janela da sala foi fechada");
       return null;
     }
     const tela = (await conteudo.executeJavaScript(SCRIPT_LEITURA, true)) as TelaDaSala;

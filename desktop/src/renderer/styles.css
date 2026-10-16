@@ -277,3 +277,35 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: #2c3346; }
+
+/* ---------- Aviso em primeiro plano ---------- */
+
+/* Usado quando o aplicativo precisa de uma decisão ou precisa dizer algo que não pode
+   passar batido — "nenhuma disputa ao vivo" é o caso principal. Linha vermelha no meio
+   do formulário não era lida. */
+.modal-fundo {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 11, 0.72);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 50;
+}
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-titulo { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+
+.modal .dispute { width: 100%; font: inherit; color: inherit; }

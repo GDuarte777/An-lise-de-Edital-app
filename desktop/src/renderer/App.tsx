@@ -143,6 +143,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   // sala aberta e decide com o motor novo; a demonstração fica como ensaio, rotulada.
   const [fontePainel, setFontePainel] = useState<FontePainel | null>(null);
   const [abrindoPainel, setAbrindoPainel] = useState(false);
+  const [aviso, setAviso] = useState<{ titulo: string; texto: string; escolhas?: Disputa[] } | null>(null);
   const [conectado, setConectado] = useState(false);
   const [calib, setCalib] = useState<Calibracao | null>(null);
   const [disputas, setDisputas] = useState<Disputa[]>([]);
@@ -286,28 +287,78 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
    * Abre o painel sobre a disputa de verdade. A sala selecionada é a referência; sem
    * seleção, abre a sala que o portal mostrar — é o mesmo caminho do "Abrir sala".
    */
-  const abrirPainelDeDisputa = useCallback(async () => {
+  /**
+   * Abre o painel sobre uma disputa ao vivo.
+   *
+   * A ordem importa e foi aprendida na mão do operador: primeiro descobre QUAL disputa,
+   * só depois abre a sala. Abrir a sala sem compra produzia a URL com `?compra=` vazio,
+   * que o portal responde com "Acesso não autorizado" — e o operador ficava preso numa
+   * janela pedindo login de novo.
+   */
+  const abrirPainelComDisputa = useCallback(async (alvo: Disputa) => {
+    setAviso(null);
     setErro("");
     setAbrindoPainel(true);
     try {
-      // Deliberadamente NÃO bloqueia. A sessão do portal novo só se revela quando uma
-      // página dele fala com a API, e é justamente o painel que abre essa página — exigir
-      // a prova antes de abrir era uma porta trancada por dentro. Se a sessão estiver de
-      // fato morta, a própria sala mostra o login e o log do painel diz isso.
-      const status = await api().comprasnet.status(true);
-      if (!status.autenticado) {
-        setErro(
-          `Aviso: o portal ainda não confirmou a sessão (${status.evidencia}) — abrindo a sala ` +
-            "para o próprio portal se identificar. Se a sala pedir login, entre no gov.br e tente de novo."
-        );
-      }
-      setFontePainel(await criarFonteIpc(selecionada?.pregaoId));
+      setFontePainel(await criarFonteIpc(alvo.pregaoId));
     } catch (e) {
-      setErro(`Não foi possível abrir o painel de disputa: ${e instanceof Error ? e.message : String(e)}`);
+      setAviso({
+        titulo: "Não consegui abrir o painel",
+        texto: e instanceof Error ? e.message : String(e)
+      });
     } finally {
       setAbrindoPainel(false);
     }
-  }, [selecionada]);
+  }, []);
+
+  const abrirPainelDeDisputa = useCallback(async () => {
+    if (selecionada) return void abrirPainelComDisputa(selecionada);
+
+    setErro("");
+    setAbrindoPainel(true);
+    try {
+      const lista = await api().disputas.listar();
+      setDisputas(lista);
+      const vivas = lista.filter((d) => d.emFaseDeLances);
+
+      if (vivas.length === 0) {
+        setAviso({
+          titulo: "Nenhuma disputa ao vivo agora",
+          texto:
+            lista.length > 0
+              ? `Encontrei ${lista.length} ${lista.length === 1 ? "disputa" : "disputas"} suas, mas nenhuma ` +
+                "está em fase de lances neste momento. O robô só tem o que fazer com a disputa aberta — " +
+                "volte quando a sessão começar."
+              : "O portal não listou nenhuma disputa para este CNPJ."
+        });
+        return;
+      }
+      if (vivas.length === 1) return void abrirPainelComDisputa(vivas[0]);
+
+      setAviso({
+        titulo: "Escolha a disputa",
+        texto: `Há ${vivas.length} disputas suas em fase de lances agora. Em qual o robô deve operar?`,
+        escolhas: vivas
+      });
+    } catch (e) {
+      // `disputas.listar()` já explica o motivo (sem token, sem captcha, sessão expirada).
+      setAviso({
+        titulo: "Nenhuma disputa ao vivo agora",
+        texto: e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : String(e)
+      });
+    } finally {
+      setAbrindoPainel(false);
+    }
+  }, [selecionada, abrirPainelComDisputa]);
+
+  // O painel pode parar sozinho — sala fechada pelo operador é o caso normal. Quando
+  // isso acontece a tela volta para o cockpit e diz o motivo, em vez de congelar.
+  useEffect(() => {
+    return api().painel.aoEncerrar((motivo) => {
+      setFontePainel(null);
+      setAviso({ titulo: "O painel parou", texto: `Motivo: ${motivo}.` });
+    });
+  }, []);
 
   const rodando = estadoRobo === "rodando";
   const pronto = calib?.pronto ?? false;
@@ -328,6 +379,35 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
 
   return (
     <div className="app">
+      {aviso && (
+        <div className="modal-fundo" onClick={() => setAviso(null)}>
+          <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+            <h3 className="modal-titulo">{aviso.titulo}</h3>
+            <p className="muted" style={{ fontSize: 13 }}>{aviso.texto}</p>
+            {aviso.escolhas && (
+              <div className="list" style={{ maxHeight: 260 }}>
+                {aviso.escolhas.map((d) => (
+                  <button
+                    key={`${d.pregaoId}-${d.itemNum}`}
+                    className="dispute"
+                    style={{ textAlign: "left" }}
+                    onClick={() => void abrirPainelComDisputa(d)}
+                  >
+                    <div className="dispute-id">
+                      {d.pregaoId}
+                      {d.itemNum ? ` · item ${d.itemNum}` : ""}
+                    </div>
+                    <div className="dispute-desc">{d.descricao || d.situacao}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => setAviso(null)}>Fechar</button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="topbar">
         <div className="brand">
           <span className="brand-dot" />

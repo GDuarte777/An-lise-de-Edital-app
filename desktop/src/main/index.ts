@@ -304,6 +304,15 @@ ipcMain.handle("painel:iniciar", async (_e, pregaoId?: string) => {
   const s = obterSalas();
   const id = (pregaoId ?? "").trim();
 
+  // Sem compra não há sala: a URL sairia com `?compra=` vazio, que é exatamente o
+  // endereço que o portal responde com "Acesso não autorizado". A tela escolhe a
+  // disputa antes de chegar aqui.
+  if (!id) {
+    throw new Error(
+      "Escolha a disputa antes de abrir o painel: sem o número da compra o portal não abre a sala."
+    );
+  }
+
   painel?.encerrar();
   const conteudoDaSala = () => {
     const janela = s.janelaDe(id);
@@ -319,6 +328,10 @@ ipcMain.handle("painel:iniciar", async (_e, pregaoId?: string) => {
     },
     obterConteudo: conteudoDaSala,
     aoEstado: (estado) => emitir("painel:estado", estado),
+    aoEncerrar: (motivo) => {
+      painel = null;
+      emitir("painel:encerrado", motivo);
+    },
     canal: {
       token: () => coletorSessaoPortal().tokenAtual(),
       abrirSocket: criarAbrirSocketEmJanela(conteudoDaSala, {

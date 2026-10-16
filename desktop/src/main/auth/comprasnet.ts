@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, net, session, type Session, type WebContents } from "electron";
 import { join } from "node:path";
 
-import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, URL_API_USUARIO, URL_LOGIN_SSO } from "./endereco.js";
+import { DOMINIOS_COOKIE, FONTE_REGEX_HOST, RegistroEnderecos, SEMENTES_PORTAL, URL_API_USUARIO, URL_LOGIN_SSO } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
 import { ColetorSessaoPortal, ehTokenPlausivel, type EstadoSessaoPortal } from "./token.js";
 
@@ -579,6 +579,7 @@ export async function abrirLogin(
   const abertaEm = Date.now();
   let positivas = 0;
   let fechandoPorNos = false;
+  let encaminhado = false;
 
   return new Promise<StatusSessao>((resolve) => {
     let resolvido = false;
@@ -606,7 +607,51 @@ export async function abrirLogin(
         const abertas = vivas();
         if (abertas.length === 0) return void concluir();
 
-        // Procura o login em QUALQUER janela do fluxo, não só na que abrimos.
+        /*
+         * Prova definitiva: o token da sessão.
+         *
+         * Antes, o fim do login era adivinhado lendo a tela ("tem botão Sair?", "tem
+         * CPF?") — e num SPA essas marcas só aparecem depois que o JavaScript roda, às
+         * vezes nunca. O resultado foi o operador logando e a janela não fechando mais,
+         * forçando-o a navegar pelo portal sem saber o que o aplicativo queria dele.
+         *
+         * Agora o sinal é o mesmo que a API usa: o token que a própria página manda.
+         * Apareceu e o portal confirmou, acabou — fecha e não pergunta de novo.
+         */
+        /*
+         * O SSO devolve o operador ao portal ANTIGO (intro.htm é o caso visto na tela
+         * dele). O token da sessão, porém, só nasce quando o aplicativo NOVO roda. Sem
+         * isto o login terminava numa página que não produz token, a janela não fechava
+         * e o operador saía navegando pelo portal à procura do que o aplicativo queria.
+         *
+         * Então, uma vez só, a janela é levada ao aplicativo novo. Nada é clicado por
+         * ele: só a página que o navegador abriria de qualquer forma.
+         */
+        if (!encaminhado && !coletor.tokenAtual() && Date.now() - abertaEm > 5000) {
+          const atual = abertas[0];
+          const urlAtual = atual.isDestroyed() ? "" : atual.webContents.getURL();
+          if (/comprasnet\.gov\.br\/(intro|popup|$)|comprasnet\.gov\.br\/?$/i.test(urlAtual)) {
+            encaminhado = true;
+            try {
+              await atual.loadURL(SEMENTES_PORTAL[0]);
+            } catch {
+              // Sem rede o diagnóstico abaixo explica; não é motivo para abortar o login.
+            }
+            return;
+          }
+        }
+
+        if (!fechandoPorNos && coletor.tokenAtual()) {
+          const confirmacao = await perguntarAoPortal();
+          if (confirmacao.ok) {
+            fechandoPorNos = true;
+            for (const j of vivas()) j.close();
+            return void concluir();
+          }
+        }
+
+        // Caminho de reserva, para o portal antigo e para o caso de o token demorar:
+        // procura o login em QUALQUER janela do fluxo, não só na que abrimos.
         let logada: BrowserWindow | null = null;
         let manter = false;
         for (const j of abertas) {
@@ -666,6 +711,8 @@ function abrirNoPortal(titulo: string, url: string): Promise<number> {
 
 /** Abre o painel do fornecedor, de onde saem as disputas com proposta cadastrada. */
 export function abrirPainelDisputas(): Promise<number> {
+  // `enderecoPortal()` já descarta endereço do sistema antigo (ver `ehEnderecoNavegavel`),
+  // então esta janela abre no aplicativo novo — nunca mais no popup.asp.
   return abrirNoPortal("Minhas disputas — Compras.gov.br", enderecoPortal());
 }
 

@@ -171,6 +171,8 @@ export interface ApiLanceBot {
     desarmar(item: string, motivo?: string): Promise<EstadoPainel>;
     classificacao(item: string): Promise<LinhaClassificacao[]>;
     aoEstado(cb: (e: EstadoPainel) => void): () => void;
+    /** O painel parou sozinho (sala fechada, por exemplo) e a tela precisa voltar. */
+    aoEncerrar(cb: (motivo: string) => void): () => void;
   };
   robo: {
     iniciar(cfg: unknown): Promise<{ iniciado: boolean; portal: string; ehSimulacao: boolean }>;
@@ -226,7 +228,8 @@ const api: ApiLanceBot = {
     armar: (item) => ipcRenderer.invoke("painel:armar", item),
     desarmar: (item, motivo) => ipcRenderer.invoke("painel:desarmar", item, motivo),
     classificacao: (item) => ipcRenderer.invoke("painel:classificacao", item),
-    aoEstado: (cb) => assinar<EstadoPainel>("painel:estado", cb)
+    aoEstado: (cb) => assinar<EstadoPainel>("painel:estado", cb),
+    aoEncerrar: (cb) => assinar<string>("painel:encerrado", cb)
   },
   robo: {
     iniciar: (cfg) => ipcRenderer.invoke("robo:iniciar", cfg),

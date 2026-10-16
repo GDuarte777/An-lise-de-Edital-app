@@ -107,6 +107,31 @@ export function ehEnderecoDoPortal(url: string): boolean {
 }
 
 /**
+ * Endereço que o aplicativo pode GUARDAR para abrir depois.
+ *
+ * É mais estreito do que "pertence ao portal" de propósito, e a diferença custou uma
+ * sessão inteira do operador: o aplicativo tinha aprendido
+ * `comprasnet.gov.br/popup/popup.asp?ambiente=3` — uma página do sistema ANTIGO, que
+ * não é onde a disputa acontece — e passou a reabrir essa janela sozinho. O mesmo vale
+ * para `intro.htm`.
+ *
+ * Só o aplicativo novo (o SPA em `/comprasnet-web/`) é endereço para onde voltar.
+ */
+export function ehEnderecoNavegavel(url: string): boolean {
+  if (!ehEnderecoDoPortal(url)) return false;
+  try {
+    const u = new URL(url);
+    if (!/estaleiro\.serpro\.gov\.br$/i.test(u.host)) return false;
+    if (!u.pathname.startsWith("/comprasnet-web/")) return false;
+    // Páginas do sistema antigo que o portal ainda serve, e que não levam a lugar nenhum.
+    if (/popup\.asp|intro\.htm|\.asp$/i.test(u.pathname)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Uma tela de disputa, e não uma página qualquer do portal.
  *
  * Heurística sobre o caminho, e assumidamente uma heurística: o caminho exato da sala
@@ -139,7 +164,7 @@ export interface EnderecosAprendidos {
  * quando o portal mudar de endereço outra vez.
  */
 export function aprenderCom(atual: EnderecosAprendidos, url: string): EnderecosAprendidos {
-  if (!ehEnderecoDoPortal(url)) return atual;
+  if (!ehEnderecoNavegavel(url)) return atual;
 
   // Páginas de erro e de logout não são endereço para onde voltar. As duas primeiras
   // vieram do diagnóstico do operador: o portal manda para elas quando a rota não existe
@@ -206,7 +231,9 @@ export class RegistroEnderecos {
 
   /** Melhor endereço para abrir o portal agora. */
   paraAbrir(): string {
-    return this.dados.portal || SEMENTES_PORTAL[0];
+    return this.dados.portal && ehEnderecoNavegavel(this.dados.portal)
+      ? this.dados.portal
+      : SEMENTES_PORTAL[0];
   }
 
   /**
@@ -217,12 +244,14 @@ export class RegistroEnderecos {
    * concluir "sem sessão" a partir disso é o erro que o operador viu na tela.
    */
   paraVerificar(): string[] {
-    const lista = this.dados.portal ? [this.dados.portal, ...SEMENTES_PORTAL] : [...SEMENTES_PORTAL];
-    return [...new Set(lista)];
+    // Validado na LEITURA, não só na escrita: endereço guardado por uma versão anterior
+    // (com regra mais frouxa) não pode continuar sendo aberto depois que a regra apertou.
+    const guardado = this.dados.portal && ehEnderecoNavegavel(this.dados.portal) ? [this.dados.portal] : [];
+    return [...new Set([...guardado, ...SEMENTES_PORTAL])];
   }
 
   /** Melhor endereço para reabrir uma sala de disputa. */
   paraSala(): string {
-    return this.dados.sala || SEMENTE_SALA;
+    return this.dados.sala && ehEnderecoNavegavel(this.dados.sala) ? this.dados.sala : SEMENTE_SALA;
   }
 }

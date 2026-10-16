@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
+import { ehEnderecoNavegavel,
   aprenderCom, ehEnderecoDoPortal, ehHostDoPortal, ehSalaDeDisputa,
   RegistroEnderecos, SEMENTES_PORTAL
 } from "./endereco.js";
@@ -105,6 +105,27 @@ console.log("\n[limpeza do que ja estava no disco]");
   ok("descarta endereco ruim que ja estava salvo",
      !r.paraAbrir().includes("compra="), r.paraAbrir());
   ok("e cai na semente boa", r.paraAbrir().endsWith("/comprasnet-web/"), r.paraAbrir());
+}
+
+console.log("\n[Endereços que o aplicativo pode reabrir]");
+{
+  const navegavel = (u: string) => ehEnderecoNavegavel(u);
+  ok(
+    "a sala do SPA é navegável",
+    navegavel("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=90012026")
+  );
+  // Os três endereços abaixo apareceram na tela do operador e foram a causa de o
+  // aplicativo ficar reabrindo janela do sistema ANTIGO depois do login.
+  ok("popup.asp do sistema antigo não é", !navegavel("https://www.comprasnet.gov.br/popup/popup.asp?ambiente=3"));
+  ok("intro.htm não é", !navegavel("https://www.comprasnet.gov.br/intro.htm"));
+  ok("raiz do comprasnet antigo não é", !navegavel("https://www.comprasnet.gov.br/"));
+  ok("site de fora não é", !navegavel("https://exemplo.com/comprasnet-web/"));
+  ok(
+    "o que foi aprendido antes da regra não volta a ser aberto",
+    aprenderCom({ portal: "https://www.comprasnet.gov.br/popup/popup.asp?ambiente=3" },
+      "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1").portal ===
+      "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1"
+  );
 }
 
 console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);
