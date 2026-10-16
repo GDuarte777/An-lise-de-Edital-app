@@ -175,6 +175,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     status: { autenticado: boolean; cookiesEncontrados: number; evidencia: string };
     api: { status: number; ok: boolean; erro?: string };
     tentativasDeToken?: Array<{ rota: string; metodo: string; status: number }>;
+    chamadasDoPortal?: Array<{ metodo: string; host: string; caminho: string; comAutorizacao: boolean }>;
     sessaoPortal?: {
       temToken: boolean;
       idadeTokenS: number | null;
@@ -534,6 +535,17 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                     {diag.tentativasDeToken.map((t, i) => (
                       <div key={i} style={{ paddingLeft: 8, opacity: 0.8 }}>
                         {t.metodo} {t.rota} → {t.status === 0 ? "sem resposta" : `HTTP ${t.status}`}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {diag.chamadasDoPortal && diag.chamadasDoPortal.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    O que a página do portal chamou ({diag.chamadasDoPortal.length}):
+                    {diag.chamadasDoPortal.slice(-12).map((c, i) => (
+                      <div key={i} style={{ paddingLeft: 8, opacity: 0.8, wordBreak: "break-all" }}>
+                        {c.metodo} {c.caminho}
+                        {c.comAutorizacao ? " · com credencial" : ""}
                       </div>
                     ))}
                   </div>

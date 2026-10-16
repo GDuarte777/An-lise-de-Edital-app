@@ -12,7 +12,14 @@ import {
   URL_API_USUARIO
 } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
-import { acharJwtEm, ColetorSessaoPortal, ehTokenPlausivel, type EstadoSessaoPortal } from "./token.js";
+import {
+  acharJwtEm,
+  ColetorSessaoPortal,
+  DiarioDeChamadas,
+  ehTokenPlausivel,
+  type ChamadaObservada,
+  type EstadoSessaoPortal
+} from "./token.js";
 
 /**
  * Login no Compras.gov.br.
@@ -123,6 +130,13 @@ let sessaoPreparada = false;
  */
 const coletor = new ColetorSessaoPortal();
 
+/** O que a página do portal chamou. Método e caminho apenas — ver `DiarioDeChamadas`. */
+const diario = new DiarioDeChamadas();
+
+export function chamadasDoPortal(): ChamadaObservada[] {
+  return diario.tudo;
+}
+
 export function coletorSessaoPortal(): ColetorSessaoPortal {
   return coletor;
 }
@@ -141,10 +155,9 @@ export function sessaoComprasnet(): Session {
       try {
         const cabecalhos = detalhes.requestHeaders ?? {};
         const chave = Object.keys(cabecalhos).find((k) => k.toLowerCase() === "authorization");
-        coletor.observar({
-          url: detalhes.url,
-          autorizacao: chave ? String(cabecalhos[chave]) : undefined
-        });
+        const autorizacao = chave ? String(cabecalhos[chave]) : undefined;
+        coletor.observar({ url: detalhes.url, autorizacao });
+        diario.registrar(detalhes.url, detalhes.method, Boolean(autorizacao));
       } catch {
         // Observar nunca pode atrapalhar a navegação do operador.
       }
@@ -352,6 +365,8 @@ export interface DiagnosticoSessao {
   sessaoPortal: EstadoSessaoPortal;
   /** Rotas tentadas para obter o token e o que o portal respondeu em cada uma. */
   tentativasDeToken: TentativaDeToken[];
+  /** O que a página do portal realmente chamou — é o que revela a rota de sessão. */
+  chamadasDoPortal: ChamadaObservada[];
   /** A resposta do portal à pergunta "quem está logado?" — a evidência principal. */
   api: RespostaDoPortal;
   tentativas: TentativaSessao[];
@@ -433,6 +448,7 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
       api,
       sessaoPortal: coletor.estado(),
       tentativasDeToken: tentativasDeToken(),
+      chamadasDoPortal: diario.tudo,
       tentativas: [],
       enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
       dominiosDeCookie: DOMINIOS_SESSAO
@@ -488,6 +504,7 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
     api,
     sessaoPortal: coletor.estado(),
     tentativasDeToken: tentativasDeToken(),
+    chamadasDoPortal: diario.tudo,
     tentativas,
     enderecosAprendidos: registro.aprendidos as Record<string, string | undefined>,
     dominiosDeCookie: DOMINIOS_SESSAO
@@ -573,6 +590,7 @@ export async function abrirLogin(
   let positivas = 0;
   let fechandoPorNos = false;
   const perfisEscolhidos = new Set<number>();
+  let avisoPosto = false;
 
   return new Promise<StatusSessao>((resolve) => {
     let resolvido = false;
@@ -652,8 +670,26 @@ export async function abrirLogin(
 
         if (manter) { positivas = 0; return; }
 
-        const porCookie = !logada && saiuDoSso && (await contarCookiesDeSessao()) > 0;
-        if (porCookie) logada = abertas[0];
+        /*
+         * Cookie NÃO é prova suficiente, e tratá-lo como prova custou uma sessão do
+         * operador: os cookies aparecem no meio do vaivém do SSO, antes de o portal
+         * novo emitir o token. Fechando ali, a janela ia embora antes de a sessão
+         * existir de verdade — e o painel seguia dizendo "sem sessão".
+         *
+         * Então, passado o SSO e sem token ainda, a janela FICA ABERTA, com um aviso
+         * dizendo que ela se fecha sozinha. Qualquer página do portal que o operador
+         * abrir dali faz o token aparecer, e aí sim ela fecha.
+         */
+        if (!logada && saiuDoSso && !avisoPosto) {
+          avisoPosto = true;
+          for (const j of abertas) {
+            try {
+              await j.webContents.executeJavaScript(SCRIPT_AVISO_AGUARDANDO, true);
+            } catch {
+              // aviso é cortesia
+            }
+          }
+        }
 
         // Duas leituras positivas seguidas, e nunca nos primeiros segundos. É o que
         // separa "logou" de "a SPA piscou uma tela intermediária".
@@ -787,6 +823,29 @@ const PAGINA_LOGIN_INDISPONIVEL =
 </div>`);
 
 /**
+ * Aviso dentro da janela do portal, enquanto o aplicativo espera a sessão aparecer.
+ *
+ * Sem ele o operador olha para uma janela que não fecha e conclui que travou — foi
+ * exatamente o que aconteceu. Com ele, a janela diz o que está esperando.
+ */
+const SCRIPT_AVISO_AGUARDANDO = `
+(() => {
+  if (window.__lancebotAviso) return true;
+  window.__lancebotAviso = true;
+  const cx = document.createElement("div");
+  cx.setAttribute("style",
+    "position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:340px;" +
+    "background:#0B0D12;color:#E8EBF2;border:1px solid #FF5A00;border-radius:12px;" +
+    "padding:14px 16px;font:400 13px/1.5 Segoe UI,system-ui,sans-serif;box-shadow:0 12px 32px rgba(0,0,0,.45)");
+  cx.innerHTML =
+    "<b style='display:block;margin-bottom:6px'>HORASIS LanceBot</b>" +
+    "Login reconhecido. Abra <b>suas disputas</b> aqui no portal uma vez — esta janela " +
+    "fecha sozinha assim que o aplicativo pegar a sessão.";
+  document.body.appendChild(cx);
+  return true;
+})()`;
+
+/**
  * Clica em "Fornecedor Brasileiro" na tela de escolha de perfil.
  *
  * Procura pelo texto, não por seletor fixo: a tela do portal muda de marcação com
@@ -820,10 +879,23 @@ const SCRIPT_ESCOLHER_FORNECEDOR = `
  * Nada é forjado: quem autentica a chamada são os cookies que o gov.br acabou de dar ao
  * operador, nesta máquina. O token volta e fica em memória, nunca em disco nem em log.
  */
+/*
+ * Candidatas à rota que EMITE o token.
+ *
+ * O diagnóstico do operador matou as quatro primeiras deduções — `/sessao/...` responde
+ * 404 — e mostrou algo valioso: `/comprasnet-usuario/v1/usuario` responde 403, ou seja,
+ * o serviço existe e só falta a credencial. A emissão está em outro caminho deste mesmo
+ * serviço, e as candidatas abaixo cobrem os nomes usuais. Cada uma custa uma requisição
+ * em janela oculta, e o status de TODAS aparece no diagnóstico: se nenhuma servir, o
+ * `chamadasDoPortal` (o que a página de verdade chamou) entrega a resposta.
+ */
 const ROTAS_DE_TOKEN: Array<{ caminho: string; metodos: Array<"POST" | "GET"> }> = [
-  { caminho: "/comprasnet-usuario/v1/sessao/fornecedor", metodos: ["POST", "GET"] },
-  { caminho: "/comprasnet-usuario/v1/sessao/fornecedor/retoken", metodos: ["POST", "GET"] },
-  { caminho: "/comprasnet-usuario/v1/sessao", metodos: ["POST", "GET"] },
+  { caminho: "/comprasnet-usuario/v1/sessao/fornecedor/retoken", metodos: ["POST"] },
+  { caminho: "/comprasnet-usuario/v1/token", metodos: ["POST", "GET"] },
+  { caminho: "/comprasnet-usuario/v1/login", metodos: ["POST", "GET"] },
+  { caminho: "/comprasnet-usuario/v1/autenticacao", metodos: ["POST", "GET"] },
+  { caminho: "/comprasnet-usuario/v1/oauth/token", metodos: ["POST"] },
+  { caminho: "/comprasnet-seguranca/v1/token", metodos: ["POST", "GET"] },
   { caminho: "/comprasnet-usuario/v1/usuario", metodos: ["GET"] }
 ];
 

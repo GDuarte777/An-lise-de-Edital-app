@@ -117,6 +117,8 @@ export interface DiagnosticoSessao {
   sessaoPortal: EstadoSessaoPortal;
   /** Rotas tentadas para obter o token da sessão e o status de cada uma. */
   tentativasDeToken: Array<{ rota: string; metodo: string; status: number }>;
+  /** O que a página do portal chamou de verdade — método e caminho, sem query. */
+  chamadasDoPortal: Array<{ metodo: string; host: string; caminho: string; comAutorizacao: boolean }>;
   /** Resposta do portal a "quem está logado?" — a evidência principal. */
   api: { status: number; ok: boolean; erro?: string };
   tentativas: TentativaSessao[];

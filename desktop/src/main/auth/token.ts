@@ -200,3 +200,57 @@ export function acharJwtEm(valor: unknown, profundidade = 0): string | null {
   }
   return null;
 }
+
+/**
+ * Diário curto do que o portal pediu.
+ *
+ * Existe porque adivinhar rota custou versões. Com a lista do que a PÁGINA DO PORTAL
+ * chamou de verdade — método, caminho e se levava credencial — a rota que emite o token
+ * aparece sozinha, sem mais um ciclo de instalar-e-testar.
+ *
+ * Só método e caminho entram. A query fica de fora de propósito: é nela que viaja o
+ * token de captcha.
+ */
+export interface ChamadaObservada {
+  metodo: string;
+  host: string;
+  caminho: string;
+  comAutorizacao: boolean;
+}
+
+const LIMITE_DIARIO = 40;
+
+export class DiarioDeChamadas {
+  private readonly itens: ChamadaObservada[] = [];
+
+  registrar(url: string, metodo: string, comAutorizacao: boolean): void {
+    let host = "";
+    let caminho = url;
+    try {
+      const u = new URL(url);
+      host = u.host;
+      caminho = u.pathname;
+    } catch {
+      return;
+    }
+    // Só o que é do portal; estática e terceiros não ajudam a achar rota de sessão.
+    if (!/serpro\.gov\.br$|compras(net)?\.gov\.br$/i.test(host)) return;
+    if (/\.(js|css|png|jpe?g|svg|woff2?|ico|map)$/i.test(caminho)) return;
+
+    const igual = this.itens.find((i) => i.metodo === metodo && i.caminho === caminho && i.host === host);
+    if (igual) {
+      igual.comAutorizacao = igual.comAutorizacao || comAutorizacao;
+      return;
+    }
+    this.itens.push({ metodo, host, caminho, comAutorizacao });
+    if (this.itens.length > LIMITE_DIARIO) this.itens.shift();
+  }
+
+  get tudo(): ChamadaObservada[] {
+    return [...this.itens];
+  }
+
+  limpar(): void {
+    this.itens.length = 0;
+  }
+}
