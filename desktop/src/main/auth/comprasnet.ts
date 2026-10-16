@@ -8,7 +8,9 @@ import {
   RegistroEnderecos,
   lembrarAutorizacaoSso,
   urlLoginSso,
+  PRECISA_ENTRAR,
   RETORNO_POS_LOGIN,
+  URL_LOGIN_LEGADO,
   URL_API_USUARIO
 } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
@@ -592,6 +594,7 @@ export async function abrirLogin(
   const perfisEscolhidos = new Set<number>();
   let avisoPosto = false;
   let encaminhado = false;
+  const entradasClicadas = new Set<number>();
 
   return new Promise<StatusSessao>((resolve) => {
     let resolvido = false;
@@ -682,18 +685,36 @@ export async function abrirLogin(
          * abrir dali faz o token aparecer, e aí sim ela fecha.
          */
         /*
-         * Depois do login o portal deixa o operador no sistema ANTIGO (intro.htm). O
-         * token da sessão só nasce no aplicativo NOVO. Então, uma vez, a janela segue
-         * para lá — preferindo um LINK da própria página, e não um endereço meu: o
-         * portal sabe onde fica a área dele melhor do que eu, e foi adivinhar isso que
-         * produziu 404 na cara do operador nas versões anteriores.
+         * "Acesso não autorizado" do aplicativo novo não é erro: é a porta. A própria
+         * tela traz o botão **Efetuar Login**, que leva ao gov.br com um identificador
+         * emitido pelo portal novo — a sessão que o robô precisa. Clicar nele é o passo
+         * que faltava, e é o que o operador faria com o mouse.
+         */
+        for (const j of abertas) {
+          if (entradasClicadas.has(j.id)) continue;
+          const urlJ = j.isDestroyed() ? "" : j.webContents.getURL();
+          if (!PRECISA_ENTRAR.test(urlJ)) continue;
+          entradasClicadas.add(j.id);
+          try {
+            const clicou = (await j.webContents.executeJavaScript(SCRIPT_CLICAR_ENTRAR, true)) as boolean;
+            if (clicou) return;
+          } catch {
+            // sem clique, o operador clica; o botão está visível na tela dele
+          }
+        }
+
+        /*
+         * Caiu no sistema antigo depois do login (intro.htm). Aquela sessão não vale
+         * para o aplicativo novo — o diário de chamadas do operador provou isso. Então
+         * a janela volta para a porta do aplicativo novo, que agora encontra a sessão
+         * do gov.br já feita e costuma entrar sozinha.
          */
         if (!coletor.tokenAtual() && !encaminhado) {
           const atual = abertas[0];
           const urlAtual = atual.isDestroyed() ? "" : atual.webContents.getURL();
           if (RETORNO_POS_LOGIN.test(urlAtual)) {
             encaminhado = true;
-            const destino = (await linkParaAplicativoNovo(atual)) ?? CANDIDATOS_APLICATIVO[0];
+            const destino = (await linkParaAplicativoNovo(atual)) ?? urlLoginSso();
             try {
               await atual.loadURL(destino);
             } catch {
@@ -747,13 +768,15 @@ async function abrirEntradaDeLogin(janela: BrowserWindow): Promise<void> {
    * `authorization_id` recém-emitido, que é a tela de CPF e senha que o operador quer
    * ver. Montar essa URL à mão com identificador fixo era o que dava página em branco.
    */
-  try {
-    await janela.loadURL(urlLoginSso());
-  } catch {
-    if (!janela.isDestroyed()) await janela.loadURL(PAGINA_LOGIN_INDISPONIVEL).catch(() => undefined);
-    return;
+  for (const url of [urlLoginSso(), URL_LOGIN_LEGADO]) {
+    if (janela.isDestroyed()) return;
+    try {
+      await janela.loadURL(url);
+    } catch {
+      continue;
+    }
+    if (await paginaAbriuDeVerdade(janela)) return;
   }
-  if (await paginaAbriuDeVerdade(janela)) return;
   if (!janela.isDestroyed()) await janela.loadURL(PAGINA_LOGIN_INDISPONIVEL).catch(() => undefined);
 }
 
@@ -828,6 +851,28 @@ const PAGINA_LOGIN_INDISPONIVEL =
   <p>O serviço de acesso do governo não respondeu agora. Feche esta janela e tente entrar
      de novo em alguns instantes.</p>
 </div>`);
+
+/**
+ * Clica em "Efetuar Login" na tela do aplicativo novo.
+ *
+ * Procura pelo texto, nunca por seletor fixo — o portal remarca essas telas com
+ * frequência. Só clica em algo visível e com rótulo curto, para não acertar um texto
+ * de ajuda que por acaso contenha a palavra.
+ */
+const SCRIPT_CLICAR_ENTRAR = `
+(() => {
+  const candidatos = Array.from(document.querySelectorAll('a,button,[role="button"],input[type="submit"]'));
+  const alvo = candidatos.find((el) => {
+    const t = ((el.innerText || el.textContent || el.value || "") + "").trim();
+    if (!t || t.length > 40) return false;
+    if (!/(efetuar|fazer)?\\s*login|^entrar$|acessar/i.test(t)) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+  if (!alvo) return false;
+  alvo.click();
+  return true;
+})()`;
 
 /**
  * Procura, na página em que o operador está, o link para o aplicativo novo.

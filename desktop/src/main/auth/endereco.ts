@@ -86,25 +86,36 @@ export function urlDaSala(pregaoId: string): string {
  * `authorization_id` novo, esse valor passa a ser o usado (ver `lembrarAutorizacaoSso`).
  */
 /**
- * A porta de entrada do login, dada pelo próprio operador depois de observar o fluxo
- * real no navegador dele:
+ * A porta de entrada do login — e por que ela mudou de lugar duas vezes.
  *
- *   1. https://www.comprasnet.gov.br/seguro/loginportal.asp
- *   2. → sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=<novo>
- *   3. → www.comprasnet.gov.br/intro.htm  (já logado)
- *   4. → cnetmobile.../comprasnet-web/seguro/fornecedor/compras   (o aplicativo novo)
+ * O diário de chamadas do operador fechou a questão. Entrando por
+ * `comprasnet.gov.br/seguro/loginportal.asp`, as 12 requisições que o portal fez foram
+ * TODAS do sistema antigo (`intro.htm`, `main.asp`, `t_top.asp`, `popup.asp`). Aquele
+ * login autentica no comprasnet velho e só nele: ao abrir o aplicativo novo em seguida,
+ * a resposta foi `/comprasnet-web/acesso-nao-autorizado`.
  *
- * O passo 1 é o que importa e é o que eu não tinha: é ELE que emite o
- * `authorization_id`. Montar a URL do SSO à mão, com um identificador escrito no
- * código, era o que fazia o gov.br devolver página em branco — identificador vencido
- * não dá erro, dá vazio. Aqui não se monta mais nada: pede-se ao portal, e ele emite.
+ * Ou seja: são duas sessões diferentes, e a que o robô precisa é a do aplicativo novo —
+ * é lá que nasce o token e é lá que a disputa acontece.
+ *
+ * Então a entrada passa a ser uma rota PROTEGIDA do aplicativo novo. Sem sessão, ele
+ * mesmo desenha "Acesso não autorizado" com o botão **Efetuar Login**, que leva ao
+ * gov.br com um `authorization_id` emitido por ELE. É o caminho que o próprio portal
+ * oferece — nada aqui é inventado: essa tela e esse botão estão nas capturas do
+ * operador.
  */
-export const URL_ENTRADA_LOGIN = "https://www.comprasnet.gov.br/seguro/loginportal.asp";
+export const URL_ENTRADA_LOGIN =
+  "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras";
+
+/** Entrada do sistema antigo. Fica como reserva: autentica, mas não no aplicativo novo. */
+export const URL_LOGIN_LEGADO = "https://www.comprasnet.gov.br/seguro/loginportal.asp";
+
+/** Páginas do aplicativo novo que pedem login — é nelas que se clica em "Efetuar Login". */
+export const PRECISA_ENTRAR = /comprasnet-web\/(acesso-nao-autorizado|public|login)/i;
 
 /** Onde o portal deixa o operador depois do login (sistema antigo). */
 export const RETORNO_POS_LOGIN = /comprasnet\.gov\.br\/(intro\.htm|seguro\/)/i;
 
-/** Mantida para quem ainda importa a constante antiga. */
+/** Mantidas para quem ainda importa as constantes antigas. */
 export const URL_LOGIN_SSO = URL_ENTRADA_LOGIN;
 export const URL_LOGIN_SEM_AUTORIZACAO = URL_ENTRADA_LOGIN;
 
@@ -114,8 +125,8 @@ export function urlLoginSso(): string {
 
 /*
  * As funções de identificador do SSO viraram no-op de propósito, e ficam aqui como
- * lembrete: identificador do SSO é de uso único. Guardá-lo para "abrir direto da próxima
- * vez" reintroduz exatamente a tela branca — o valor guardado já foi gasto.
+ * lembrete: identificador do SSO é de uso único e quem o emite é o portal. Guardá-lo
+ * para "abrir direto da próxima vez" reintroduz a tela branca.
  */
 export function lembrarAutorizacaoSso(_url: string): void {
   /* identificador do SSO é de uso único: não se guarda */

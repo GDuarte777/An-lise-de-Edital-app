@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { RETORNO_POS_LOGIN, URL_ENTRADA_LOGIN, CANDIDATOS_APLICATIVO, urlLoginSso, ehEnderecoNavegavel,
+import { PRECISA_ENTRAR, URL_LOGIN_LEGADO, RETORNO_POS_LOGIN, URL_ENTRADA_LOGIN, CANDIDATOS_APLICATIVO, urlLoginSso, ehEnderecoNavegavel,
   aprenderCom, ehEnderecoDoPortal, ehHostDoPortal, ehSalaDeDisputa,
   RegistroEnderecos
 } from "./endereco.js";
@@ -134,22 +134,17 @@ console.log("\n[Endereços que o aplicativo pode reabrir]");
 
 console.log("\n[Entrada do login]");
 {
-  // A porta é a do próprio portal: é ela que emite o authorization_id do gov.br. Montar
-  // a URL do SSO à mão, com identificador escrito no código, dava página em branco —
-  // identificador vencido não devolve erro, devolve vazio.
-  ok("entra pela porta do portal", urlLoginSso() === URL_ENTRADA_LOGIN, urlLoginSso());
+  // O diário de chamadas do operador mostrou que o login pelo sistema antigo só
+  // autentica no sistema antigo: 12 chamadas, todas em comprasnet.gov.br, e o aplicativo
+  // novo respondendo "acesso-nao-autorizado". A porta tem de ser a do aplicativo novo.
+  ok("entra pela porta do aplicativo novo", urlLoginSso() === URL_ENTRADA_LOGIN, urlLoginSso());
+  ok("que é a rota do próprio operador", urlLoginSso().endsWith("/comprasnet-web/seguro/fornecedor/compras"));
   ok("sem identificador montado por nós", !urlLoginSso().includes("authorization_id"));
-  ok("é o endereço que o operador usa", urlLoginSso() === "https://www.comprasnet.gov.br/seguro/loginportal.asp");
+  ok("o login do sistema antigo fica só de reserva", URL_LOGIN_LEGADO.includes("loginportal.asp"));
 
-  ok("reconhece o retorno pós-login", RETORNO_POS_LOGIN.test("https://www.comprasnet.gov.br/intro.htm"));
-  ok("e a área segura do sistema antigo", RETORNO_POS_LOGIN.test("https://www.comprasnet.gov.br/seguro/algo.asp"));
-  ok("não confunde o SSO com retorno", !RETORNO_POS_LOGIN.test("https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br"));
-
-  ok(
-    "a rota do aplicativo novo que o operador usa é a primeira candidata",
-    CANDIDATOS_APLICATIVO[0] === "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras",
-    CANDIDATOS_APLICATIVO[0]
-  );
+  ok("reconhece a tela que pede login", PRECISA_ENTRAR.test("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/acesso-nao-autorizado"));
+  ok("e não confunde com a sala de disputa", !PRECISA_ENTRAR.test("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1"));
+  ok("reconhece o retorno pelo sistema antigo", RETORNO_POS_LOGIN.test("https://www.comprasnet.gov.br/intro.htm"));
 }
 
 console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);
