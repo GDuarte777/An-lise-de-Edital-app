@@ -3,7 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { urlLoginSso, lembrarAutorizacaoSso, ehEnderecoNavegavel,
+import { esquecerAutorizacaoSso, URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso, lembrarAutorizacaoSso, ehEnderecoNavegavel,
   aprenderCom, ehEnderecoDoPortal, ehHostDoPortal, ehSalaDeDisputa,
   RegistroEnderecos, SEMENTES_PORTAL
 } from "./endereco.js";
@@ -139,6 +139,20 @@ console.log("\n[Entrada do login]");
   ok("aprende o identificador novo", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
   lembrarAutorizacaoSso("https://exemplo.com/x?authorization_id=invasor999");
   ok("só aprende do próprio SSO", urlLoginSso().endsWith("authorization_id=abc123def"), urlLoginSso());
+}
+
+console.log("\n[Identificador do SSO que vence]");
+{
+  // Com identificador morto o SSO devolve página em branco. O aplicativo descarta e
+  // passa a entrar pela via genérica, que sempre existe e emite um novo.
+  lembrarAutorizacaoSso("https://sso.acesso.gov.br/login?authorization_id=vencido123");
+  ok("entra com o identificador enquanto ele vale", urlLoginSso().includes("vencido123"));
+  esquecerAutorizacaoSso();
+  ok("descartado, cai na entrada genérica", urlLoginSso() === URL_LOGIN_SEM_AUTORIZACAO, urlLoginSso());
+  ok("e a genérica não leva identificador", !urlLoginSso().includes("authorization_id"));
+
+  lembrarAutorizacaoSso("https://sso.acesso.gov.br/authorize?client_id=comprasnet.gov.br&authorization_id=novo456");
+  ok("o novo identificador, aprendido na volta, volta a valer", urlLoginSso().includes("novo456"), urlLoginSso());
 }
 
 console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);

@@ -8,6 +8,7 @@ import {
   RegistroEnderecos,
   lembrarAutorizacaoSso,
   urlLoginSso,
+  URL_LOGIN_SEM_AUTORIZACAO,
   URL_API_USUARIO
 } from "./endereco.js";
 import { autenticadoPor, porQueNao, type Sondagem } from "./reconhecimento.js";
@@ -558,17 +559,7 @@ export async function abrirLogin(
   // Todas as janelas do fluxo de login, não só esta.
   const janelas: BrowserWindow[] = [janela];
 
-  try {
-    // Direto na página de CPF e senha. Sem o authorization_id o SSO devolve para a tela
-    // de escolha de perfil, que é um passo a mais na mão do operador.
-    await janela.loadURL(urlLoginSso());
-  } catch {
-    try {
-      await janela.loadURL(enderecoPortal());
-    } catch {
-      // A própria janela exibe a página de erro de rede; seguimos para o fluxo de espera.
-    }
-  }
+  await abrirEntradaDeLogin(janela);
 
   const abertaEm = Date.now();
   let positivas = 0;
@@ -672,6 +663,77 @@ export async function abrirLogin(
     }, 1200);
   });
 }
+
+/**
+ * Abre a entrada do login, e não aceita tela branca como resposta.
+ *
+ * Primeiro a página de CPF e senha direta (com `authorization_id`), que é o que o
+ * operador pediu. Mas esse identificador vence, e vencido o SSO devolve uma página
+ * VAZIA — sem erro, sem texto, só branco. Então aqui se confere se veio página de
+ * verdade; se não veio, o identificador é descartado e a entrada vira a que sempre
+ * funciona. Ela leva à escolha de perfil, que o aplicativo clica sozinho, e nessa volta
+ * um identificador NOVO é aprendido para o próximo login.
+ */
+async function abrirEntradaDeLogin(janela: BrowserWindow): Promise<void> {
+  const tentativas = [urlLoginSso(), URL_LOGIN_SEM_AUTORIZACAO, enderecoPortal()];
+
+  for (const [posicao, url] of tentativas.entries()) {
+    if (janela.isDestroyed()) return;
+    try {
+      await janela.loadURL(url);
+    } catch {
+      continue; // rota morta ou rede caindo: tenta a próxima
+    }
+    if (await paginaTemConteudo(janela)) return;
+    // A primeira tentativa é a única que depende do identificador. Descartá-lo é
+    // gravado em disco: reiniciar o aplicativo não traz a tela branca de volta.
+    if (posicao === 0) await registroEnderecos().esquecerAutorizacao();
+  }
+
+  if (!janela.isDestroyed()) {
+    // Nem a entrada genérica abriu. Melhor dizer isso do que deixar o operador olhando
+    // para uma janela branca sem saber se travou.
+    await janela.loadURL(PAGINA_LOGIN_INDISPONIVEL).catch(() => undefined);
+  }
+}
+
+/** Página em branco é página que não abriu. Texto, formulário ou campo de senha servem. */
+async function paginaTemConteudo(janela: BrowserWindow): Promise<boolean> {
+  for (let i = 0; i < 8; i++) {
+    if (janela.isDestroyed()) return false;
+    try {
+      const tem = (await janela.webContents.executeJavaScript(
+        `(() => {
+           const t = ((document.body && document.body.innerText) || "").trim();
+           return t.length > 40 ||
+                  Boolean(document.querySelector('input[type="password"],form,button'));
+         })()`,
+        true
+      )) as boolean;
+      if (tem) return true;
+    } catch {
+      // Página ainda carregando ou navegando: tenta de novo.
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+const PAGINA_LOGIN_INDISPONIVEL =
+  "data:text/html;charset=utf-8," +
+  encodeURIComponent(`<!doctype html><meta charset="utf-8">
+<style>
+ body{margin:0;display:grid;place-items:center;height:100vh;background:#0b0d12;color:#e8ebf2;
+      font:400 15px/1.6 "Segoe UI",system-ui,sans-serif;text-align:center}
+ div{max-width:460px;padding:32px}
+ h1{font-size:18px;margin:0 0 12px}
+ p{color:#8f97ab;margin:0}
+</style>
+<div>
+  <h1>A página de login do gov.br não abriu</h1>
+  <p>O serviço de acesso do governo não respondeu agora. Feche esta janela e tente entrar
+     de novo em alguns instantes.</p>
+</div>`);
 
 /**
  * Clica em "Fornecedor Brasileiro" na tela de escolha de perfil.

@@ -94,8 +94,30 @@ export function lembrarAutorizacaoSso(url: string): void {
   if (m && /sso\.acesso\.gov\.br/i.test(url)) autorizacaoSso = m[1];
 }
 
+/** Sem identificador: o SSO decide o caminho e emite um novo. Sempre existe. */
+export const URL_LOGIN_SEM_AUTORIZACAO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
+
 export function urlLoginSso(): string {
-  return `https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=${autorizacaoSso}`;
+  return autorizacaoSso
+    ? `https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br&authorization_id=${autorizacaoSso}`
+    : URL_LOGIN_SEM_AUTORIZACAO;
+}
+
+/**
+ * Descarta o identificador quando ele não abre nada.
+ *
+ * O `authorization_id` é emitido por tentativa de login e vence. Vencido, o SSO devolve
+ * uma página VAZIA — tela branca, sem erro, sem nada. Insistir nele deixaria o operador
+ * olhando para o branco em todo login; então ele cai fora e a entrada passa a ser a que
+ * sempre funciona, que por sua vez emite um identificador novo (aprendido na volta).
+ */
+export function esquecerAutorizacaoSso(): void {
+  autorizacaoSso = "";
+}
+
+/** Para a tela de diagnóstico: por onde o login vai entrar agora. */
+export function autorizacaoSsoAtual(): string {
+  return autorizacaoSso;
 }
 
 /** Mantida para quem importa a constante; o valor vivo está em `urlLoginSso()`. */
@@ -194,6 +216,12 @@ export function ehSalaDeDisputa(url: string): boolean {
 export interface EnderecosAprendidos {
   /** Última página do portal onde o operador esteve. */
   portal?: string;
+  /**
+   * Identificador da entrada do SSO. Guardado em disco porque ele vence: se o aplicativo
+   * esquecesse a cada reinício, o operador veria a tela branca do identificador morto
+   * uma vez por sessão, para sempre. Vazio quer dizer "entra pela via genérica".
+   */
+  autorizacaoSso?: string;
   /** Última página que parecia uma sala de disputa. */
   sala?: string;
   aprendidoEm?: string;
@@ -237,6 +265,15 @@ export class RegistroEnderecos {
     this.carregado = true;
     try {
       this.dados = JSON.parse(await readFile(this.caminho, "utf-8")) as EnderecosAprendidos;
+      if (typeof this.dados.autorizacaoSso === "string") {
+        if (this.dados.autorizacaoSso) {
+          lembrarAutorizacaoSso(
+            `https://sso.acesso.gov.br/login?authorization_id=${this.dados.autorizacaoSso}`
+          );
+        } else {
+          esquecerAutorizacaoSso();
+        }
+      }
     } catch {
       this.dados = {};
     }
@@ -255,6 +292,17 @@ export class RegistroEnderecos {
   /** Chamado a cada navegação de qualquer janela do portal. Barato e silencioso. */
   async aprender(url: string): Promise<void> {
     const antes = JSON.stringify(this.dados);
+
+    // Identificador do SSO: vem de um host que não é o do portal, então não passa por
+    // `aprenderCom` — mas é o que faz o próximo login abrir direto na tela de senha.
+    const novaAutorizacao = /sso\.acesso\.gov\.br/i.test(url)
+      ? (/[?&]authorization_id=([\w-]{6,})/i.exec(url) ?? [])[1]
+      : undefined;
+    if (novaAutorizacao) {
+      this.dados = { ...this.dados, autorizacaoSso: novaAutorizacao };
+      lembrarAutorizacaoSso(url);
+    }
+
     this.dados = aprenderCom(this.dados, url);
     if (JSON.stringify(this.dados) === antes) return;
     try {
@@ -262,6 +310,23 @@ export class RegistroEnderecos {
       await writeFile(this.caminho, JSON.stringify(this.dados, null, 2), "utf-8");
     } catch {
       // Não conseguir guardar o endereço não pode derrubar uma disputa em andamento.
+    }
+  }
+
+  /** O identificador morreu (tela branca): não volta a ser tentado, nem após reiniciar. */
+  async esquecerAutorizacao(): Promise<void> {
+    esquecerAutorizacaoSso();
+    if (this.dados.autorizacaoSso === "") return;
+    this.dados = { ...this.dados, autorizacaoSso: "" };
+    await this.persistir();
+  }
+
+  private async persistir(): Promise<void> {
+    try {
+      await mkdir(dirname(this.caminho), { recursive: true });
+      await writeFile(this.caminho, JSON.stringify(this.dados, null, 2), "utf-8");
+    } catch {
+      // Não conseguir guardar não pode derrubar uma disputa em andamento.
     }
   }
 
