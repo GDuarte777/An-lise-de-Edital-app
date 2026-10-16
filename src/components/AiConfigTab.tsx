@@ -2,7 +2,12 @@ import { useState, useEffect } from "react";
 import { Cpu, Key, CheckCircle, RefreshCw, AlertTriangle, Sparkles, ExternalLink, ShieldCheck, Zap, Loader2, XCircle } from "lucide-react";
 import confetti from "canvas-confetti";
 import { saveUserConfigToSupabase } from "../utils/supabaseClient";
-import { apiFetch, readJsonResponse, chaveEstaCifrada } from "../utils/aiClientHelper";
+import { apiFetch, readJsonResponse, readJsonResponseSafe, chaveEstaCifrada } from "../utils/aiClientHelper";
+import {
+  opcoesDeModelo,
+  resumoDoDiagnostico,
+  type RespostaAiStatus,
+} from "../utils/diagnosticoModelos";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
@@ -45,6 +50,10 @@ export default function AiConfigTab() {
   // AI test states
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Diagnóstico: o que a chave do usuário REALMENTE serve, perguntado ao provedor.
+  const [diagnosticando, setDiagnosticando] = useState(false);
+  const [diagnostico, setDiagnostico] = useState<RespostaAiStatus | null>(null);
 
   // Supabase sync states
   const [syncingSecrets, setSyncingSecrets] = useState(false);
@@ -173,6 +182,40 @@ export default function AiConfigTab() {
       console.error(err);
     } finally {
       setSaving(false);
+    }
+  };
+
+  /**
+   * Pergunta ao provedor quais modelos esta chave serve.
+   *
+   * Grava antes no localStorage porque o `apiFetch` anexa o `aiConfig` de lá em
+   * todo corpo que envia: sem isso o diagnóstico leria a chave antiga, não a que
+   * está na tela. A rota /api/ai-status aceita POST exatamente por esse motivo.
+   */
+  const handleVerificarModelos = async () => {
+    setDiagnosticando(true);
+    setDiagnostico(null);
+    try {
+      localStorage.setItem("ai_active_provider", activeProvider);
+      localStorage.setItem(`ai_${activeProvider}_key`, valorParaGravar(
+        activeProvider === "gemini" ? geminiKey :
+        activeProvider === "openai" ? openaiKey :
+        activeProvider === "anthropic" ? anthropicKey : deepseekKey,
+        activeProvider
+      ));
+      localStorage.setItem(`ai_${activeProvider}_model`,
+        activeProvider === "gemini" ? geminiModel :
+        activeProvider === "openai" ? openaiModel :
+        activeProvider === "anthropic" ? anthropicModel : deepseekModel
+      );
+
+      const response = await apiFetch("/api/ai-status", { method: "POST", body: {} });
+      const data = await readJsonResponseSafe(response);
+      setDiagnostico(data);
+    } catch (err: any) {
+      setDiagnostico({ error: err?.message || "Erro de rede ao consultar o provedor." });
+    } finally {
+      setDiagnosticando(false);
     }
   };
 
@@ -363,17 +406,15 @@ export default function AiConfigTab() {
                       onChange={(e) => setGeminiModel(e.target.value)}
                       className={selectClassName}
                     >
-                      {/* Só modelos que a API realmente serve hoje. A lista oferecia
-                          3.7, 3.6 e 3.5 — aposentados — e um deles vinha marcado como
-                          "Recomendado". Escolher um deles fazia o Google responder 503
-                          "sobrecarregado" (e não 404), então a indisponibilidade
-                          permanente parecia pico de demanda e o chat insistia nela até
-                          estourar o tempo. O rótulo agora traz o limite do plano
-                          gratuito, que é a informação que de fato decide a escolha. */}
-                      <option value="gemini-3.8-flash">gemini-3.8-flash (Recomendado — 5 req/min, 20/dia)</option>
-                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Leve e com folga — 15 req/min, 500/dia)</option>
-                      <option value="gemini-flash-latest">gemini-flash-latest (Aponta sempre para o Flash estável do momento)</option>
-                      <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Raciocínio avançado, mais lento)</option>
+                      {/* A lista vinha escrita à mão e já tirou a IA do ar três vezes:
+                          o Google aposenta um nome, a tela continua oferecendo, e o nome
+                          morto faz a API responder 503 "sobrecarregado" (não 404) — a
+                          indisponibilidade permanente se disfarça de pico de demanda.
+                          Depois de "Verificar modelos da chave", quem manda é o que o
+                          provedor respondeu; antes disso, uma lista padrão. */}
+                      {opcoesDeModelo(diagnostico?.modelosDisponiveis, geminiModel).map((opcao) => (
+                        <option key={opcao.valor} value={opcao.valor}>{opcao.rotulo}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -614,8 +655,62 @@ export default function AiConfigTab() {
                   </>
                 )}
               </Button>
+
+              <Button
+                type="button"
+                onClick={handleVerificarModelos}
+                disabled={diagnosticando}
+                size="lg"
+                variant="outline"
+                className="flex-1 sm:flex-none text-xs select-none"
+              >
+                {diagnosticando ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Consultando o provedor...
+                  </>
+                ) : (
+                  <>
+                    <Cpu className="w-3.5 h-3.5" />
+                    Verificar modelos da chave
+                  </>
+                )}
+              </Button>
             </div>
           </CardContent>
+
+          {/* Diagnóstico: o que a chave serve, segundo o próprio provedor.
+              É a resposta que faltava quando a IA devolvia 503 em todo modelo:
+              503 é o que o Google responde para um modelo que a chave NÃO serve,
+              então sem esta tela a indisponibilidade permanente parecia pico. */}
+          {diagnostico && (() => {
+            const resumo = resumoDoDiagnostico(diagnostico);
+            return (
+              <CardContent>
+                <div
+                  className={cn(
+                    "p-3 rounded-xl text-xs font-medium flex items-start gap-2 border",
+                    resumo.nivel === "ok" && "bg-success/10 border-success/30 text-success",
+                    resumo.nivel === "aviso" && "bg-warning/10 border-warning/30 text-warning",
+                    resumo.nivel === "erro" && "bg-destructive/10 border-destructive/30 text-destructive"
+                  )}
+                >
+                  {resumo.nivel === "ok"
+                    ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    : resumo.nivel === "aviso"
+                      ? <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      : <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  }
+                  <div className="space-y-1">
+                    <p>{resumo.texto}</p>
+                    {resumo.detalhes.map((linha) => (
+                      <p key={linha} className="text-[10px] font-mono opacity-80 leading-relaxed break-words">{linha}</p>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            );
+          })()}
 
           {/* Test Result Banner */}
           {testResult && (

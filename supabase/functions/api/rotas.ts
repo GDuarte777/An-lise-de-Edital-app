@@ -6,7 +6,7 @@
 // oferece req/res com a mesma forma, então a regra de negócio atravessou a
 // migração sem ser reescrita.
 // ═══════════════════════════════════════════════════════════════════════
-import type { AplicativoExpresso } from "./expresso.ts";
+import type { AplicativoExpresso, Requisicao, Resposta } from "./expresso.ts";
 import { titularConversa } from "./tituloConversa.ts";
 import { montarAcervo } from "./acervo.ts";
 import { descobrirModelos, escolherCadeia } from "./modelosDisponiveis.ts";
@@ -217,9 +217,14 @@ export function registrarRotas(app: AplicativoExpresso): void {
   });
 
   // API Route: AI Status - lets users check if their API key is configured and working
-  app.get("/api/ai-status", async (req, res): Promise<any> => {
-    const clientAiConfig = req.query;
-    const resolved = await resolveAiConfig(req.headers.authorization);
+  //
+  // Aceita GET e POST. O POST existe porque o navegador guarda a chave no
+  // localStorage (cifrada, quando a criptografia está ligada) e o `apiFetch`
+  // anexa esse `aiConfig` em todo corpo que envia: sem ele, o diagnóstico só
+  // funcionaria para quem tem a chave gravada no banco, e era justamente quem
+  // está com a tela aberta, chave na mão, que precisava da resposta.
+  const statusDaIa = async (req: Requisicao, res: Resposta): Promise<any> => {
+    const resolved = await resolveAiConfig(req.headers.authorization, req.body?.aiConfig);
     if (!resolved) {
       return res.json({
         configured: false,
@@ -251,7 +256,9 @@ export function registrarRotas(app: AplicativoExpresso): void {
           ? `A chave não serve o modelo "${resolved.model}". A plataforma vai usar: ${cadeia.join(" → ") || "nenhum modelo disponível"}.`
           : `IA configurada: ${resolved.provider} / ${resolved.model}`
     });
-  });
+  };
+  app.get("/api/ai-status", statusDaIa);
+  app.post("/api/ai-status", statusDaIa);
 
   // API Route: Setup DB - creates the configuracoes_usuario table if it doesn't exist
   // This is called once to initialize the Supabase schema.
