@@ -204,7 +204,10 @@ console.log("\n[13] Freio: duas leituras não saem no mesmo instante");
   await portal.ler("comprasEmDisputa");
   await portal.ler("comprasEmDisputa");
   const gasto = Date.now() - t0;
-  ok("respeitou o piso de 200 ms", gasto >= 200, gasto);
+  // Folga de 10 ms porque isto é relógio de parede: no Windows o timer tem granularidade
+  // de ~15 ms e o setTimeout às vezes acorda 1 ms antes da conta. Medir 199 em vez de 200
+  // não é freio frouxo — a regra do intervalo é testada com relógio na mão em bot.test.ts.
+  ok("respeitou o piso de 200 ms", gasto >= 190, gasto);
 }
 
 console.log(falhas === 0 ? "\n🎉 adapter REST: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);
