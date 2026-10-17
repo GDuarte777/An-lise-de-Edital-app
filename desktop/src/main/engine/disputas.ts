@@ -1,14 +1,26 @@
 import type { Session } from "electron";
 import type { DescobridorApi } from "./discovery.js";
+import type { GerenciadorSalas } from "./sala.js";
+import type { ItemVisivel } from "./sala-script.js";
+import { coletorSessaoPortal, enderecoPortal } from "../auth/comprasnet.js";
+import { PortalRest } from "../bot/rest/portal.js";
+import { criarTransporteElectron } from "../integracao/transporte-electron.js";
 
 /**
- * Lista as disputas em que o operador tem proposta cadastrada, usando o endpoint que o
- * DescobridorApi aprendeu ao observar o painel do portal.
+ * Lista as disputas do operador.
  *
- * A resposta do portal não tem formato conhecido de antemão, então em vez de exigir um
- * esquema fixo procuramos, em cada registro, os campos que parecem número do pregão,
- * número do item e situação. O que não for reconhecido vira texto exibido cru, para o
- * operador conseguir identificar a disputa mesmo quando a heurística erra.
+ * São dois caminhos, nesta ordem:
+ *
+ *  1. **A tela do portal.** Uma janela oculta, na sessão já autenticada, abre as páginas
+ *     do fornecedor e lê as linhas que o portal desenha. Funciona no minuto seguinte ao
+ *     login, sem calibração nenhuma. Este é o caminho normal.
+ *  2. **A API aprendida**, quando o DescobridorApi tiver reconhecido o endpoint da lista
+ *     enquanto o operador navegava. É mais rápido e mais preciso quando existe — mas
+ *     nunca foi pré-requisito, e era exatamente por ser tratado como pré-requisito que
+ *     "Suas disputas" ficava permanentemente vazia.
+ *
+ * Os dois resultados são fundidos por (pregão, item): o que a API souber melhora o que a
+ * tela mostrou, e vice-versa.
  */
 
 export interface Disputa {
@@ -18,6 +30,21 @@ export interface Disputa {
   situacao: string;
   /** Se a situação indica que o item aceita lances agora. */
   emFaseDeLances: boolean;
+  /** De onde veio o registro — a interface mostra isso para o operador saber em que confiar. */
+  origem: "tela" | "api";
+}
+
+/**
+ * Páginas do fornecedor que listam sessões públicas em andamento.
+ *
+ * Derivadas do endereço APRENDIDO, não fixas: a lista fixa que ficava aqui apontava toda
+ * para um host que não resolve DNS, e por isso a listagem de disputas voltava sempre
+ * vazia depois de um login que tinha dado certo.
+ */
+function paginasDoFornecedor(): string[] {
+  const base = enderecoPortal();
+  const raiz = base.replace(/\/[^/]*$/, "");
+  return [...new Set([base, `${raiz}/minhas-disputas`, `${raiz}/sessoes`])];
 }
 
 const CHAVES = {
@@ -27,11 +54,15 @@ const CHAVES = {
   situacao: ["situacao", "status", "fase", "situacaoitem", "statusitem", "etapa"]
 };
 
-const EM_LANCES = /lance|disputa|abert|andamento/i;
+const EM_LANCES = /lance|disputa|abert|andamento|recebendo/i;
 const ENCERRADO = /encerrad|fechad|finalizad|cancelad|suspens|homologad|adjudicad|desert|fracassad/i;
 
 function normalizar(chave: string): string {
   return chave.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function estaEmFaseDeLances(situacao: string): boolean {
+  return EM_LANCES.test(situacao) && !ENCERRADO.test(situacao);
 }
 
 /** Acha, num registro plano, o primeiro campo cujo nome case com as pistas. */
@@ -59,35 +90,192 @@ function extrairRegistros(dados: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
-export async function listarDisputas(sessao: Session, descobridor: DescobridorApi): Promise<Disputa[]> {
-  const endpoint = descobridor.calibracao.listaDisputas;
-  if (!endpoint) {
-    throw new Error(
-      "O aplicativo ainda não aprendeu onde ficam suas disputas. Abra o painel de disputas do portal " +
-        "pelo botão acima — basta navegar por ele uma vez para a calibração acontecer."
-    );
+/** Nossa lista de disputas vinda da API do portal, no modelo do SIGA: token + captcha. */
+export interface ResultadoApiPortal {
+  disputas: Disputa[];
+  /** Por que não deu, quando não deu. A interface mostra isto em vez de "lista vazia". */
+  motivo: string | null;
+}
+
+/**
+ * A lista pela API oficial do portal — o caminho do SIGA.
+ *
+ * Duas credenciais, as duas do próprio operador: o token da sessão (que o SPA dele manda
+ * em toda chamada) e, nas rotas de leitura, o token de captcha que a página dele acabou
+ * de usar. Não existe fazenda de captcha aqui: sem captcha recente, esta via diz que não
+ * pode ler, e a leitura de tela assume.
+ */
+export async function pelaApiDoPortal(sessao: Session): Promise<ResultadoApiPortal> {
+  const coletor = coletorSessaoPortal();
+  const token = coletor.tokenAtual();
+  if (!token) {
+    return {
+      disputas: [],
+      motivo:
+        "o portal ainda não revelou o token desta sessão — abra uma página do Compras.gov.br " +
+        "pelo aplicativo para o token aparecer"
+    };
   }
 
-  const resp = await sessao.fetch(endpoint.padrao, {
-    method: endpoint.metodo,
-    headers: { Accept: "application/json" }
+  const host = coletor.hostApi() ?? "";
+  const portal = new PortalRest({
+    ambiente: /(^|\.)tre-/.test(host) ? "treinamento" : "producao",
+    transporte: criarTransporteElectron(sessao),
+    autorizacao: () => token,
+    captcha: async () => coletor.captchaAtual()
   });
 
+  let semCaptcha = false;
+  let falha: string | null = null;
+
+  for (const rota of ["participacoes", "comprasEmDisputa", "emSelecaoFornecedores"]) {
+    const r = await portal.ler(rota);
+    if (r.estado === "ok") {
+      const achadas = normalizarDisputasDaApi(r.dados);
+      if (achadas.length > 0) return { disputas: achadas, motivo: null };
+      continue;
+    }
+    if (r.estado === "sem-captcha") {
+      semCaptcha = true;
+      continue;
+    }
+    if (r.estado === "sessao-caiu") {
+      return { disputas: [], motivo: "a sessão do portal expirou — entre no gov.br outra vez" };
+    }
+    falha = `${rota}: HTTP ${r.status}`;
+  }
+
+  if (semCaptcha) {
+    return {
+      disputas: [],
+      motivo:
+        "as leituras do portal exigem o captcha da sua janela, e nenhum recente passou por aqui — " +
+        "abra o painel de disputas do portal pelo aplicativo e tente de novo"
+    };
+  }
+  return { disputas: [], motivo: falha ?? "a API do portal não devolveu disputa nenhuma" };
+}
+
+/** Registros da API → disputas, pelas mesmas pistas de nome usadas na leitura de tela. */
+export function normalizarDisputasDaApi(dados: unknown): Disputa[] {
+  return extrairRegistros(dados).flatMap((registro) => {
+    const pregaoId = pegar(registro, CHAVES.pregao);
+    if (!pregaoId) return [];
+    const situacao = pegar(registro, CHAVES.situacao) ?? "";
+    return [
+      {
+        pregaoId,
+        itemNum: pegar(registro, CHAVES.item) ?? "",
+        descricao: pegar(registro, CHAVES.descricao) ?? "",
+        situacao,
+        emFaseDeLances: estaEmFaseDeLances(situacao),
+        origem: "api" as const
+      }
+    ];
+  });
+}
+
+async function pelaApi(sessao: Session, descobridor: DescobridorApi): Promise<Disputa[]> {
+  const endpoint = descobridor.calibracao.listaDisputas;
+  if (!endpoint) return [];
+
+  // `padrao` troca identificadores por marcadores. Sem pregão para substituir, a URL
+  // com marcador é inválida — aí vale a URL concreta que foi observada.
+  const url = endpoint.padrao.includes("{") ? endpoint.exemploUrl : endpoint.padrao;
+  if (!url || url.includes("{")) return [];
+
+  const resp = await sessao.fetch(url, { method: endpoint.metodo, headers: { Accept: "application/json" } });
   if (resp.status === 401 || resp.status === 403) {
     throw new Error("A sessão do Compras.gov.br expirou. Entre novamente pelo aplicativo.");
   }
-  if (!resp.ok) throw new Error(`O portal respondeu ${resp.status} ao listar suas disputas.`);
+  if (!resp.ok) return [];
 
   return extrairRegistros(await resp.json())
-    .map((registro) => {
+    .map((registro): Disputa => {
       const situacao = pegar(registro, CHAVES.situacao) ?? "";
       return {
         pregaoId: pegar(registro, CHAVES.pregao) ?? "",
         itemNum: pegar(registro, CHAVES.item) ?? "",
         descricao: pegar(registro, CHAVES.descricao) ?? "Item sem descrição",
         situacao,
-        emFaseDeLances: EM_LANCES.test(situacao) && !ENCERRADO.test(situacao)
+        emFaseDeLances: estaEmFaseDeLances(situacao),
+        origem: "api"
       };
     })
     .filter((d) => d.pregaoId !== "");
+}
+
+function daTela(itens: ItemVisivel[]): Disputa[] {
+  return itens
+    .filter((i) => i.pregaoId)
+    .map((i): Disputa => ({
+      pregaoId: i.pregaoId,
+      itemNum: i.itemNum,
+      descricao: i.descricao || "Item sem descrição",
+      situacao: i.situacao,
+      emFaseDeLances: estaEmFaseDeLances(i.situacao || i.descricao),
+      origem: "tela"
+    }));
+}
+
+function fundir(...listas: Disputa[][]): Disputa[] {
+  const mapa = new Map<string, Disputa>();
+  for (const lista of listas) {
+    for (const d of lista) {
+      const chave = `${d.pregaoId}#${d.itemNum}`;
+      const anterior = mapa.get(chave);
+      if (!anterior) {
+        mapa.set(chave, d);
+        continue;
+      }
+      mapa.set(chave, {
+        ...anterior,
+        descricao: anterior.descricao.length >= d.descricao.length ? anterior.descricao : d.descricao,
+        situacao: anterior.situacao || d.situacao,
+        emFaseDeLances: anterior.emFaseDeLances || d.emFaseDeLances
+      });
+    }
+  }
+  // Quem está em fase de lances vem primeiro: é o que o operador precisa ver.
+  return [...mapa.values()].sort(
+    (a, b) =>
+      Number(b.emFaseDeLances) - Number(a.emFaseDeLances) ||
+      a.pregaoId.localeCompare(b.pregaoId) ||
+      Number(a.itemNum || 0) - Number(b.itemNum || 0)
+  );
+}
+
+export async function listarDisputas(
+  sessao: Session,
+  descobridor: DescobridorApi,
+  salas: GerenciadorSalas
+): Promise<Disputa[]> {
+  // A API oficial do portal vem primeiro — é a via do SIGA, e a única que não depende de
+  // interpretar tela. As outras duas continuam atrás dela, porque funcionam sem captcha.
+  const [oficial, tela, api] = await Promise.all([
+    pelaApiDoPortal(sessao).catch((erro: unknown) => ({
+      disputas: [] as Disputa[],
+      motivo: erro instanceof Error ? erro.message : String(erro)
+    })),
+    salas.coletarDisputas(paginasDoFornecedor()).then(daTela).catch(() => [] as Disputa[]),
+    pelaApi(sessao, descobridor).catch((erro: unknown) => {
+      // Sessão expirada é a única falha de API que precisa interromper: sem ela, nem a
+      // leitura de tela vale alguma coisa.
+      if (erro instanceof Error && /expirou/.test(erro.message)) throw erro;
+      return [] as Disputa[];
+    })
+  ]);
+
+  const disputas = fundir(oficial.disputas, tela, api);
+  if (disputas.length === 0) {
+    throw new Error(
+      oficial.motivo
+        ? `Não encontrei disputas. A API do portal não respondeu porque ${oficial.motivo}. ` +
+          "A leitura das páginas do fornecedor também não achou nada — confirme que existe pregão " +
+          "com proposta cadastrada para este CNPJ."
+        : "Não encontrei nenhuma disputa nas páginas do fornecedor nem na API do portal. " +
+          "Confirme que a sessão do gov.br está ativa e que existe pregão com proposta cadastrada."
+    );
+  }
+  return disputas;
 }

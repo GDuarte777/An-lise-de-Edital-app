@@ -1,0 +1,25 @@
+{
+  "comment": "Checagem de tipos do núcleo do robô, isolada do Electron. bot/ não importa nada do Electron de propósito: assim o motor de decisão roda em teste puro, sem precisar de janela, sessão ou do próprio Electron instalado.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src/main/bot/**/*.ts"
+  ]
+}

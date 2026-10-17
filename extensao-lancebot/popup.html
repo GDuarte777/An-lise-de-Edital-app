@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; width: 300px; background: #0f1420; color: #e8ecf4;
+         font: 13px/1.5 system-ui, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+           border-bottom: 1px solid #26304a; }
+  .marca { font-weight: 700; letter-spacing: .3px; }
+  .marca span { color: #6ea8ff; }
+  .corpo { padding: 12px 14px; display: grid; gap: 10px; }
+  .estado { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .pino { width: 9px; height: 9px; border-radius: 50%; background: #6b7280; }
+  .pino.on { background: #22c55e; box-shadow: 0 0 9px #22c55e; }
+  .pino.alerta { background: #f59e0b; }
+  p { margin: 0; color: #9aa4b6; font-size: 12.5px; }
+  b { color: #e8ecf4; }
+  ol { margin: 0; padding-left: 18px; color: #9aa4b6; font-size: 12.5px; }
+  ol li { margin: 3px 0; }
+</style></head>
+<body>
+  <header><span class="marca">HORASIS <span>LanceBot</span></span></header>
+  <div class="corpo">
+    <div class="estado"><i class="pino" id="pino"></i><span id="rotulo">Verificando…</span></div>
+    <p id="detalhe"></p>
+    <ol>
+      <li>Entre no gov.br normalmente.</li>
+      <li>Abra a sala da disputa.</li>
+      <li>O painel aparece no canto da tela.</li>
+      <li>Configure piso e decremento e ligue.</li>
+    </ol>
+  </div>
+  <script src="popup.js"></script>
+</body></html>

@@ -1,0 +1,155 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { PRECISA_ENTRAR, URL_LOGIN_LEGADO, RETORNO_POS_LOGIN, URL_ENTRADA_LOGIN, CANDIDATOS_APLICATIVO, urlLoginSso, ehEnderecoNavegavel,
+  aprenderCom, ehEnderecoDoPortal, ehHostDoPortal, ehSalaDeDisputa,
+  RegistroEnderecos
+} from "./endereco.js";
+
+let falhas = 0;
+const ok = (r: string, c: boolean, x?: unknown) => {
+  if (c) console.log(`  ✅ ${r}`);
+  else { console.log(`  ❌ ${r}${x !== undefined ? " -> " + JSON.stringify(x) : ""}`); falhas++; }
+};
+
+console.log("\n[endereço do portal]");
+
+// O host onde o sistema de disputa REALMENTE responde. A versão anterior não o
+// reconhecia, e por isso declarava "não logado" com o operador logado na frente dela.
+ok("reconhece cnetmobile.estaleiro.serpro.gov.br", ehHostDoPortal("cnetmobile.estaleiro.serpro.gov.br"));
+ok("reconhece www.comprasnet.gov.br", ehHostDoPortal("www.comprasnet.gov.br"));
+ok("reconhece compras.gov.br", ehHostDoPortal("compras.gov.br"));
+ok("NAO reconhece sso.acesso.gov.br como portal", !ehHostDoPortal("sso.acesso.gov.br"));
+ok("NAO reconhece host de terceiro", !ehHostDoPortal("comprasnet.gov.br.golpe.com"));
+
+ok("le host da URL", ehEnderecoDoPortal("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/x"));
+ok("URL invalida nao vira portal", !ehEnderecoDoPortal("nao-e-url"));
+
+ok("caminho de disputa vira sala",
+   ehSalaDeDisputa("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/disputa/900"));
+ok("landing nao e sala",
+   !ehSalaDeDisputa("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/landing"));
+
+// Endereços reais, tirados da coleta feita em disputa ao vivo.
+ok("a sala real e reconhecida",
+   ehSalaDeDisputa("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=90013"));
+ok("acompanhamento pos-disputa NAO e sala",
+   !ehSalaDeDisputa("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/acompanhamento-compra?compra=90013"));
+
+console.log("\n[aprendizado]");
+let e = aprenderCom({}, "https://sso.acesso.gov.br/login");
+ok("nao aprende endereco do SSO", e.portal === undefined, e);
+
+e = aprenderCom(e, "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/painel");
+ok("aprende pagina do portal", e.portal?.endsWith("/painel") === true, e);
+ok("painel nao e sala", e.sala === undefined, e);
+
+e = aprenderCom(e, "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/disputa?compra=90013");
+ok("aprende a sala", e.sala?.includes("disputa") === true, e);
+
+const antes = e.sala;
+e = aprenderCom(e, "https://cnetmobile.estaleiro.serpro.gov.br/logout");
+ok("logout nao apaga a sala aprendida", e.sala === antes, e);
+ok("logout nao vira o endereco do portal", !e.portal?.includes("logout"), e);
+
+console.log("\n[persistencia]");
+const dir = await mkdtemp(join(tmpdir(), "lancebot-"));
+const caminho = join(dir, "sub", "endereco.json");
+const reg = new RegistroEnderecos(caminho);
+await reg.carregar();
+// Sem nada aprendido, abre uma ROTA candidata — não a base do SPA, que responde 404.
+ok("sem nada aprendido, abre rota candidata e não a base 404",
+   reg.paraAbrir() === CANDIDATOS_APLICATIVO[0] && !reg.paraAbrir().endsWith("/comprasnet-web/"),
+   reg.paraAbrir());
+
+await reg.aprender("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/disputa/900");
+ok("passa a usar o aprendido", reg.paraAbrir().includes("/disputa/900"), reg.aprendidos);
+ok("sala aprendida", reg.paraSala().includes("/disputa/900"), reg.aprendidos);
+
+const outro = new RegistroEnderecos(caminho);
+await outro.carregar();
+ok("sobrevive ao reinicio do aplicativo", outro.paraSala().includes("/disputa/900"), outro.aprendidos);
+assert.ok(JSON.parse(await readFile(caminho, "utf-8")).portal);
+
+console.log("\n[endereços de verificação]");
+{
+  const { SEMENTE_SALA } = await import("./endereco.js");
+  const r = new RegistroEnderecos(join(dir, "verif.json"));
+  await r.carregar();
+  const lista = r.paraVerificar();
+
+  // A sala exige ?compra=<n>: perguntar "tem sessao?" para ela nao responde nada.
+  ok("a sala NAO entra na verificacao", !lista.some((u) => u === SEMENTE_SALA), lista);
+
+  // A lista encolheu de proposito. As sementes antigas eram rotas INVENTADAS, e o
+  // diagnostico na maquina do operador mostrou as tres caindo em "acesso nao
+  // autorizado" ou "pagina nao encontrada". Sobrou a base do SPA, que e a unica que se
+  // pode afirmar que existe — e a pergunta ao portal virou a checagem principal.
+  ok("so sobra endereco que se pode afirmar que existe",
+     lista.every((u) => u.endsWith("/comprasnet-web/")), lista);
+
+  await r.aprender("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=90013");
+  ok("o aprendido vem primeiro", r.paraVerificar()[0].includes("compra=90013"), r.paraVerificar());
+  ok("a base do SPA continua de reserva", r.paraVerificar().length === 2, r.paraVerificar());
+  ok("a sala aprendida vira o endereco de sala", r.paraSala().includes("compra=90013"), r.paraSala());
+}
+
+console.log("\n[limpeza do que ja estava no disco]");
+{
+  const caminhoRuim = join(dir, "ruim.json");
+  // Exatamente o que estava guardado na maquina do operador.
+  await writeFile(caminhoRuim, JSON.stringify({
+    portal: "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras?compra="
+  }), "utf-8");
+  const r = new RegistroEnderecos(caminhoRuim);
+  await r.carregar();
+  ok("descarta endereco ruim que ja estava salvo",
+     !r.paraAbrir().includes("compra="), r.paraAbrir());
+  ok("e cai numa rota candidata que não é a base 404",
+     r.paraAbrir() === CANDIDATOS_APLICATIVO[0], r.paraAbrir());
+}
+
+console.log("\n[Endereços que o aplicativo pode reabrir]");
+{
+  const navegavel = (u: string) => ehEnderecoNavegavel(u);
+  ok(
+    "a sala do SPA é navegável",
+    navegavel("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=90012026")
+  );
+  // Os três endereços abaixo apareceram na tela do operador e foram a causa de o
+  // aplicativo ficar reabrindo janela do sistema ANTIGO depois do login.
+  ok("popup.asp do sistema antigo não é", !navegavel("https://www.comprasnet.gov.br/popup/popup.asp?ambiente=3"));
+  ok("intro.htm não é", !navegavel("https://www.comprasnet.gov.br/intro.htm"));
+  ok("raiz do comprasnet antigo não é", !navegavel("https://www.comprasnet.gov.br/"));
+  ok("site de fora não é", !navegavel("https://exemplo.com/comprasnet-web/"));
+  ok(
+    "o que foi aprendido antes da regra não volta a ser aberto",
+    aprenderCom({ portal: "https://www.comprasnet.gov.br/popup/popup.asp?ambiente=3" },
+      "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1").portal ===
+      "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1"
+  );
+}
+
+console.log("\n[Entrada do login]");
+{
+  // O diário de chamadas do operador mostrou que o login pelo sistema antigo só
+  // autentica no sistema antigo: 12 chamadas, todas em comprasnet.gov.br, e o aplicativo
+  // novo respondendo "acesso-nao-autorizado". A porta tem de ser a do aplicativo novo.
+  ok("entra pela porta do aplicativo novo", urlLoginSso() === URL_ENTRADA_LOGIN, urlLoginSso());
+  ok("que é a rota do próprio operador", urlLoginSso().endsWith("/comprasnet-web/seguro/fornecedor/compras"));
+  ok("sem identificador montado por nós", !urlLoginSso().includes("authorization_id"));
+  // A porta do login é a tela "Acesse sua Conta" do Compras.gov.br, onde o operador
+  // escolhe o perfil de fornecedor. O login do sistema antigo saiu: o diário de
+  // chamadas provou que ele autentica só no comprasnet velho.
+  ok("a porta do login é a conta do Compras.gov.br", URL_LOGIN_LEGADO.startsWith("https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br"), URL_LOGIN_LEGADO);
+  ok("e não o login do sistema antigo", !URL_LOGIN_LEGADO.includes("loginportal.asp"));
+
+  ok("reconhece a tela que pede login", PRECISA_ENTRAR.test("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/acesso-nao-autorizado"));
+  ok("e não confunde com a sala de disputa", !PRECISA_ENTRAR.test("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1"));
+  ok("reconhece o retorno pelo sistema antigo", RETORNO_POS_LOGIN.test("https://www.comprasnet.gov.br/intro.htm"));
+}
+
+console.log(falhas === 0 ? "\n🎉 endereço: tudo passou\n" : `\n💥 ${falhas} falha(s)\n`);
+process.exit(falhas === 0 ? 0 : 1);

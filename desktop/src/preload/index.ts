@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+import type { ConfigItem, EstadoPainel, LinhaClassificacao } from "../compartilhado/painel.js";
+
 /**
  * Ponte entre a interface e o processo principal.
  *
@@ -15,6 +17,8 @@ export interface Usuario {
 export interface StatusSessao {
   autenticado: boolean;
   cookiesEncontrados: number;
+  /** Em que a verificação se apoiou — a interface mostra isso em vez de só dizer "não". */
+  evidencia: string;
 }
 
 export interface EndpointAprendido {
@@ -39,6 +43,87 @@ export interface Disputa {
   descricao: string;
   situacao: string;
   emFaseDeLances: boolean;
+  origem: "tela" | "api";
+}
+
+/** O que o robô enxerga dentro da sala, antes de qualquer lance valer dinheiro. */
+export interface ConferenciaSala {
+  diagnostico: {
+    url: string;
+    titulo: string;
+    escopoEncontrado: boolean;
+    textoEscopo: string;
+    campoLance: string | null;
+    botaoEnvio: string | null;
+    entradasVisiveis: number;
+    botoesVisiveis: number;
+    valoresNaTela: number[];
+  };
+  leitura: {
+    ok: boolean;
+    menorLance: number | null;
+    nossoLance: number | null;
+    aberto: boolean;
+    evidencia: string;
+    motivo?: string;
+  };
+  ensaio: { ok: boolean; etapa: string; mensagem: string } | null;
+  seletores: { campo?: string; botao?: string; aprendidoEm?: string };
+}
+
+/** O que o guardião de sessão está fazendo — a interface mostra isso ao operador. */
+export interface EstadoGuardiao {
+  ativo: boolean;
+  autenticado: boolean;
+  desde: string | null;
+  ultimaRenovacaoEm: string | null;
+  proximaRenovacaoEm: string | null;
+  renovacoes: number;
+  falhasSeguidas: number;
+  retokensObservados: number;
+  motivo: string;
+}
+
+/** O que o aplicativo enxergou em cada endereço do portal que tentou. */
+export interface TentativaSessao {
+  url: string;
+  urlFinal: string;
+  autenticado: boolean;
+  motivo: string | null;
+  sondagem: {
+    url: string;
+    noSso: boolean;
+    noPortal: boolean;
+    temSenha: boolean;
+    temSair: boolean;
+    temIdentidade: boolean;
+    escolhendoPerfil: boolean;
+    tamanho: number;
+  } | null;
+}
+
+/** Presença e idade da credencial da sessão do portal — nunca o valor dela. */
+export interface EstadoSessaoPortal {
+  temToken: boolean;
+  idadeTokenS: number | null;
+  temCaptcha: boolean;
+  idadeCaptchaS: number | null;
+  hostApi: string | null;
+  observadas: number;
+}
+
+export interface DiagnosticoSessao {
+  status: StatusSessao;
+  sessaoPortal: EstadoSessaoPortal;
+  /** Rotas tentadas para obter o token da sessão e o status de cada uma. */
+  tentativasDeToken: Array<{ rota: string; metodo: string; status: number }>;
+  /** O que a página do portal chamou de verdade — método e caminho, sem query. */
+  chamadasDoPortal: Array<{ metodo: string; host: string; caminho: string; comAutorizacao: boolean }>;
+  /** Resposta do portal a "quem está logado?" — a evidência principal. */
+  api: { status: number; ok: boolean; erro?: string };
+  tentativas: TentativaSessao[];
+  enderecosAprendidos: Record<string, string | undefined>;
+  dominiosDeCookie: string[];
 }
 
 export interface ApiLanceBot {
@@ -49,10 +134,23 @@ export interface ApiLanceBot {
   };
   comprasnet: {
     entrar(): Promise<StatusSessao>;
-    status(): Promise<StatusSessao>;
+    status(forcar?: boolean): Promise<StatusSessao>;
+    diagnostico(): Promise<DiagnosticoSessao>;
     sair(): Promise<void>;
     abrirSala(pregaoId?: string): Promise<number>;
     abrirPainel(): Promise<number>;
+    /** Em que ponto do acesso o aplicativo está: "abrindo", "login" ou "concluindo". */
+    aoProgresso(cb: (etapa: "abrindo" | "login" | "concluindo") => void): () => void;
+  };
+  /**
+   * Manutenção da sessão do gov.br. É o que diferencia este aplicativo de uma extensão:
+   * a sessão é mantida de pé pelo próprio programa, sem o operador atualizar a página.
+   */
+  sessao: {
+    manterViva(): Promise<EstadoGuardiao>;
+    soltar(): Promise<EstadoGuardiao>;
+    guardiao(): Promise<EstadoGuardiao>;
+    aoMudar(cb: (e: EstadoGuardiao) => void): () => void;
   };
   calibracao: {
     estado(): Promise<Calibracao>;
@@ -62,6 +160,25 @@ export interface ApiLanceBot {
   };
   disputas: {
     listar(): Promise<Disputa[]>;
+  };
+  sala: {
+    conferir(ref: { pregaoId: string; itemNum: string }, valorEnsaio?: number): Promise<ConferenciaSala>;
+  };
+  /**
+   * Painel de disputa — a tela do robô novo. O estado chega empurrado pelo canal
+   * `painel:estado` a cada leitura da sala; os comandos devolvem o estado já atualizado.
+   */
+  painel: {
+    iniciar(pregaoId?: string): Promise<EstadoPainel>;
+    encerrar(): Promise<{ encerrado: boolean }>;
+    estado(): Promise<EstadoPainel>;
+    configurar(item: string, mudanca: Partial<ConfigItem>): Promise<EstadoPainel>;
+    armar(item: string): Promise<EstadoPainel>;
+    desarmar(item: string, motivo?: string): Promise<EstadoPainel>;
+    classificacao(item: string): Promise<LinhaClassificacao[]>;
+    aoEstado(cb: (e: EstadoPainel) => void): () => void;
+    /** O painel parou sozinho (sala fechada, por exemplo) e a tela precisa voltar. */
+    aoEncerrar(cb: (motivo: string) => void): () => void;
   };
   robo: {
     iniciar(cfg: unknown): Promise<{ iniciado: boolean; portal: string; ehSimulacao: boolean }>;
@@ -85,10 +202,18 @@ const api: ApiLanceBot = {
   },
   comprasnet: {
     entrar: () => ipcRenderer.invoke("comprasnet:entrar"),
-    status: () => ipcRenderer.invoke("comprasnet:status"),
+    status: (forcar) => ipcRenderer.invoke("comprasnet:status", forcar),
+    diagnostico: () => ipcRenderer.invoke("comprasnet:diagnostico"),
     sair: () => ipcRenderer.invoke("comprasnet:sair"),
     abrirSala: (pregaoId) => ipcRenderer.invoke("comprasnet:abrirSala", pregaoId),
-    abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel")
+    abrirPainel: () => ipcRenderer.invoke("comprasnet:abrirPainel"),
+    aoProgresso: (cb) => assinar<"abrindo" | "login" | "concluindo">("comprasnet:progresso", cb)
+  },
+  sessao: {
+    manterViva: () => ipcRenderer.invoke("sessao:manterViva"),
+    soltar: () => ipcRenderer.invoke("sessao:soltar"),
+    guardiao: () => ipcRenderer.invoke("sessao:guardiao"),
+    aoMudar: (cb) => assinar<EstadoGuardiao>("sessao:guardiao", cb)
   },
   calibracao: {
     estado: () => ipcRenderer.invoke("calibracao:estado"),
@@ -98,6 +223,20 @@ const api: ApiLanceBot = {
   },
   disputas: {
     listar: () => ipcRenderer.invoke("disputas:listar")
+  },
+  sala: {
+    conferir: (ref, valorEnsaio) => ipcRenderer.invoke("sala:conferir", ref, valorEnsaio)
+  },
+  painel: {
+    iniciar: (pregaoId) => ipcRenderer.invoke("painel:iniciar", pregaoId),
+    encerrar: () => ipcRenderer.invoke("painel:encerrar"),
+    estado: () => ipcRenderer.invoke("painel:estado"),
+    configurar: (item, mudanca) => ipcRenderer.invoke("painel:configurar", item, mudanca),
+    armar: (item) => ipcRenderer.invoke("painel:armar", item),
+    desarmar: (item, motivo) => ipcRenderer.invoke("painel:desarmar", item, motivo),
+    classificacao: (item) => ipcRenderer.invoke("painel:classificacao", item),
+    aoEstado: (cb) => assinar<EstadoPainel>("painel:estado", cb),
+    aoEncerrar: (cb) => assinar<string>("painel:encerrado", cb)
   },
   robo: {
     iniciar: (cfg) => ipcRenderer.invoke("robo:iniciar", cfg),
