@@ -311,7 +311,7 @@ ipcMain.handle("painel:iniciar", async (_e, pregaoId?: string) => {
   // disputa antes de chegar aqui.
   if (!id) {
     throw new Error(
-      "Escolha a disputa antes de abrir o painel: sem o número da compra o portal não abre a sala."
+      "Informe a disputa antes de abrir o painel: o número da compra ou o endereço da sala."
     );
   }
 

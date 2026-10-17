@@ -128,10 +128,15 @@ export class GerenciadorSalas {
     janela.webContents.on("dom-ready", reinjetar);
     janela.webContents.on("did-navigate-in-page", reinjetar);
 
+    // O operador pode informar o NÚMERO da compra ou colar o ENDEREÇO da sala. Colar o
+    // endereço é a saída quando o aplicativo não consegue listar as disputas sozinho:
+    // ele abre exatamente a página que o operador abriria no navegador.
     const base = enderecoSala();
-    const url = pregaoId
-      ? base + (base.includes("?") ? "&" : "?") + "compra=" + encodeURIComponent(pregaoId)
-      : base;
+    const url = /^https?:\/\//i.test(pregaoId)
+      ? pregaoId
+      : pregaoId
+        ? base + (base.includes("?") ? "&" : "?") + "compra=" + encodeURIComponent(pregaoId)
+        : base;
     await janela.loadURL(url);
     await this.assentar(janela);
 

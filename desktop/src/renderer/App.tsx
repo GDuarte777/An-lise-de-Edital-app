@@ -148,6 +148,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [fontePainel, setFontePainel] = useState<FontePainel | null>(null);
   const [abrindoPainel, setAbrindoPainel] = useState(false);
   const [etapaAcesso, setEtapaAcesso] = useState<"abrindo" | "login" | "concluindo" | null>(null);
+  const [disputaDireta, setDisputaDireta] = useState("");
   const [aviso, setAviso] = useState<{ titulo: string; texto: string; escolhas?: Disputa[] } | null>(null);
 
   /** Detalhe técnico vai para o log de auditoria, não para o aviso do operador. */
@@ -343,6 +344,30 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       setAbrindoPainel(false);
     }
   }, [anotar]);
+
+  /**
+   * Abre o painel na disputa que o operador informou — número ou endereço colado.
+   *
+   * É o caminho que não depende de nada meu: nem da lista de disputas, nem do
+   * reconhecimento de sessão. A sala abre, o robô lê o que está na tela e opera.
+   */
+  const abrirPainelDireto = useCallback(async () => {
+    const alvo = disputaDireta.trim();
+    if (!alvo) return;
+    setErro("");
+    setAbrindoPainel(true);
+    try {
+      setFontePainel(await criarFonteIpc(alvo));
+    } catch (e) {
+      anotar("alerta", `Painel direto: ${e instanceof Error ? e.message : String(e)}`);
+      setAviso({
+        titulo: "Não consegui abrir essa disputa",
+        texto: "Confira o número da compra ou o endereço da sala e tente de novo."
+      });
+    } finally {
+      setAbrindoPainel(false);
+    }
+  }, [disputaDireta, anotar]);
 
   const abrirPainelDeDisputa = useCallback(async () => {
     if (selecionada) return void abrirPainelComDisputa(selecionada);
@@ -714,6 +739,32 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
               <input type="checkbox" checked={soEmLances} onChange={(e) => setSoEmLances(e.target.checked)} />
               Mostrar só as que estão em fase de lances ({emLances.length} de {disputas.length})
             </label>
+
+            {/* Caminho direto: quando o aplicativo não consegue listar as disputas, o
+                operador informa a disputa e o robô opera do mesmo jeito. Isto não
+                depende de sessão reconhecida nem de leitura de lista. */}
+            <div className="field">
+              <label htmlFor="disputa-direta">Abrir direto: nº da compra ou endereço da sala</label>
+              <div className="row tight">
+                <input
+                  id="disputa-direta"
+                  className="input"
+                  placeholder="90012/2026  ou  https://cnetmobile…/disputa?compra=…"
+                  value={disputaDireta}
+                  onChange={(e) => setDisputaDireta(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && disputaDireta.trim()) void abrirPainelDireto();
+                  }}
+                />
+                <button
+                  className="btn"
+                  disabled={!disputaDireta.trim() || abrindoPainel}
+                  onClick={() => void abrirPainelDireto()}
+                >
+                  Abrir
+                </button>
+              </div>
+            </div>
 
             {visiveis.length === 0 ? (
               <div className="empty">

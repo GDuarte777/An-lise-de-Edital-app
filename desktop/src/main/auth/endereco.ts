@@ -106,8 +106,19 @@ export function urlDaSala(pregaoId: string): string {
 export const URL_ENTRADA_LOGIN =
   "https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras";
 
-/** Entrada do sistema antigo. Fica como reserva: autentica, mas não no aplicativo novo. */
-export const URL_LOGIN_LEGADO = "https://www.comprasnet.gov.br/seguro/loginportal.asp";
+/**
+ * Porta de entrada do login.
+ *
+ * O diário de chamadas provou que `comprasnet.gov.br/seguro/loginportal.asp` autentica
+ * só no sistema ANTIGO: depois dele, o aplicativo novo seguia respondendo
+ * "acesso-nao-autorizado" e nenhuma chamada com credencial aparecia.
+ *
+ * Esta é a tela "Acesse sua Conta" do Compras.gov.br — a que pergunta se você é
+ * Fornecedor Brasileiro, Estrangeiro ou Governo. É por ela que se entra no sistema NOVO,
+ * e o perfil escolhido ali é o que dá acesso de fornecedor. O aplicativo não clica em
+ * nada: quem escolhe o perfil é o operador, porque é a conta dele.
+ */
+export const URL_LOGIN_LEGADO = "https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br";
 
 /** Páginas do aplicativo novo que pedem login — é nelas que se clica em "Efetuar Login". */
 export const PRECISA_ENTRAR = /comprasnet-web\/(acesso-nao-autorizado|public|login)/i;

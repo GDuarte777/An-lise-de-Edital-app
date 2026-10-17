@@ -140,7 +140,11 @@ console.log("\n[Entrada do login]");
   ok("entra pela porta do aplicativo novo", urlLoginSso() === URL_ENTRADA_LOGIN, urlLoginSso());
   ok("que é a rota do próprio operador", urlLoginSso().endsWith("/comprasnet-web/seguro/fornecedor/compras"));
   ok("sem identificador montado por nós", !urlLoginSso().includes("authorization_id"));
-  ok("o login do sistema antigo fica só de reserva", URL_LOGIN_LEGADO.includes("loginportal.asp"));
+  // A porta do login é a tela "Acesse sua Conta" do Compras.gov.br, onde o operador
+  // escolhe o perfil de fornecedor. O login do sistema antigo saiu: o diário de
+  // chamadas provou que ele autentica só no comprasnet velho.
+  ok("a porta do login é a conta do Compras.gov.br", URL_LOGIN_LEGADO.startsWith("https://sso.acesso.gov.br/login?client_id=comprasnet.gov.br"), URL_LOGIN_LEGADO);
+  ok("e não o login do sistema antigo", !URL_LOGIN_LEGADO.includes("loginportal.asp"));
 
   ok("reconhece a tela que pede login", PRECISA_ENTRAR.test("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/acesso-nao-autorizado"));
   ok("e não confunde com a sala de disputa", !PRECISA_ENTRAR.test("https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/disputa?compra=1"));
