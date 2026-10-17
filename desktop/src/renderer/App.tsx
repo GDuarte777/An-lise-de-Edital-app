@@ -249,7 +249,24 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       // Lista as disputas de qualquer jeito: é o que o operador quer ver depois de
       // entrar, e a própria listagem diz o que falta quando falta. Condicionar isso a
       // um "autenticado" que chega segundos atrasado só produzia tela vazia.
-      void carregarDisputas();
+      // Entrou: o robô olha se há disputa acontecendo agora e diz em uma frase.
+      const lista = await api()
+        .disputas.listar()
+        .catch((e: unknown) => {
+          anotar("alerta", `Disputas: ${e instanceof Error ? e.message : String(e)}`);
+          return [] as Disputa[];
+        });
+      setDisputas(lista);
+      const vivas = lista.filter((d) => d.emFaseDeLances);
+      if (vivas.length > 0) {
+        setSelecionada(vivas[0]);
+        anotar("sucesso", `${vivas.length} disputa(s) em fase de lances agora.`);
+      } else {
+        setAviso({
+          titulo: "Nenhuma disputa ao vivo",
+          texto: "Nenhuma disputa sua está em fase de lances agora."
+        });
+      }
       if (!s.autenticado) setErro(`Ainda não há sessão do gov.br. ${s.evidencia}`);
       void api().calibracao.estado().then(setCalib);
     } catch (e) {
@@ -258,7 +275,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     } finally {
       setEtapaAcesso(null);
     }
-  }, [carregarDisputas]);
+  }, [carregarDisputas, anotar]);
 
   const conferir = useCallback(async () => {
     if (!selecionada) return setErro("Escolha uma disputa na lista ao lado.");
@@ -407,18 +424,12 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
           <div className="carregando">
             <div className="carregando-anel" />
             <h3 className="modal-titulo">
-              {etapaAcesso === "abrindo"
-                ? "Preparando o acesso ao gov.br"
-                : etapaAcesso === "login"
-                  ? "Entre com seu CPF e senha"
-                  : "Concluindo o acesso"}
+              {etapaAcesso === "concluindo" ? "Procurando disputas" : "Entre com seu CPF e senha"}
             </h3>
             <p className="muted" style={{ fontSize: 13, textAlign: "center", margin: 0 }}>
-              {etapaAcesso === "abrindo"
-                ? "Abrindo a porta do Compras.gov.br. Leva alguns segundos."
-                : etapaAcesso === "login"
-                  ? "A janela do gov.br está aberta. Assim que você entrar, ela fecha sozinha."
-                  : "Confirmando a sessão com o portal. Já termina."}
+              {etapaAcesso === "concluindo"
+                ? "Confirmando sua sessão e vendo se há disputa acontecendo agora."
+                : "A janela do gov.br está aberta. Assim que você entrar, ela fecha sozinha."}
             </p>
           </div>
         </div>
