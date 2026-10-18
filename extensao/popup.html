@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>HORASIS — Robô de Lances</title>
+  <title>HORASIS — Licitações</title>
   <style>
     /* ───────────────────────────────────────────────────────────────
        Identidade HORASIS: navy #182548 e dourado #C09A52, as duas cores
@@ -216,9 +216,9 @@
     <img src="icone-48.png" alt="HORASIS" />
     <span class="marca">
       <b>Horasis</b>
-      <span>Robô de Lances</span>
+      <span>Licitações</span>
     </span>
-    <span class="versao">v1.0.0</span>
+    <span class="versao">v1.1.0</span>
   </header>
 
   <main>
@@ -232,6 +232,21 @@
     <button class="secundario" id="openDispute">Abrir painel da disputa</button>
 
     <div class="status" id="status" style="display:none;"></div>
+
+    <!-- O preenchimento do cadastro não usa o backend: ele lê o perfil do
+         storage e escreve na página. Por isso aparece acima da configuração
+         do robô e funciona antes de haver App ID e Token. -->
+    <section class="secao">
+      <h3>Cadastro de fornecedor</h3>
+      <p class="nota">
+        Preencha seus dados <b>uma vez</b> e a extensão preenche sozinha o cadastro de fornecedor das plataformas de
+        licitação. Não depende do App ID nem do Token.
+      </p>
+      <p class="nota" id="cadastroResumo"></p>
+      <button class="primario" id="abrirCadastro">Meus dados de fornecedor</button>
+      <button class="secundario" id="preencherAgora">Preencher esta página agora</button>
+      <div class="status" id="statusCadastro" style="display:none;"></div>
+    </section>
 
     <!-- A configuração do robô vive aqui, e não numa tela da plataforma:
          quem opera o pregão está no navegador, com o portal aberto. -->
@@ -280,6 +295,7 @@
         <p>Abra a sala de disputa e o painel sobe sozinho, já com os itens lidos do portal. O <b>piso de margem</b> de cada item você digita na própria tabela do painel — enquanto um item estiver sem piso, ele é monitorado mas não recebe lance automático.</p>
         <p><b>Duas disputas ao mesmo tempo:</b> abra cada compra em uma aba. Cada aba cuida da sua, sem configuração nenhuma.</p>
         <p>Na sala de disputa do <b>Licitanet</b> o motor abre sozinho — basta estar logado como fornecedor.</p>
+        <p><b>Cadastro de fornecedor:</b> em <b>Meus dados de fornecedor</b> você digita CNPJ, endereço, contato e conta bancária uma vez. Ao abrir o cadastro de uma plataforma, a extensão reconhece os campos e escreve. Ela nunca clica em Salvar ou Continuar, e campo que você não guardou fica em branco — nada é suposto.</p>
       </div>
     </details>
 

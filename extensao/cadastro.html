@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>HORASIS — Meus dados de fornecedor</title>
+  <style>
+    /* Mesma identidade do painel lateral: navy #182548 e dourado #C09A52.
+       Esta tela, porém, abre em aba inteira — são quase cinquenta campos, e
+       digitá-los numa coluna de 320px seria pior que preencher no portal. */
+    :root {
+      --navy-900: #0C1428;
+      --navy-800: #121D38;
+      --navy-700: #182548;
+      --linha:    #2A3A63;
+      --gold:     #C09A52;
+      --gold-sw:  #E0C489;
+      --texto:    #EEF1F7;
+      --suave:    #96A3BE;
+      --ok:       #3DD598;
+      --erro:     #FF8A8A;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--navy-900); color: var(--texto);
+      font-family: 'Segoe UI', Inter, system-ui, sans-serif; font-size: 13px;
+    }
+    header {
+      position: sticky; top: 0; z-index: 10;
+      background: linear-gradient(180deg, var(--navy-700), var(--navy-800));
+      border-bottom: 1px solid var(--linha); box-shadow: inset 0 -2px 0 var(--gold);
+      padding: 14px 28px; display: flex; align-items: center; gap: 12px;
+    }
+    header img { width: 32px; height: 32px; border-radius: 9px; }
+    .marca b { display: block; font-size: 13px; letter-spacing: .14em; text-transform: uppercase; }
+    .marca span { font-size: 10px; color: var(--gold-sw); letter-spacing: .05em; }
+    .espaco { flex: 1; }
+    main { max-width: 1040px; margin: 0 auto; padding: 22px 28px 120px; }
+    .intro { color: var(--suave); line-height: 1.6; margin: 0 0 20px; max-width: 70ch; }
+    .intro b { color: var(--texto); }
+    section { margin-bottom: 26px; border-top: 1px solid var(--linha); padding-top: 16px; }
+    section h2 {
+      margin: 0 0 4px; font-size: 11px; font-weight: 700; letter-spacing: .1em;
+      text-transform: uppercase; color: var(--gold-sw);
+    }
+    section .nota { color: var(--suave); font-size: 11.5px; margin: 0 0 14px; }
+    .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px 14px; }
+    .campo.largo { grid-column: 1 / -1; }
+    label {
+      display: block; font-size: 10px; font-weight: 700; letter-spacing: .07em;
+      text-transform: uppercase; color: var(--suave); margin: 0 0 5px;
+    }
+    input, select, textarea {
+      width: 100%; padding: 9px 11px; background: var(--navy-800);
+      border: 1px solid var(--linha); border-radius: 8px; color: var(--texto);
+      font-size: 12.5px; font-family: inherit;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    input:focus, select:focus, textarea:focus {
+      outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(192,154,82,.16);
+    }
+    .caixas { display: flex; flex-wrap: wrap; gap: 14px; padding: 4px 0 2px; }
+    .caixas label {
+      display: flex; align-items: center; gap: 6px; text-transform: none;
+      letter-spacing: 0; font-size: 12.5px; font-weight: 500; color: var(--texto); margin: 0;
+    }
+    .caixas input { width: auto; }
+    .rodape {
+      position: fixed; left: 0; right: 0; bottom: 0; background: var(--navy-800);
+      border-top: 1px solid var(--linha); padding: 12px 28px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    button {
+      padding: 10px 16px; border-radius: 8px; border: 1px solid var(--linha);
+      background: transparent; color: var(--texto); font: inherit; font-weight: 700; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.12); }
+    button.primario { background: var(--gold); color: var(--navy-900); border-color: var(--gold); }
+    .status { font-size: 12px; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--erro); }
+    .preferencia { display: flex; align-items: center; gap: 7px; color: var(--suave); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="icone-48.png" alt="HORASIS" />
+    <span class="marca">
+      <b>Horasis</b>
+      <span>Meus dados de fornecedor</span>
+    </span>
+    <span class="espaco"></span>
+    <button id="importar">Importar JSON</button>
+    <button id="exportar">Exportar JSON</button>
+    <input type="file" id="arquivo" accept="application/json,.json" hidden />
+  </header>
+
+  <main>
+    <p class="intro">
+      Preencha uma vez. A partir daí, quando você abrir o cadastro de fornecedor de qualquer plataforma de licitação,
+      a extensão reconhece os campos pelo rótulo e escreve estes dados sozinha.
+      <b>Campo que você deixar em branco aqui fica em branco lá</b> — a extensão nunca supõe um valor, e lista no
+      painel da página o que ficou faltando. Ela também nunca clica em Salvar ou Continuar: conferir e enviar é seu.
+      Os dados ficam guardados só neste navegador (<code>chrome.storage.local</code>) e não vão para o servidor do HORASIS.
+    </p>
+
+    <div id="secoes"></div>
+  </main>
+
+  <div class="rodape">
+    <button class="primario" id="salvar">Salvar meus dados</button>
+    <label class="preferencia"><input type="checkbox" id="optAuto" /> Preencher automaticamente ao abrir um cadastro</label>
+    <label class="preferencia"><input type="checkbox" id="optSobrescrever" /> Sobrescrever campos já preenchidos</label>
+    <span class="espaco"></span>
+    <span class="status" id="status"></span>
+  </div>
+
+  <script src="cadastro-campos.js"></script>
+  <script src="cadastro.js"></script>
+</body>
+</html>

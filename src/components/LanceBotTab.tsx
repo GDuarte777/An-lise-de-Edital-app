@@ -257,6 +257,13 @@ function BaixarExtensao() {
           durante o pregão.
         </p>
 
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          A mesma extensão também <b>preenche o cadastro de fornecedor</b> das plataformas de licitação: você digita
+          CNPJ, endereço, contato e conta bancária uma vez, em <b>Meus dados de fornecedor</b>, e ela escreve sozinha
+          nos formulários. Campo que você não guardou fica em branco — ela nunca supõe um valor — e ela nunca clica em
+          Salvar ou Continuar. Essa parte não usa App ID nem Token.
+        </p>
+
         <Button asChild>
           <a href={ARQUIVO_EXTENSAO} download>
             <Download className="w-4 h-4" />

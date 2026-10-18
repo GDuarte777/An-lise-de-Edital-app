@@ -103,6 +103,14 @@ A aba Robô de Lances da plataforma faz três coisas e só três: entrega a
 extensão para baixar, mostra as duas credenciais e exibe, em modo leitura, o
 que cada disputa produziu.
 
+A mesma extensão traz o **preenchimento do cadastro de fornecedor**: o
+fornecedor digita os dados uma vez, num painel dela, e ela preenche sozinha os
+formulários de credenciamento das plataformas de licitação. Essa parte não usa
+o backend nem credencial nenhuma — o perfil vive em `chrome.storage.local`, no
+navegador do fornecedor, e nunca sobe para cá. Campo sem dado guardado fica em
+branco: cadastro é declaração com efeito legal, e um palpite plausível é pior
+que um campo vazio. Os detalhes estão em `extensao/README.md`.
+
 O piso de margem não entra no perfil padrão de propósito — piso é por item, e
 um piso global herdado sem querer é a forma mais silenciosa de dar lance abaixo
 do custo.
