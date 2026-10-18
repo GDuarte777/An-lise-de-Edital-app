@@ -1,7 +1,15 @@
-# HORASIS — Robô de Lances (extensão do Chrome)
+# HORASIS — Licitações (extensão do Chrome)
 
-Extensão Manifest V3 que opera a sala de disputa do **Comprasnet** e do
-**Licitanet**.
+Extensão Manifest V3 com duas partes independentes:
+
+1. **Robô de lances** — opera a sala de disputa do **Comprasnet** e do
+   **Licitanet**.
+2. **Cadastro de fornecedor** — preenche sozinha o formulário de
+   credenciamento das plataformas de licitação, com os dados que o
+   fornecedor digitou uma vez.
+
+A segunda não usa o backend nem credencial nenhuma: dá para instalar a
+extensão só para ela.
 
 ## Como instalar para testar
 
@@ -37,6 +45,9 @@ automático: sem piso não há como o robô saber onde parar.
 | `dispute.js` | Mundo isolado, Comprasnet | Motor da disputa: painel, leitura de itens, envio de lance, chat. |
 | `licitanet-bridge.js` | Mundo da página, Licitanet | Alcança o estado interno da sala, que o mundo isolado não enxerga. |
 | `licitanet-dispute.js` | Mundo isolado, Licitanet | Motor da disputa do Licitanet. |
+| `cadastro-campos.js` | Mundo isolado + painel de dados | **Catálogo e regras do cadastro.** Puro, sem DOM: que dados existem, como reconhecer cada um pelo rótulo, em que formato escrever. |
+| `cadastro-preenchimento.js` | Mundo isolado, portais | Varre o formulário, acha o rótulo de cada campo e escreve. |
+| `cadastro.html` / `cadastro.js` | Aba da extensão | Onde o fornecedor digita os dados uma vez. O formulário é montado a partir do catálogo. |
 
 ### Por que a chamada ao backend sai do Service Worker
 
@@ -137,3 +148,74 @@ mesma renomeação da tabela acima; o que ele espera do resto é:
 
 E o `manifest.json` volta a declarar o bloco de `content_scripts` para
 `*.gov.br` com `content.js`.
+
+
+## O preenchimento do cadastro
+
+O fornecedor abre **Meus dados de fornecedor** no painel lateral, digita CNPJ,
+endereço, contato, representante e conta bancária, e salva. A partir daí, ao
+abrir o cadastro de qualquer plataforma da lista do manifesto, a extensão
+reconhece os campos e escreve.
+
+### Três coisas que ela nunca faz
+
+| Nunca | Por quê |
+| --- | --- |
+| Inventa valor | Cadastro de fornecedor é declaração com efeito legal. Campo sem dado guardado fica **em branco** e aparece na lista "sem dado guardado" do painel da página. Select cuja opção não corresponde ao que foi guardado não é escolhido — a segunda melhor opção num select de bancos é a conta de outra pessoa. |
+| Envia o formulário | Não clica em Salvar, Continuar ou Enviar. Conferir e assinar é do fornecedor. |
+| Toca em senha, arquivo ou captcha | `TIPOS_IGNORADOS`, em `cadastro-preenchimento.js`. |
+
+### Onde os dados ficam
+
+Em `chrome.storage.local`, chave `hz_cadastro_perfil` — só neste navegador.
+**Não vão para o backend do HORASIS**, e por isso não há nada a sincronizar
+entre contas: para levar o perfil a outro computador existem os botões
+*Exportar JSON* e *Importar JSON*. O arquivo exportado leva CPF, PIS e conta
+bancária dentro; é documento, não configuração.
+
+Pelo mesmo motivo **nenhum dado pessoal está commitado aqui**. O repositório
+vira `public/extensao-horasis.zip`, que qualquer usuário da plataforma baixa —
+um perfil de exemplo com CPF real viajaria junto. Quem já tem os dados prontos
+importa o JSON.
+
+### Como um campo é reconhecido
+
+Em ordem, até achar: `<label for>`, `<label>` em volta, `aria-label`,
+`aria-labelledby`, e então proximidade — rótulo irmão, célula anterior da
+tabela, texto solto antes do campo. O que sai dali vai para
+`reconhecerCampo()`, que pontua contra o catálogo. Três regras merecem nota:
+
+- **Especificidade vence ordem.** "Nome fantasia" e "Nome" casam os dois com o
+  mesmo rótulo; ganha o padrão que exige mais letras. Sem isso, acrescentar um
+  campo ao catálogo mudaria em silêncio o destino de outro.
+- **A seção desempata.** "Cidade" no endereço e "Cidade" na agência são o mesmo
+  rótulo; o título da seção em volta decide. O mesmo separa o "Nome" do
+  contato do "Nome" do representante.
+- **Cada rótulo serve a um campo só.** A caixinha do dígito verificador fica na
+  mesma linha da agência e não tem rótulo próprio — sem essa regra ela herdaria
+  o rótulo do vizinho e receberia o número da agência inteiro. O que não tem
+  rótulo e vem logo depois da agência ou da conta é o dígito dela; o mesmo vale
+  para o "Isento" ao lado da inscrição estadual.
+
+### Por que roda em todo `*.gov.br`
+
+São 27 estados, cada um com seu portal, e nenhum padrão de domínio entre eles.
+`*.gov.br` já estava no manifesto por causa da sonda do robô de lances, então
+cobrir os portais estaduais não pede permissão nova. Os portais privados
+(Licitanet, BLL, BNC, Portal de Compras Públicas, Licitar Digital, BBMNet e
+outros) estão listados um a um.
+
+Para não pesar nas páginas que não são cadastro, a varredura automática só
+acontece em página com pelo menos 6 campos de formulário, e o painel só sobe
+quando 4 campos do catálogo foram reconhecidos — um formulário de busca de
+licitação também tem CNPJ. Plataforma fora da lista se resolve pelo botão
+**Preencher esta página agora**, que injeta o preenchedor na aba aberta.
+
+### O que é testado
+
+`tests/cadastroCampos.test.ts` exercita o catálogo puro (reconhecimento,
+formatação, escolha de opção). `tests/cadastroPreenchimento.test.ts` monta em
+jsdom um formulário com a estrutura dos portais reais — rótulo em `<label
+for>`, layout em tabela, passo escondido do assistente, dígito sem rótulo — e
+confere o que foi escrito. Os dois carregam os arquivos da extensão num escopo
+isolado, com `new Function`, porque content script clássico não tem `export`.

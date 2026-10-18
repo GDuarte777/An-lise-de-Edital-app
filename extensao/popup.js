@@ -157,6 +157,79 @@ async function ativarMotor(tabId, arquivo) {
   }
 }
 
+// ─── Cadastro de fornecedor ────────────────────────────────────────────
+// Esta parte não fala com o backend: o perfil vive no storage do navegador e
+// quem escreve na página é o content script. Por isso ela funciona antes de
+// existir App ID e Token — um fornecedor pode instalar a extensão só para o
+// cadastro.
+
+async function resumoDoCadastro() {
+  const dados = await chrome.storage.local.get(['hz_cadastro_perfil']);
+  const perfil = dados.hz_cadastro_perfil;
+  const quantos = perfil ? Object.keys(perfil).length : 0;
+  elemento('cadastroResumo').textContent = quantos
+    ? quantos + ' campos guardados neste navegador.'
+    : 'Nenhum dado guardado ainda.';
+}
+
+elemento('abrirCadastro').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('cadastro.html') });
+});
+
+/** Pergunta ao preenchedor se ele já está nesta aba. */
+function pingarCadastro(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { action: 'horasis_cadastro_status' }, (resposta) => {
+      resolve(chrome.runtime.lastError ? null : resposta);
+    });
+  });
+}
+
+// Preencher à mão serve para dois casos: a plataforma não está na lista do
+// manifesto (são dezenas, e cada estado tem a sua), ou o formulário só
+// apareceu depois de um passo que a varredura automática não viu.
+elemento('preencherAgora').addEventListener('click', async () => {
+  const aba = await abaAtiva();
+  if (!aba || !/^https?:/.test(aba.url || '')) {
+    mostrarStatus('err', 'Abra a página do cadastro antes de usar este botão.', 'statusCadastro');
+    return;
+  }
+
+  mostrarStatus('ok', 'Procurando os campos…', 'statusCadastro');
+
+  if (!(await pingarCadastro(aba.id))) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: aba.id },
+        files: ['cadastro-campos.js', 'cadastro-preenchimento.js'],
+      });
+    } catch (erro) {
+      mostrarStatus('err', 'Não foi possível ler esta página: ' + (erro.message || String(erro)), 'statusCadastro');
+      return;
+    }
+  }
+
+  chrome.tabs.sendMessage(aba.id, { action: 'horasis_cadastro_preencher' }, (resposta) => {
+    if (chrome.runtime.lastError || !resposta) {
+      mostrarStatus('err', 'A página não respondeu. Recarregue (F5) e tente de novo.', 'statusCadastro');
+      return;
+    }
+    if (resposta.semPerfil) {
+      mostrarStatus('err', 'Nenhum dado guardado ainda — abra "Meus dados de fornecedor".', 'statusCadastro');
+      return;
+    }
+    const faltando = resposta.semDado ? ' · ' + resposta.semDado + ' sem dado guardado' : '';
+    mostrarStatus(
+      resposta.preenchidos ? 'ok' : 'err',
+      resposta.preenchidos
+        ? resposta.preenchidos + ' campos preenchidos' + faltando + '. Confira antes de enviar.'
+        : 'Nenhum campo reconhecido nesta página.',
+      'statusCadastro',
+    );
+    resumoDoCadastro();
+  });
+});
+
 // ─── Configuração do robô ──────────────────────────────────────────────
 // Ela é editada aqui, e não numa tela da plataforma: quem opera o pregão está
 // no navegador, com o portal aberto, e mandá-lo a outro lugar para mudar o
@@ -217,4 +290,5 @@ elemento('salvarRobo').addEventListener('click', async () => {
   if (dados.hz_token) elemento('token').value = dados.hz_token;
   if (dados.hz_api_base) elemento('apiBase').value = dados.hz_api_base;
   if (dados.hz_app_id && dados.hz_token) carregarPerfil();
+  resumoDoCadastro();
 })();

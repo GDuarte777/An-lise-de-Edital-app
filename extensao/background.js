@@ -139,6 +139,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true; // canal aberto para a resposta assíncrona do storage
     }
 
+    // ─── Painel de dados do cadastro de fornecedor ──────────────────────
+    // Abre numa aba, e não no painel lateral: são quase cinquenta campos, e
+    // digitá-los numa coluna de 320px seria pior que preencher no portal.
+    // `chrome.tabs.create` precisa rodar aqui porque o content script não
+    // alcança a API de abas.
+    if (request.action === 'horasis_cadastro_abrir_painel') {
+      chrome.tabs.create({ url: chrome.runtime.getURL('cadastro.html') });
+      sendResponse({ ok: true });
+      return false;
+    }
+
     // ─── Chamada ao assistente de lances ────────────────────────────────
     // O motor manda apenas `payload`: as credenciais e o endereço saem do
     // storage aqui dentro, então um content script comprometido pela página
