@@ -271,8 +271,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       } else {
         setAviso({
           titulo: "Nenhuma disputa ao vivo",
-          texto: "Não encontrei disputa sua em fase de lances. Se você já está numa, informe abaixo.",
-          comCampoDireto: true
+          texto: "Nenhuma disputa sua está em fase de lances agora."
         });
       }
       if (!s.autenticado) setErro(`Ainda não há sessão do gov.br. ${s.evidencia}`);
@@ -392,8 +391,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
         anotar("sistema", `Painel: nenhuma disputa em fase de lances (${lista.length} na lista).`);
         setAviso({
           titulo: "Nenhuma disputa ao vivo",
-          texto: "Não encontrei disputa sua em fase de lances. Se você já está numa, informe abaixo.",
-          comCampoDireto: true
+          texto: "Nenhuma disputa sua está em fase de lances agora."
         });
         return;
       }
@@ -411,8 +409,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       anotar("alerta", `Painel: ${detalhe}`);
       setAviso({
         titulo: "Nenhuma disputa ao vivo",
-        texto: "Não encontrei disputa sua em fase de lances. Se você já está numa, informe abaixo.",
-        comCampoDireto: true
+        texto: "Nenhuma disputa sua está em fase de lances agora."
       });
     } finally {
       setAbrindoPainel(false);

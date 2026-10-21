@@ -245,6 +245,23 @@ function fundir(...listas: Disputa[][]): Disputa[] {
   );
 }
 
+export interface BalancoDaBusca {
+  /** Quantas disputas vieram pela API oficial do portal. */
+  api: number;
+  /** Quantas vieram da leitura das páginas do fornecedor. */
+  tela: number;
+  /** Quantas vieram do endpoint aprendido observando o portal. */
+  aprendida: number;
+  motivoApi: string | null;
+  em: string;
+}
+
+let ultimoBalanco: BalancoDaBusca | null = null;
+
+export function balancoDaUltimaBusca(): BalancoDaBusca | null {
+  return ultimoBalanco;
+}
+
 export async function listarDisputas(
   sessao: Session,
   descobridor: DescobridorApi,
@@ -267,6 +284,17 @@ export async function listarDisputas(
   ]);
 
   const disputas = fundir(oficial.disputas, tela, api);
+
+  // Deixa registrado o que cada caminho trouxe. Sem isto, "lista vazia" não diz se o
+  // problema foi sessão, captcha ou leitura de página — e foi essa cegueira que fez o
+  // operador instalar e testar repetidas vezes para eu descobrir o óbvio.
+  ultimoBalanco = {
+    api: oficial.disputas.length,
+    tela: tela.length,
+    aprendida: api.length,
+    motivoApi: oficial.motivo,
+    em: new Date().toISOString()
+  };
   if (disputas.length === 0) {
     throw new Error(
       oficial.motivo

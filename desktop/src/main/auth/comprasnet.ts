@@ -607,10 +607,13 @@ export async function abrirLogin(
   aoAbrirJanela?.(janela.id);
   aoProgresso?.("login");
 
-  // Entrada única: a porta do portal, que redireciona ao gov.br com um identificador
-  // recém-emitido. É o passo 1 do caminho que o próprio operador mapeou.
+  /*
+   * A porta vem do portal, não de mim. Se a descoberta falhar (portal fora do ar,
+   * tela remarcada), cai na entrada conhecida — melhor uma tela a mais que nenhuma.
+   */
+  const porta = (await descobrirPortaDeLogin().catch(() => null)) ?? URL_LOGIN_LEGADO;
   try {
-    await janela.loadURL(URL_LOGIN_LEGADO);
+    await janela.loadURL(porta);
   } catch {
     // A janela mostra o erro de rede do Chromium; o laço abaixo segue esperando.
   }
@@ -694,6 +697,74 @@ const SCRIPT_CLICAR_ENTRAR = `
   if (!alvo) return false;
   alvo.click();
   return true;
+})()`;
+
+/**
+ * Descobre a porta de entrada do aplicativo novo perguntando ao próprio portal.
+ *
+ * Dez versões foram gastas adivinhando esse endereço — e cada chute virou 404, tela
+ * branca ou "acesso não autorizado" na cara do operador. O portal, porém, diz onde fica:
+ * ao abrir uma rota protegida sem sessão, ele desenha a tela "Acesso não autorizado"
+ * COM o botão **Efetuar Login**. Esse botão sabe o caminho.
+ *
+ * Então: numa janela OCULTA, abre-se a rota protegida, lê-se o endereço do botão — e,
+ * se ele for um botão de aplicativo (sem href), clica-se nele ali mesmo, no escuro, só
+ * para ver para onde o portal leva. O endereço resultante é a porta de verdade, e é ela
+ * que a janela do operador abre. Ele não vê nada disso: vê a tela de CPF e senha.
+ */
+export async function descobrirPortaDeLogin(): Promise<string | null> {
+  const janela = new BrowserWindow({
+    show: false,
+    width: 1200,
+    height: 800,
+    webPreferences: { partition: PARTITION, nodeIntegration: false, contextIsolation: true, sandbox: true }
+  });
+
+  try {
+    try {
+      await janela.loadURL(URL_ENTRADA_LOGIN);
+    } catch {
+      return null;
+    }
+    await new Promise((r) => setTimeout(r, 1_200));
+    if (janela.isDestroyed()) return null;
+
+    // 1) O botão tem endereço? Então ele já é a resposta.
+    const href = (await janela.webContents
+      .executeJavaScript(SCRIPT_ENDERECO_DO_BOTAO, true)
+      .catch(() => null)) as string | null;
+    if (typeof href === "string" && /^https?:\/\//i.test(href)) return href;
+
+    // 2) Não tem: clica no escuro e vê onde o portal para.
+    const antes = janela.webContents.getURL();
+    const clicou = (await janela.webContents
+      .executeJavaScript(SCRIPT_CLICAR_ENTRAR, true)
+      .catch(() => false)) as boolean;
+    if (!clicou) return null;
+
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 400));
+      if (janela.isDestroyed()) return null;
+      const agora = janela.webContents.getURL();
+      // Parou no gov.br? É a porta. Parou em qualquer outro lugar novo e estável também.
+      if (agora !== antes && /sso\.acesso\.gov\.br|gov\.br\/login/i.test(agora)) return agora;
+      if (agora !== antes && !janela.webContents.isLoading()) return agora;
+    }
+    return null;
+  } finally {
+    if (!janela.isDestroyed()) janela.destroy();
+  }
+}
+
+/** O endereço que o botão "Efetuar Login" carrega, quando ele é um link de verdade. */
+const SCRIPT_ENDERECO_DO_BOTAO = `
+(() => {
+  const links = Array.from(document.querySelectorAll("a[href]"));
+  const alvo = links.find((a) => {
+    const t = ((a.innerText || a.textContent || "") + "").trim();
+    return t && t.length <= 40 && /(efetuar|fazer)?\\s*login|^entrar$|acessar/i.test(t);
+  });
+  return alvo ? alvo.href : null;
 })()`;
 
 /**
