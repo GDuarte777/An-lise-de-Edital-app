@@ -149,7 +149,13 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [abrindoPainel, setAbrindoPainel] = useState(false);
   const [etapaAcesso, setEtapaAcesso] = useState<"abrindo" | "login" | "concluindo" | null>(null);
   const [disputaDireta, setDisputaDireta] = useState("");
-  const [aviso, setAviso] = useState<{ titulo: string; texto: string; escolhas?: Disputa[] } | null>(null);
+  const [aviso, setAviso] = useState<{
+    titulo: string;
+    texto: string;
+    escolhas?: Disputa[];
+    /** Mostra, no próprio aviso, o campo para informar a disputa à mão. */
+    comCampoDireto?: boolean;
+  } | null>(null);
 
   /** Detalhe técnico vai para o log de auditoria, não para o aviso do operador. */
   const anotar = useCallback((nivel: Log["nivel"], msg: string) => {
@@ -265,7 +271,8 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       } else {
         setAviso({
           titulo: "Nenhuma disputa ao vivo",
-          texto: "Nenhuma disputa sua está em fase de lances agora."
+          texto: "Não encontrei disputa sua em fase de lances. Se você já está numa, informe abaixo.",
+          comCampoDireto: true
         });
       }
       if (!s.autenticado) setErro(`Ainda não há sessão do gov.br. ${s.evidencia}`);
@@ -385,7 +392,8 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
         anotar("sistema", `Painel: nenhuma disputa em fase de lances (${lista.length} na lista).`);
         setAviso({
           titulo: "Nenhuma disputa ao vivo",
-          texto: "Nenhuma disputa sua está em fase de lances agora."
+          texto: "Não encontrei disputa sua em fase de lances. Se você já está numa, informe abaixo.",
+          comCampoDireto: true
         });
         return;
       }
@@ -403,7 +411,8 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
       anotar("alerta", `Painel: ${detalhe}`);
       setAviso({
         titulo: "Nenhuma disputa ao vivo",
-        texto: "Nenhuma disputa sua está em fase de lances agora."
+        texto: "Não encontrei disputa sua em fase de lances. Se você já está numa, informe abaixo.",
+        comCampoDireto: true
       });
     } finally {
       setAbrindoPainel(false);
@@ -415,6 +424,14 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   useEffect(() => {
     return api().comprasnet.aoProgresso((etapa) => setEtapaAcesso(etapa));
   }, []);
+
+  // Teto para a espera. Um "carregando" que passa de meio minuto é um aplicativo
+  // travado aos olhos de quem espera — e foi assim que ele apareceu na tela do operador.
+  useEffect(() => {
+    if (!etapaAcesso) return;
+    const t = setTimeout(() => setEtapaAcesso(null), 20_000);
+    return () => clearTimeout(t);
+  }, [etapaAcesso]);
 
   // O painel pode parar sozinho — sala fechada pelo operador é o caso normal. Quando
   // isso acontece a tela volta para o cockpit e diz o motivo, em vez de congelar.
@@ -464,6 +481,31 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
           <div className="modal" onClick={(ev) => ev.stopPropagation()}>
             <h3 className="modal-titulo">{aviso.titulo}</h3>
             <p className="muted" style={{ fontSize: 13 }}>{aviso.texto}</p>
+            {aviso.comCampoDireto && (
+              <div className="field">
+                <label htmlFor="aviso-disputa">Nº da compra ou endereço da sala</label>
+                <div className="row tight">
+                  <input
+                    id="aviso-disputa"
+                    className="input"
+                    autoFocus
+                    placeholder="90012/2026  ou  https://cnetmobile…/disputa?compra=…"
+                    value={disputaDireta}
+                    onChange={(ev) => setDisputaDireta(ev.target.value)}
+                    onKeyDown={(ev) => {
+                      if (ev.key === "Enter" && disputaDireta.trim()) void abrirPainelDireto();
+                    }}
+                  />
+                  <button
+                    className="btn primary"
+                    disabled={!disputaDireta.trim() || abrindoPainel}
+                    onClick={() => void abrirPainelDireto()}
+                  >
+                    Abrir
+                  </button>
+                </div>
+              </div>
+            )}
             {aviso.escolhas && (
               <div className="list" style={{ maxHeight: 260 }}>
                 {aviso.escolhas.map((d) => (

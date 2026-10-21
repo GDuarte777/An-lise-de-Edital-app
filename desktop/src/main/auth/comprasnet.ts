@@ -405,7 +405,9 @@ async function sondarAte(janela: BrowserWindow, url: string): Promise<TentativaS
  * sessão" a partir de uma única tentativa foi exatamente o que aconteceu com o operador
  * logado na frente da tela.
  */
-export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
+export async function diagnosticarSessao(
+  opcoes: { rapido?: boolean } = {}
+): Promise<DiagnosticoSessao> {
   const cookies = await contarCookiesDeSessao();
   const registro = registroEnderecos();
   await registro.carregar();
@@ -427,9 +429,11 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
   // requisição passou ainda, abre a base do portal e deixa ele falar — é assim que o
   // token aparece, sem adivinhar rota nem interpretar HTML.
   if (!coletor.tokenAtual()) {
-    // Pede o token à API com os cookies do login (caminho do SIGA). Só se não vier é que
-    // se abre uma página do portal para ele aparecer.
-    if (!(await obterTokenPelaApi())) await aquecerToken(janela, registro);
+    // Pede o token à API com os cookies do login (caminho do SIGA). Abrir página para
+    // ele aparecer é lento, então fica fora do modo rápido — que é o usado logo depois
+    // do login, quando o operador está esperando a tela voltar.
+    const veio = await obterTokenPelaApi();
+    if (!veio && !opcoes.rapido) await aquecerToken(janela, registro);
   }
 
   // Agora a pergunta direta, já com o cabeçalho de sessão. Se o portal disser que há
@@ -458,7 +462,7 @@ export async function diagnosticarSessao(): Promise<DiagnosticoSessao> {
 
   const tentativas: TentativaSessao[] = [];
   try {
-    for (const url of registro.paraVerificar()) {
+    for (const url of opcoes.rapido ? [] : registro.paraVerificar()) {
       try {
         const t = await sondarAte(janela, url);
         tentativas.push(t);
@@ -536,9 +540,12 @@ async function aquecerToken(janela: BrowserWindow, registro: RegistroEnderecos):
   if (!janela.isDestroyed()) await colherTokenDaJanela(janela.webContents);
 }
 
-export async function verificarSessao(forcar = false): Promise<StatusSessao> {
+export async function verificarSessao(
+  forcar = false,
+  opcoes: { rapido?: boolean } = {}
+): Promise<StatusSessao> {
   if (!forcar && cache && Date.now() - cache.em < VALIDADE_CACHE_MS) return cache.status;
-  return (await diagnosticarSessao()).status;
+  return (await diagnosticarSessao(opcoes)).status;
 }
 
 /* ------------------------------------------------------------------ login */
@@ -620,9 +627,13 @@ export async function abrirLogin(
       resolvido = true;
       clearInterval(timer);
       aoProgresso?.("concluindo");
-      // A sessão do portal novo (a que o robô usa) é buscada agora, sem janela visível.
-      await colherTokenEmSegundoPlano().catch(() => false);
-      resolve(await verificarSessao(true));
+      /*
+       * Resolver rápido é parte do pedido: a janela fechou, o operador quer a tela de
+       * volta. A sessão do portal novo continua sendo buscada em janela oculta, SEM
+       * segurar a resposta — era isso que fazia o "carregando" durar minutos.
+       */
+      void colherTokenEmSegundoPlano().catch(() => false);
+      resolve(await verificarSessao(true, { rapido: true }));
     };
 
     const vivas = () => janelas.filter((j) => !j.isDestroyed());
@@ -740,13 +751,21 @@ export async function obterTokenPelaApi(): Promise<boolean> {
   if (coletor.tokenAtual()) return true;
   trilhaDeToken = [];
 
+  /*
+   * TODAS as rotas de uma vez, não uma de cada vez.
+   *
+   * Em série, com 12 segundos de paciência cada, as onze tentativas somavam mais de dois
+   * minutos — e o operador ficou olhando um "carregando" que não terminava. Elas não
+   * dependem umas das outras: vão juntas, com paciência curta, e a primeira que trouxer
+   * token encerra o assunto.
+   */
   const base = "https://cnetmobile.estaleiro.serpro.gov.br";
-  for (const rota of ROTAS_DE_TOKEN) {
-    for (const metodo of rota.metodos) {
+  const tentativas = ROTAS_DE_TOKEN.flatMap((rota) =>
+    rota.metodos.map(async (metodo) => {
       const url = `${base}${rota.caminho}`;
-      const resposta = await pedirAoPortal(url, metodo);
+      const resposta = await pedirAoPortal(url, metodo, 4_000);
       trilhaDeToken.push({ rota: rota.caminho, metodo, status: resposta?.status ?? 0 });
-      if (!resposta) continue;
+      if (!resposta) return false;
 
       // O token pode vir no cabeçalho (é como o portal devolve na renovação) ou no corpo.
       const doCabecalho = resposta.autorizacao;
@@ -761,11 +780,14 @@ export async function obterTokenPelaApi(): Promise<boolean> {
           return true;
         }
       } catch {
-        // resposta não era JSON; tenta a próxima rota
+        // resposta não era JSON
       }
-    }
-  }
-  return false;
+      return false;
+    })
+  );
+
+  const resultados = await Promise.all(tentativas);
+  return resultados.some(Boolean) || coletor.tokenAtual() !== null;
 }
 
 interface RespostaCrua {
@@ -774,11 +796,11 @@ interface RespostaCrua {
   autorizacao?: string;
 }
 
-function pedirAoPortal(url: string, metodo: "GET" | "POST"): Promise<RespostaCrua | null> {
+function pedirAoPortal(url: string, metodo: "GET" | "POST", limiteMs = 12_000): Promise<RespostaCrua | null> {
   return new Promise((resolve) => {
     let respondido = false;
     const responder = (r: RespostaCrua | null) => { if (!respondido) { respondido = true; resolve(r); } };
-    const desistir = setTimeout(() => responder(null), 12_000);
+    const desistir = setTimeout(() => responder(null), limiteMs);
 
     try {
       const req = net.request({ method: metodo, url, session: sessaoComprasnet(), useSessionCookies: true });
