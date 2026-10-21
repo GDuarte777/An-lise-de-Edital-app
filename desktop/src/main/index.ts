@@ -25,6 +25,7 @@ import { MotorLances, type ConfiguracaoRobo, type EntradaLog, type EstadoRobo } 
 import { GerenciadorSalas, SalaDisputaAdapter } from "./engine/sala.js";
 import { FonteSalaViva } from "./painel/fonte-sala.js";
 import { criarAbrirSocketEmJanela } from "./integracao/socket-janela.js";
+import { VigiaDeDisputas, type DisputaNaTela } from "./painel/vigia.js";
 import type { ConfigItem } from "../compartilhado/painel.js";
 import { SimulacaoAdapter } from "./engine/simulation.js";
 import type { PortalAdapter, ReferenciaItem } from "./engine/portal.js";
@@ -37,6 +38,30 @@ let descobridor: DescobridorApi | null = null;
 let salas: GerenciadorSalas | null = null;
 let guardiao: GuardiaoSessao | null = null;
 let painel: FonteSalaViva | null = null;
+let vigia: VigiaDeDisputas | null = null;
+
+/**
+ * Vigia das janelas do portal.
+ *
+ * O aplicativo deixou de tentar entrar no Compras.gov.br por conta própria: o operador
+ * navega como já faz, e o robô acompanha a janela dele. Quando aparece uma sala de
+ * disputa com itens, a interface é avisada e o painel abre em cima dela — sem ninguém
+ * digitar número de compra nem endereço.
+ */
+function obterVigia(): VigiaDeDisputas {
+  if (!vigia) {
+    vigia = new VigiaDeDisputas({
+      partition: partitionComprasnet(),
+      preparar: (janela) => obterSalas().adotar(janela, ""),
+      aoDetectar: (disputa: DisputaNaTela) => {
+        registrar("sucesso", `Disputa detectada na janela do portal: ${disputa.titulo || disputa.compra}.`);
+        emitir("painel:disponivel", disputa);
+      }
+    });
+    vigia.iniciar();
+  }
+  return vigia;
+}
 
 const auth = new AutenticacaoPlataforma(
   SUPABASE_URL,
@@ -146,6 +171,7 @@ ipcMain.handle("comprasnet:entrar", async () => {
   obterSalas();
   // Liga também o observador de DOM nesta janela: o operador costuma continuar
   // navegando pelo portal aqui mesmo depois de logar.
+  obterVigia();
   const status = await abrirLogin(janelaPrincipal?.id, ligarObservador, (etapa) =>
     emitir("comprasnet:progresso", etapa)
   );
@@ -200,6 +226,7 @@ ipcMain.handle("comprasnet:abrirSala", async (_e, pregaoId?: string) => {
 });
 ipcMain.handle("comprasnet:abrirPainel", async () => {
   obterDescobridor();
+  obterVigia();
   const id = await abrirPainelDisputas();
   ligarObservador(id);
   return id;
@@ -345,9 +372,40 @@ ipcMain.handle("painel:iniciar", async (_e, pregaoId?: string) => {
   return painel.iniciar();
 });
 
+/**
+ * Abre o painel SOBRE uma janela do portal que já está aberta — a que o vigia detectou.
+ * Não abre sala nenhuma, não navega: só lê e opera onde o operador já está.
+ */
+ipcMain.handle("painel:acompanhar", async (_e, idJanela: number) => {
+  const janela = BrowserWindow.fromId(idJanela);
+  if (!janela || janela.isDestroyed()) throw new Error("A janela da disputa não está mais aberta.");
+
+  await obterSalas().adotar(janela, "");
+  painel?.encerrar();
+  painel = new FonteSalaViva({
+    garantirSala: async () => {
+      const viva = BrowserWindow.fromId(idJanela);
+      if (!viva || viva.isDestroyed()) throw new Error("A janela da disputa foi fechada.");
+      return viva.webContents;
+    },
+    obterConteudo: () => {
+      const viva = BrowserWindow.fromId(idJanela);
+      return viva && !viva.isDestroyed() ? viva.webContents : null;
+    },
+    aoEstado: (estado) => emitir("painel:estado", estado),
+    aoEncerrar: (motivo) => {
+      painel = null;
+      vigia?.reiniciarAvisos();
+      emitir("painel:encerrado", motivo);
+    }
+  });
+  return painel.iniciar();
+});
+
 ipcMain.handle("painel:encerrar", async () => {
   painel?.encerrar();
   painel = null;
+  vigia?.reiniciarAvisos();
   return { encerrado: true };
 });
 

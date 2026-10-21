@@ -170,6 +170,10 @@ export interface ApiLanceBot {
    */
   painel: {
     iniciar(pregaoId?: string): Promise<EstadoPainel>;
+    /** Abre o painel sobre uma janela do portal já aberta (a que o vigia detectou). */
+    acompanhar(idJanela: number): Promise<EstadoPainel>;
+    /** Avisa que há disputa numa janela do portal aberta pelo operador. */
+    aoDetectar(cb: (d: { idJanela: number; compra: string; titulo: string; itens: number; abertos: number }) => void): () => void;
     encerrar(): Promise<{ encerrado: boolean }>;
     estado(): Promise<EstadoPainel>;
     configurar(item: string, mudanca: Partial<ConfigItem>): Promise<EstadoPainel>;
@@ -229,6 +233,8 @@ const api: ApiLanceBot = {
   },
   painel: {
     iniciar: (pregaoId) => ipcRenderer.invoke("painel:iniciar", pregaoId),
+    acompanhar: (idJanela) => ipcRenderer.invoke("painel:acompanhar", idJanela),
+    aoDetectar: (cb) => assinar("painel:disponivel", cb),
     encerrar: () => ipcRenderer.invoke("painel:encerrar"),
     estado: () => ipcRenderer.invoke("painel:estado"),
     configurar: (item, mudanca) => ipcRenderer.invoke("painel:configurar", item, mudanca),

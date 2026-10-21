@@ -9,6 +9,7 @@ import type { ConfigItem, EstadoPainel, FontePainel, LinhaClassificacao } from "
 
 interface ApiPainel {
   iniciar(pregaoId?: string): Promise<EstadoPainel>;
+  acompanhar(idJanela: number): Promise<EstadoPainel>;
   encerrar(): Promise<{ encerrado: boolean }>;
   estado(): Promise<EstadoPainel>;
   configurar(item: string, mudanca: Partial<ConfigItem>): Promise<EstadoPainel>;
@@ -33,8 +34,20 @@ function api(): ApiPainel {
  * fingindo que está acompanhando a disputa.
  */
 export async function criarFonteIpc(pregaoId?: string): Promise<FontePainel> {
+  return montar((ponte) => ponte.iniciar(pregaoId));
+}
+
+/**
+ * Painel sobre a janela do portal que o operador já abriu — o caminho que não depende
+ * de o aplicativo entrar no portal sozinho.
+ */
+export async function criarFonteDaJanela(idJanela: number): Promise<FontePainel> {
+  return montar((ponte) => ponte.acompanhar(idJanela));
+}
+
+async function montar(abrir: (ponte: ApiPainel) => Promise<EstadoPainel>): Promise<FontePainel> {
   const ponte = api();
-  let atual = await ponte.iniciar(pregaoId);
+  let atual = await abrir(ponte);
   const ouvintes = new Set<(e: EstadoPainel) => void>();
 
   const cancelarPush = ponte.aoEstado((estado) => {

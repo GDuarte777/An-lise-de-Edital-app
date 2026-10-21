@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Painel from "./painel/Painel.js";
 import { criarDemonstracao } from "./painel/demonstracao.js";
-import { criarFonteIpc } from "./painel/fonte-ipc.js";
+import { criarFonteDaJanela, criarFonteIpc } from "./painel/fonte-ipc.js";
 import type { FontePainel } from "../compartilhado/painel.js";
 import type { ApiLanceBot, Calibracao, ConferenciaSala, Disputa, Usuario } from "../preload/index.js";
 
@@ -430,6 +430,29 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
     return () => clearTimeout(t);
   }, [etapaAcesso]);
 
+  /*
+   * Disputa detectada na janela do portal que o operador abriu.
+   *
+   * É o caminho que não depende de nada meu: ele navega como já faz todo dia, e o
+   * painel abre sozinho em cima da sala — sem informar número de compra, sem depender
+   * de o aplicativo reconhecer a sessão.
+   */
+  useEffect(() => {
+    return api().painel.aoDetectar((d) => {
+      setFontePainel((atual) => {
+        if (atual) return atual; // já tem painel aberto: não atropela
+        void criarFonteDaJanela(d.idJanela)
+          .then((fonte) => setFontePainel(fonte))
+          .catch((e: unknown) =>
+            anotar("alerta", `Painel: ${e instanceof Error ? e.message : String(e)}`)
+          );
+        return atual;
+      });
+      setAviso(null);
+      anotar("sucesso", `Disputa detectada: ${d.titulo || d.compra} · ${d.abertos} item(ns) em lances.`);
+    });
+  }, [anotar]);
+
   // O painel pode parar sozinho — sala fechada pelo operador é o caso normal. Quando
   // isso acontece a tela volta para o cockpit e diz o motivo, em vez de congelar.
   useEffect(() => {
@@ -584,7 +607,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
                 {conectado ? "Reconectar" : "Entrar no gov.br"}
               </button>
               {conectado && (
-                <button className="btn" onClick={() => void api().comprasnet.abrirPainel()}>
+                <button className="btn primary" onClick={() => void api().comprasnet.abrirPainel()}>
                   Abrir portal
                 </button>
               )}

@@ -174,7 +174,23 @@ export class GerenciadorSalas {
    * Injetado assim, o motor só expõe `window.__lancebot`: ele nasce desligado e não dá
    * lance por conta própria.
    */
-  private async injetar(janela: BrowserWindow): Promise<void> {
+  /**
+   * Adota uma janela que o OPERADOR abriu.
+   *
+   * É a saída para o impasse da sessão: em vez de o aplicativo tentar entrar no portal
+   * por conta própria, ele acompanha a janela onde o operador já está. Quem navega é
+   * ele; o robô lê a sala e opera nela.
+   */
+  async adotar(janela: BrowserWindow, pregaoId: string): Promise<void> {
+    await this.carregarSeletores();
+    await this.injetar(janela);
+    const reinjetar = () => void this.injetar(janela).catch(() => undefined);
+    janela.webContents.on("dom-ready", reinjetar);
+    janela.webContents.on("did-navigate-in-page", reinjetar);
+    this.registrar(janela, pregaoId);
+  }
+
+  async injetar(janela: BrowserWindow): Promise<void> {
     if (janela.isDestroyed()) return;
     try {
       await janela.webContents.executeJavaScript(FONTE_MOTOR_EXTENSAO, true);
