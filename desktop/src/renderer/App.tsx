@@ -149,6 +149,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
   const [abrindoPainel, setAbrindoPainel] = useState(false);
   const [etapaAcesso, setEtapaAcesso] = useState<"abrindo" | "login" | "concluindo" | null>(null);
   const [disputaDireta, setDisputaDireta] = useState("");
+  const [vigiando, setVigiando] = useState(false);
   const [aviso, setAviso] = useState<{
     titulo: string;
     texto: string;
@@ -274,7 +275,9 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
           texto: "Nenhuma disputa sua está em fase de lances agora."
         });
       }
-      if (!s.autenticado) setErro(`Ainda não há sessão do gov.br. ${s.evidencia}`);
+      // Sem sessão reconhecida não é mais impedimento: o robô opera pela janela do
+      // portal. O detalhe fica no log, não em vermelho no meio da tela.
+      if (!s.autenticado) anotar("sistema", `Sessão ainda não reconhecida pela API. ${s.evidencia}`);
       void api().calibracao.estado().then(setCalib);
     } catch (e) {
       // Sem isto, uma falha ao abrir a janela de login não deixava rastro na tela.
@@ -449,6 +452,7 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
         return atual;
       });
       setAviso(null);
+      setVigiando(false);
       anotar("sucesso", `Disputa detectada: ${d.titulo || d.compra} · ${d.abertos} item(ns) em lances.`);
     });
   }, [anotar]);
@@ -586,31 +590,42 @@ function Cockpit({ usuario, aoSair }: { usuario: Usuario; aoSair: () => void }) 
         <div className="col">
           <section className="card">
             <div className="card-head">
-              <h2 className="card-title">Compras.gov.br</h2>
-              <span className={`pill ${conectado ? "ok" : "idle"}`}>
+              <h2 className="card-title">Sua disputa</h2>
+              <span className={`pill ${vigiando ? "ok" : "idle"}`}>
                 <span className="dot" />
-                {conectado ? "sessão detectada" : "sem sessão"}
+                {vigiando ? "procurando disputa" : "parado"}
               </span>
             </div>
 
+            {/* O caminho é um só, e tem de estar escrito na tela: o operador navega, o
+                robô acompanha. Tudo que era conversa de sessão e token desceu para o
+                diagnóstico, onde serve a mim e não atrapalha quem quer trabalhar. */}
             <p className="muted">
-              O login abre a página oficial do gov.br. Sua senha não passa por este aplicativo, e certificado
-              digital funciona normalmente. <strong>A janela se fecha sozinha</strong> assim que o aplicativo
-              reconhece que você entrou — se quiser continuar navegando por ela, clique em “Manter aberta” no
-              aviso que aparece antes do fechamento.
+              Abra o portal aqui e vá até sua sala de disputa, do jeito que você já faz.
+              <strong> O painel abre sozinho</strong> assim que o robô enxergar os itens da sala — você não
+              precisa informar número de compra nem endereço.
+            </p>
+
+            <button
+              className="btn primary block"
+              onClick={() => {
+                setVigiando(true);
+                void api().comprasnet.abrirPainel();
+              }}
+            >
+              Abrir portal e ir para minha disputa
+            </button>
+
+            <p className="faint">
+              Sua senha não passa por este aplicativo, e certificado digital funciona normalmente.
             </p>
 
             {evidencia && <p className="faint">{evidencia}</p>}
 
             <div className="row tight">
-              <button className="btn" onClick={() => void conectar()}>
+              <button className="btn ghost" onClick={() => void conectar()}>
                 {conectado ? "Reconectar" : "Entrar no gov.br"}
               </button>
-              {conectado && (
-                <button className="btn primary" onClick={() => void api().comprasnet.abrirPainel()}>
-                  Abrir portal
-                </button>
-              )}
             </div>
 
             {!conectado && (

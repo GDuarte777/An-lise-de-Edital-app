@@ -422,6 +422,9 @@ ipcMain.handle("painel:classificacao", async (_e, item: string) => exigirPainel(
 app.whenReady().then(() => {
   habilitarCertificadoDigital();
   criarJanela();
+  // O vigia fica de olho desde o início: qualquer janela do portal que o operador
+  // abrir, por qualquer caminho, entra no radar sem ele pedir.
+  obterVigia();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) criarJanela();
   });
