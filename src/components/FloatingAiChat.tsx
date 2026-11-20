@@ -252,6 +252,20 @@ Posso analisar editais, validar exigências fiscais contra suas certidões atuai
     return () => window.removeEventListener(EVENTO_CHAT_DISPUTA, handleAbrirChatDisputa);
   }, []);
 
+  // Permite abrir o Assessor IA com 1 clique a partir do cabeçalho ou da Análise de Edital
+  useEffect(() => {
+    const handleOpenAiChat = (e: any) => {
+      const targetEditalId = e?.detail?.editalId;
+      if (targetEditalId) {
+        setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, selectedEditalId: targetEditalId } : s));
+      }
+      setIsOpen(true);
+      setShowSidebarMobile(false);
+    };
+    window.addEventListener("aip_open_ai_chat", handleOpenAiChat);
+    return () => window.removeEventListener("aip_open_ai_chat", handleOpenAiChat);
+  }, [activeSessionId]);
+
   // Click outside to close the custom selector dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -934,7 +948,10 @@ PARECER E ESTRATÉGIA:
     }
 
     try {
-      const selectedEditalObj = activeSession.selectedEditalId ? getSelectedEditalObject(activeSession.selectedEditalId) : null;
+      const rawEditalObj = activeSession.selectedEditalId ? getSelectedEditalObject(activeSession.selectedEditalId) : null;
+      const selectedEditalObj = rawEditalObj && (rawEditalObj.reportMarkdown || rawEditalObj.descricaoProduto)
+        ? { ...rawEditalObj, rawText: undefined }
+        : rawEditalObj;
       let replyText = "";
 
       /**

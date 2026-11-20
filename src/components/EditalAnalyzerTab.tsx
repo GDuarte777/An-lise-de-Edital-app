@@ -1,12 +1,15 @@
 import { useState, useEffect } from "react";
 import { normalizarCodigoUasg, extrairCodigoUasg } from "../utils/identificacaoEdital";
+import { parseNumeroControlePNCP, PNCP_MODALIDADES } from "../utils/pncpQuery";
+import { buscarPacoteOficialPncp, type PacoteOficialPncp } from "../utils/pncpClient";
+import { resolverCapagPorOrgaoOuLocal, obterEstiloNotaCapag } from "../utils/capagData";
 import { EditalAnalysis, CompanyData, SyncItem, Certificate } from "../types";
 import { 
   FileUp, FileText, CheckCircle2, AlertTriangle, Clock, ArrowRight, Loader2, Play, 
   Sparkles, RefreshCw, ChevronRight, FileCode, CheckSquare, Edit3, Settings, ClipboardPaste, 
   Coins, HelpCircle, HardDriveDownload, MonitorCheck, Save, Send, Database, FileSpreadsheet, Eye,
   Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge, Plus, X,
-  LayoutGrid, List, Search, Check, Calendar, ExternalLink, Globe, Building2
+  LayoutGrid, List, Search, Check, Calendar, ExternalLink, Globe, Building2, MessageSquare, Calculator
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -307,6 +310,10 @@ interface EditalAnalyzerTabProps {
   setActiveEdital: (analysis: EditalAnalysis | null) => void;
   onOpenDocPreview: (title: string, markdown: string, type: "proposal" | "declaration") => void;
   onNavigateToCreateDoc?: (templateId?: string) => void;
+  onNavigateToDisputas?: () => void;
+  onNavigateToHabilitacao?: () => void;
+  onNavigateToCalculator?: () => void;
+  onNavigateToCapag?: (focus: { uf?: string; municipio?: string; orgao?: string }) => void;
 }
 
 interface AttachedFile {
@@ -317,13 +324,24 @@ interface AttachedFile {
   base64: string;
 }
 
-export default function EditalAnalyzerTab({ companyData, activeEdital, setActiveEdital, onOpenDocPreview, onNavigateToCreateDoc }: EditalAnalyzerTabProps) {
+export default function EditalAnalyzerTab({
+  companyData,
+  activeEdital,
+  setActiveEdital,
+  onOpenDocPreview,
+  onNavigateToCreateDoc,
+  onNavigateToDisputas,
+  onNavigateToHabilitacao,
+  onNavigateToCalculator,
+  onNavigateToCapag,
+}: EditalAnalyzerTabProps) {
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   // Número de controle PNCP da contratação, quando a análise vem do Radar.
   // Permite ao servidor sobrepor os campos factuais com o dado oficial.
   const [pncpNumeroControle, setPncpNumeroControle] = useState<string>("");
+  const [pncpDirectInput, setPncpDirectInput] = useState<string>("");
 
   // File size error popup modal state (>60MB)
   const [fileSizeErrorModal, setFileSizeErrorModal] = useState<{
@@ -820,8 +838,8 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
   // Document generation processing states
   const [generatingDoc, setGeneratingDoc] = useState<string | null>(null);
 
-  // Sub-tabs for edital analysis view
-  const [analysisActiveTab, setAnalysisActiveTab] = useState<"report" | "struc" | "checklist">("report");
+  // Sub-tabs for edital analysis view (apenas Dossiê e Checklist)
+  const [analysisActiveTab, setAnalysisActiveTab] = useState<"struc" | "checklist">("struc");
 
   // Histórico de Editais — vem do store compartilhado, a mesma lista que todas
   // as outras ferramentas enxergam.
@@ -837,10 +855,13 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
       // factuais com o dado publicado pelo órgão.
       const pendente = (window as any).__aipPendingEdital;
 
-      if (extText || pendente?.file) {
+      if (extText || pendente?.file || pendente?.numeroControlePNCP) {
         setTextInput(extText || "");
         setAttachedFiles(pendente?.file ? [pendente.file] : []);
         setPncpNumeroControle(pendente?.numeroControlePNCP || "");
+        if (pendente?.numeroControlePNCP) {
+          setPncpDirectInput(pendente.numeroControlePNCP);
+        }
         localStorage.removeItem("aip_auto_analyze_text");
         delete (window as any).__aipPendingEdital;
 
@@ -964,9 +985,15 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     setAttachedFiles(prev => prev.filter(f => f.id !== id));
   };
 
-  const handleAnalyze = async () => {
-    if (!textInput.trim() && attachedFiles.length === 0) {
-      alert("Por favor, cole o texto do edital ou faça upload de um ou mais arquivos anexos primeiro.");
+  const handleAnalyze = async (overridePncpRef?: string) => {
+    const pncpCandidate = (overridePncpRef ?? pncpDirectInput ?? pncpNumeroControle ?? "").trim();
+    const parsedFromDirect = parseNumeroControlePNCP(pncpCandidate || textInput);
+    const resolvedPncpControl = parsedFromDirect
+      ? `${parsedFromDirect.cnpj}-1-${String(parsedFromDirect.sequencial).padStart(6, "0")}/${parsedFromDirect.ano}`
+      : pncpNumeroControle.trim();
+
+    if (!textInput.trim() && attachedFiles.length === 0 && !resolvedPncpControl) {
+      alert("Por favor, faça upload do PDF, cole o link/ID do PNCP ou cole o texto do edital primeiro.");
       return;
     }
 
@@ -981,26 +1008,40 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
     setLoading(true);
     // AbortController for 120s timeout
     const abortCtrl = new AbortController();
-    // O servidor tem orçamento próprio de ~100s para falar com a IA e responde antes
-    // disso com o motivo real da falha. O timeout do navegador fica acima, cobrindo
-    // também o envio do arquivo e a partida a frio da função — se ele disparar
-    // primeiro, o usuário perde a explicação e vê só "excedeu o tempo".
     const timeoutId = setTimeout(() => abortCtrl.abort(), 240_000);
 
     try {
       let data: any;
+      let pacotePncp: PacoteOficialPncp | null = null;
+      let filesToUse = attachedFiles;
+      let textToUse = textInput;
 
-      console.log(`[Analyzer] Processing edital analysis with ${attachedFiles.length} file attachments...`);
+      // Se a análise tem vínculo com o PNCP, busca direto do navegador a ficha oficial,
+      // todos os itens (/itens) e baixa automaticamente o Edital + Termo de Referência.
+      if (resolvedPncpControl) {
+        pacotePncp = await buscarPacoteOficialPncp(resolvedPncpControl).catch(() => null);
+        if (pacotePncp) {
+          if (filesToUse.length === 0 && pacotePncp.anexosBaixados.length > 0) {
+            filesToUse = pacotePncp.anexosBaixados;
+            setAttachedFiles(pacotePncp.anexosBaixados);
+          }
+          if (pacotePncp.textoOficialEstruturado) {
+            textToUse = [textToUse.trim(), pacotePncp.textoOficialEstruturado].filter(Boolean).join("\n\n");
+          }
+        }
+      }
 
-      const preparedAttachments = await prepareAttachmentsForServer(attachedFiles);
+      console.log(`[Analyzer] Processing edital analysis with ${filesToUse.length} file attachments (PNCP: ${resolvedPncpControl || "none"})...`);
+
+      const preparedAttachments = await prepareAttachmentsForServer(filesToUse);
 
       const response = await apiFetch("/api/analyze-edital", {
         method: "POST",
         signal: abortCtrl.signal,
         body: {
-          textInput: textInput,
+          textInput: textToUse || (resolvedPncpControl ? `Contratação Oficial PNCP ${resolvedPncpControl}` : ""),
           attachments: preparedAttachments,
-          numeroControlePNCP: pncpNumeroControle || undefined
+          numeroControlePNCP: resolvedPncpControl || undefined
         }
       });
 
@@ -1011,27 +1052,97 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
       data = await readJsonResponse(response);
 
-      // O servidor responde 200 mesmo quando a IA falha, entregando uma extração local
-      // marcada com degraded/reason. Sem avisar, o usuário lê um relatório pobre achando
-      // que foi a IA que o produziu.
       if (data?.degraded && data?.reason) {
         alert(`⚠️ A IA não conseguiu analisar este edital.\n\n${data.reason}\n\nO que aparece abaixo é apenas uma extração local do texto, sem análise da IA.`);
       }
 
       if (data && data.analysis) {
-        const fileNamesSummary = attachedFiles.length > 0
-          ? `Anexos (${attachedFiles.length}): ${attachedFiles.map(f => f.name).join(", ")}`
+        const fileNamesSummary = filesToUse.length > 0
+          ? `Anexos (${filesToUse.length}): ${filesToUse.map(f => f.name).join(", ")}`
           : "Edital em Texto";
         const analysisResult: EditalAnalysis = {
           ...data.analysis,
-          // Ensure all required arrays are never undefined
           pontosPositivos: Array.isArray(data.analysis.pontosPositivos) ? data.analysis.pontosPositivos : [],
           pontosAlerta: Array.isArray(data.analysis.pontosAlerta) ? data.analysis.pontosAlerta : [],
           documentosExigidos: Array.isArray(data.analysis.documentosExigidos) ? data.analysis.documentosExigidos : [],
           itensEdital: Array.isArray(data.analysis.itensEdital) ? data.analysis.itensEdital : [],
           camposNaoIdentificados: Array.isArray(data.analysis.camposNaoIdentificados) ? data.analysis.camposNaoIdentificados : [],
-          rawText: textInput || fileNamesSummary
+          rawText: textToUse || fileNamesSummary
         };
+
+        // Garante que os dados oficiais e itens do PNCP sobreponham os campos factuais
+        // mesmo que a Edge Function remota ainda não tenha sido republicada.
+        if (pacotePncp) {
+          const det = pacotePncp.detalhe;
+          if (!analysisResult.identificacaoCertame) {
+            analysisResult.identificacaoCertame = {
+              orgaoComprador: "",
+              modalidade: "",
+              identificacaoNumerica: "",
+              dataHoraSessao: "",
+            };
+          }
+          const ident: any = analysisResult.identificacaoCertame;
+          ident.idContratacaoPNCP = pacotePncp.numeroControlePNCP;
+          ident.linkPNCP = pacotePncp.linkPNCP;
+          analysisResult.idContratacaoPNCP = pacotePncp.numeroControlePNCP;
+          analysisResult.linkPNCP = pacotePncp.linkPNCP;
+
+          if (det) {
+            const orgao = det.orgaoEntidade?.razaoSocial || det.orgaoEntidade?.nomeRazaoSocial;
+            if (orgao) ident.orgaoComprador = orgao;
+            const modOficial = det.modalidadeNome || PNCP_MODALIDADES[String(det.modalidadeId || "")];
+            if (modOficial) ident.modalidade = modOficial;
+            const numOficial = det.numeroCompra || det.processo;
+            if (numOficial) {
+              ident.identificacaoNumerica = `${modOficial || "Contratação"} nº ${numOficial}/${det.anoCompra || pacotePncp.ano}`;
+              ident.numeroEdital = `${numOficial}/${det.anoCompra || pacotePncp.ano}`;
+            }
+            const uasgOficial = normalizarCodigoUasg(det.unidadeOrgao?.codigoUnidade);
+            if (uasgOficial) ident.codigoUASG = uasgOficial;
+            if (det.dataAberturaProposta) {
+              ident.dataHoraSessao = new Date(det.dataAberturaProposta).toLocaleString("pt-BR");
+            }
+            if (typeof det.valorTotalEstimado === "number" && det.valorTotalEstimado > 0) {
+              if (!analysisResult.viabilidadeFinanceira) {
+                analysisResult.viabilidadeFinanceira = {
+                  valorEstimado: "",
+                  distorcoesPreco: "",
+                  prazoPagamento: "",
+                };
+              }
+              analysisResult.viabilidadeFinanceira.valorEstimado = `R$ ${det.valorTotalEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (valor oficial publicado no PNCP)`;
+            }
+            if (det.objetoCompra) {
+              analysisResult.descricaoProduto = det.objetoCompra;
+            }
+          }
+
+          if (Array.isArray(pacotePncp.itens) && pacotePncp.itens.length > 0) {
+            analysisResult.itensEdital = pacotePncp.itens.map((it: any, idx: number) => ({
+              numero: it.numeroItem ?? idx + 1,
+              descricao: it.descricao || it.materialOuServicoNome || "Item da contratação",
+              quantidade: Number(it.quantidade) || 0,
+              unidade: it.unidadeMedida || "Unidade",
+              valorEstimado:
+                typeof it.valorUnitarioEstimado === "number"
+                  ? `R$ ${it.valorUnitarioEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : "Não informado no PNCP",
+            }));
+          }
+
+          const lidosServidor: string[] = Array.isArray((analysisResult as any).dadosOficiaisPNCP?.arquivosLidosPNCP)
+            ? (analysisResult as any).dadosOficiaisPNCP.arquivosLidosPNCP
+            : [];
+          const todosArquivosLidos = Array.from(new Set([...pacotePncp.nomesArquivosLidos, ...lidosServidor]));
+
+          (analysisResult as any).dadosOficiaisPNCP = {
+            ...((analysisResult as any).dadosOficiaisPNCP || {}),
+            numeroControlePNCP: pacotePncp.numeroControlePNCP,
+            arquivosLidosPNCP: todosArquivosLidos,
+            consultadoEm: new Date().toISOString(),
+          };
+        }
         
         setActiveEdital(analysisResult);
         setOriginalEdital(analysisResult);
@@ -1041,7 +1152,7 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
 
         // Salvar no histórico compartilhado (grava local + Supabase e avisa
         // todas as outras ferramentas na mesma hora)
-        const firstFileName = attachedFiles.length > 0 ? attachedFiles[0].name : null;
+        const firstFileName = filesToUse.length > 0 ? filesToUse[0].name : null;
         const historyTitle = analysisResult.descricaoProduto
           ? `Análise - ${analysisResult.descricaoProduto.slice(0, 45)}${analysisResult.descricaoProduto.length > 45 ? "..." : ""}`
           : (firstFileName ? `Anexo: ${firstFileName}` : `Análise S/N`);
@@ -1454,26 +1565,73 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
               )}
             </div>
 
+            {/* Importação Direta do PNCP sem precisar fazer Upload */}
+            <div className="p-3.5 rounded-xl border border-primary/25 bg-primary/5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-primary" />
+                  Importar Direto do PNCP (Sem Upload Manual)
+                </label>
+                <Badge variant="secondary" className="text-[9px] font-mono px-1.5 py-0.5">
+                  Baixa Edital + TR + Itens
+                </Badge>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  type="text"
+                  value={pncpDirectInput}
+                  onChange={(e) => {
+                    setPncpDirectInput(e.target.value);
+                    const parsed = parseNumeroControlePNCP(e.target.value);
+                    if (parsed) {
+                      setPncpNumeroControle(`${parsed.cnpj}-1-${String(parsed.sequencial).padStart(6, "0")}/${parsed.ano}`);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && pncpDirectInput.trim()) {
+                      e.preventDefault();
+                      handleAnalyze(pncpDirectInput);
+                    }
+                  }}
+                  placeholder="Cole o link do PNCP (https://pncp.gov.br/app/editais/...) ou ID (00000000000100-1-000001/2026)"
+                  className="flex-1 text-xs font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={loading || !parseNumeroControlePNCP(pncpDirectInput)}
+                  onClick={() => handleAnalyze(pncpDirectInput)}
+                  className="text-xs font-bold shrink-0 gap-1.5"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-primary" />
+                  Puxar do PNCP
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Cole a URL ou código PNCP para o servidor buscar e ler automaticamente o Edital, Termo de Referência e Itens Oficiais — ou use o upload manual abaixo.
+              </p>
+            </div>
+
             <div className="space-y-1">
               <span className="text-xs font-semibold text-muted-foreground">Ou cole a íntegra ou partes do texto do edital:</span>
               <Textarea
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                className="w-full h-44 rounded-xl p-3 text-xs font-mono leading-relaxed resize-none"
+                className="w-full h-36 rounded-xl p-3 text-xs font-mono leading-relaxed resize-none"
                 placeholder="Cole as seções do edital sobre objeto, prazo, contraprestação e documentos de habilitação..."
               />
             </div>
 
             <Button
               id="trigger-analyze-btn"
-              onClick={handleAnalyze}
-              disabled={loading || (!textInput.trim() && attachedFiles.length === 0)}
+              onClick={() => handleAnalyze()}
+              disabled={loading || (!textInput.trim() && attachedFiles.length === 0 && !parseNumeroControlePNCP(pncpDirectInput || pncpNumeroControle))}
               className="w-full font-bold py-2.5 h-auto rounded-lg text-sm"
             >
               {loading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Mapeando Cláusulas do Edital com o Gemini...
+                  Baixando Documentos e Analisando Edital com IA...
                 </>
               ) : (
                 <>
@@ -1605,6 +1763,96 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
         const selectedStats = getSelectedItemsStats();
         return (
         <div className="space-y-6 animate-fade-in" id="analysis-results-section">
+
+          {/* Barra de Fluxo Rápido (Ações em 1 Clique) */}
+          <Card className="p-3.5 border-primary/30 bg-accent/40 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-2 rounded-lg bg-primary text-primary-foreground shrink-0">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">Fluxo Rápido do Edital</h4>
+                <p className="text-[11px] text-muted-foreground truncate">
+                  Prossiga com este edital sem precisar copiar ou redigitar dados entre abas.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {onNavigateToDisputas && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onNavigateToDisputas}
+                  className="text-xs font-semibold cursor-pointer gap-1.5"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-primary" />
+                  Ver na Planilha
+                </Button>
+              )}
+              {onNavigateToHabilitacao && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onNavigateToHabilitacao}
+                  className="text-xs font-semibold cursor-pointer gap-1.5"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-success" />
+                  Checar Habilitação
+                </Button>
+              )}
+              {onNavigateToCalculator && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onNavigateToCalculator}
+                  className="text-xs font-semibold cursor-pointer gap-1.5"
+                >
+                  <Calculator className="w-3.5 h-3.5 text-primary" />
+                  Cotar &amp; Calcular Preço
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleOpenProposalModal}
+                className="text-xs font-semibold cursor-pointer gap-1.5"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-primary" />
+                Gerar Proposta
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => window.dispatchEvent(new CustomEvent("aip_open_ai_chat", { detail: { editalId: "active" } }))}
+                className="text-xs font-semibold cursor-pointer gap-1.5"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Perguntar ao Assessor IA
+              </Button>
+            </div>
+          </Card>
+
+          {/* Selo de Enriquecimento e Leitura Automática do PNCP */}
+          {(activeEdital as any).dadosOficiaisPNCP && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 rounded-xl border border-success/30 bg-success/10 text-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                <span className="font-semibold text-foreground">
+                  Dados e arquivos sincronizados diretamente da API Oficial do PNCP ({(activeEdital as any).dadosOficiaisPNCP.numeroControlePNCP})
+                </span>
+              </div>
+              {Array.isArray((activeEdital as any).dadosOficiaisPNCP.arquivosLidosPNCP) &&
+                (activeEdital as any).dadosOficiaisPNCP.arquivosLidosPNCP.length > 0 && (
+                  <Badge variant="outline" className="text-[10px] font-mono bg-card border-success/30 text-success">
+                    PDFs lidos no servidor: {(activeEdital as any).dadosOficiaisPNCP.arquivosLidosPNCP.join(" + ")}
+                  </Badge>
+                )}
+            </div>
+          )}
           
           {/* Executive Overview Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1948,381 +2196,673 @@ export default function EditalAnalyzerTab({ companyData, activeEdital, setActive
             </Card>
           )}
 
-          {/* Tab Selector Menu for Sub-Information Panels */}
-          <Tabs value={analysisActiveTab} onValueChange={(v) => setAnalysisActiveTab(v as "report" | "struc" | "checklist")}>
+          {/* Tab Selector Menu for Sub-Information Panels (Apenas Dossiê e Checklist) */}
+          <Tabs value={analysisActiveTab} onValueChange={(v) => setAnalysisActiveTab(v as "struc" | "checklist")}>
             <TabsList className="w-full sm:w-auto overflow-x-auto">
-              <TabsTrigger value="report" className="gap-1.5 whitespace-nowrap">
-                <Sparkles className="w-4 h-4 text-primary" />
-                Parecer Executivo
-              </TabsTrigger>
-              <TabsTrigger value="struc" className="gap-1.5 whitespace-nowrap">
+              <TabsTrigger value="struc" className="gap-1.5 whitespace-nowrap font-bold">
                 <Gauge className="w-4 h-4 text-success" />
-                Dossiê Estruturado por Tópicos
+                Dossiê Completo do Edital
               </TabsTrigger>
-              <TabsTrigger value="checklist" className="gap-1.5 whitespace-nowrap">
+              <TabsTrigger value="checklist" className="gap-1.5 whitespace-nowrap font-bold">
                 <CheckSquare className="w-4 h-4 text-primary" />
-                Checklist & Alertas Rápidos
+                Checklist &amp; Alertas Rápidos
               </TabsTrigger>
             </TabsList>
           </Tabs>
 
-          {/* TAB 1: EXECUTIVE BRIEFING (MARKDOWN REPORT) */}
-          {analysisActiveTab === "report" && (
-            <div className="space-y-6 animate-fade-in">
-              {/* Main Executive Report Card */}
-              <Card className="p-6 md:p-8 space-y-6 relative overflow-hidden">
-                <div className="flex items-center justify-between border-b border-border pb-4">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-primary" />
-                    <h3 className="text-sm md:text-base font-bold text-foreground tracking-tight">
-                      Parecer Executivo de Estratégia de Mercado
-                    </h3>
+          {/* TAB 1: DOSSIÊ COMPLETO DO EDITAL (TODOS OS PONTOS IMPORTANTES CONSOLIDADOS) */}
+          {analysisActiveTab === "struc" && (
+            <div className="space-y-6 animate-fade-in text-foreground">
+              {/* 1. Barra Rápida: Data e Hora da Disputa, UASG, ID PNCP & Link Direto */}
+              <div className="bg-accent border border-primary/30 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 shadow-2xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1">
+                  {/* Data e Hora da Disputa */}
+                  <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
+                    <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
+                      <Calendar className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
+                        Data e Hora da Disputa
+                      </span>
+                      <span className="text-xs font-extrabold text-foreground flex items-center gap-1 truncate">
+                        <Clock className="w-3 h-3 text-primary shrink-0" />
+                        <span className="truncate">{getDataHoraDisputa(activeEdital)}</span>
+                      </span>
+                    </div>
                   </div>
-                  <span className="font-mono text-[9px] text-primary font-bold uppercase tracking-widest hidden sm:block bg-accent px-2.5 py-1 rounded">
-                    Senior Market Strategy Report
+
+                  {/* UASG / Unidade Compradora */}
+                  <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
+                    <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
+                      <Building2 className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
+                        UASG / Unidade Compradora
+                      </span>
+                      <span className="text-xs font-extrabold text-foreground block truncate" title={getUasg(activeEdital)}>
+                        {getUasg(activeEdital)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Id Contratação PNCP */}
+                  <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
+                    <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
+                      <FileText className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
+                        Id Contratação PNCP
+                      </span>
+                      <span className="text-xs font-mono font-extrabold text-primary block truncate" title={getIdContratacaoPNCP(activeEdital)}>
+                        {getIdContratacaoPNCP(activeEdital)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {getPncpDirectUrl(activeEdital) && (
+                  <a
+                    href={getPncpDirectUrl(activeEdital)!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-bold rounded-xl transition-all shadow-2xs hover:shadow-xs shrink-0 cursor-pointer w-full xl:w-auto"
+                  >
+                    <Globe className="w-4 h-4" />
+                    <span>Acessar Licitação no Portal PNCP</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
+
+              {/* Aviso de campos não localizados no documento */}
+              {Array.isArray((activeEdital as any).camposNaoIdentificados) && (activeEdital as any).camposNaoIdentificados.length > 0 && (
+                <div className="p-3 rounded-xl border border-warning/40 bg-warning/10 text-foreground text-[11px] leading-relaxed flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Campos não localizados nos documentos enviados:</strong>{" "}
+                    {(activeEdital as any).camposNaoIdentificados.join(", ")}. Esses campos ficaram em branco
+                    de propósito, sem suposições — confira direto no edital antes da disputa.
                   </span>
                 </div>
+              )}
 
-                {/* Prominent Quick Action Bar for Dispute Date, UASG, ID PNCP & Direct PNCP Link */}
-                {activeEdital && (
-                  <div className="bg-accent border border-primary/30 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 shadow-2xs">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1">
-                      {/* 1. Data e Hora da Disputa */}
-                      <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
-                        <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
-                          <Calendar className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
-                            Data e Hora da Disputa
-                          </span>
-                          <span className="text-xs font-extrabold text-foreground flex items-center gap-1 truncate">
-                            <Clock className="w-3 h-3 text-primary shrink-0" />
-                            <span className="truncate">{getDataHoraDisputa(activeEdital)}</span>
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* 2. UASG / Unidade Compradora */}
-                      <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
-                        <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
-                          <Building2 className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
-                            UASG / Unidade
-                          </span>
-                          <span className="text-xs font-extrabold text-foreground block truncate" title={getUasg(activeEdital)}>
-                            {getUasg(activeEdital)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* 3. Id Contratação PNCP */}
-                      <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
-                        <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
-                          <FileText className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
-                            Id Contratação PNCP
-                          </span>
-                          <span className="text-xs font-mono font-extrabold text-primary block truncate" title={getIdContratacaoPNCP(activeEdital)}>
-                            {getIdContratacaoPNCP(activeEdital)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {getPncpDirectUrl(activeEdital) && (
-                      <a
-                        href={getPncpDirectUrl(activeEdital)!}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-bold rounded-xl transition-all shadow-2xs hover:shadow-xs shrink-0 cursor-pointer w-full xl:w-auto"
-                      >
-                        <Globe className="w-4 h-4" />
-                        <span>Acessar Licitação no Portal PNCP</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    )}
+              {/* 2. Veredito Estratégico, Grau de Risco & Estratégia de Lances (Topo do Dossiê) */}
+              <div className="bg-accent border border-primary/30 rounded-xl p-5 space-y-3 shadow-xs">
+                <div className="flex items-center justify-between border-b border-primary/30 pb-2">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-primary shrink-0" />
+                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
+                      Veredito Estratégico, Risco &amp; Estratégia Recomendada de Lances
+                    </h4>
                   </div>
-                )}
-
-                {/* A análise deixou de preencher campos ausentes com conteúdo
-                    plausível. Quando algo não é encontrado no edital, o usuário
-                    precisa saber — silêncio aqui seria só outra forma de engano. */}
-                {Array.isArray((activeEdital as any).camposNaoIdentificados) && (activeEdital as any).camposNaoIdentificados.length > 0 && (
-                  <div className="mb-4 p-3 rounded-xl border border-warning/40 bg-warning/10 text-foreground text-[11px] leading-relaxed flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
-                    <span>
-                      <strong>A IA não localizou no documento:</strong>{" "}
-                      {(activeEdital as any).camposNaoIdentificados.join(", ")}. Esses campos ficaram em branco
-                      de propósito, em vez de preenchidos por suposição — confira direto no edital antes de decidir.
-                    </span>
-                  </div>
-                )}
-
-                {activeEdital.reportMarkdown ? (
-                  <div className="prose max-w-none text-foreground text-xs md:text-sm leading-relaxed">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                      h1: ({node, ...props}) => <h1 className="text-sm md:text-base font-bold text-foreground border-b border-border pb-2 mt-6 mb-3 flex items-center gap-2 uppercase tracking-wide text-primary" {...props} />,
-                      h2: ({node, ...props}) => <h2 className="text-xs md:text-sm font-bold text-foreground mt-5 mb-2.5 border-b border-border pb-1 flex items-center gap-2" {...props} />,
-                      h3: ({node, ...props}) => <h3 className="text-xs md:text-sm font-bold text-primary mt-4 mb-2" {...props} />,
-                      p: ({node, ...props}) => <p className="mb-3.5 text-foreground leading-relaxed font-sans text-xs md:text-sm font-medium" {...props} />,
-                      ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-2 text-foreground font-sans text-xs md:text-sm font-medium" {...props} />,
-                      ol: ({node, ...props}) => <ol className="list-decimal pl-5 mb-4 space-y-2 text-foreground font-sans text-xs md:text-sm font-medium" {...props} />,
-                      li: ({node, ...props}) => <li className="leading-relaxed text-foreground" {...props} />,
-                      hr: ({node, ...props}) => <hr className="border-t border-border my-6" {...props} />,
-                      blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-primary pl-4 py-2 my-4 bg-accent rounded-r-lg text-xs md:text-sm text-foreground italic font-medium" {...props} />,
-                      table: ({node, ...props}) => (
-                        <div className="overflow-x-auto my-4 rounded-xl border border-border bg-card">
-                          <table className="w-full text-left border-collapse text-[11px] md:text-xs" {...props} />
-                        </div>
-                      ),
-                      thead: ({node, ...props}) => <thead className="bg-muted border-b border-border text-foreground font-bold" {...props} />,
-                      th: ({node, ...props}) => <th className="p-2.5 font-bold text-[10px] uppercase tracking-wider text-foreground" {...props} />,
-                      tbody: ({node, ...props}) => <tbody className="divide-y divide-border" {...props} />,
-                      td: ({node, ...props}) => <td className="p-2.5 text-foreground font-sans leading-normal" {...props} />,
-                      strong: ({node, ...props}) => <strong className="font-extrabold text-foreground" {...props} />,
-                    }}>{cleanMarkdownText(activeEdital.reportMarkdown)}</ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="text-center py-10 space-y-2">
-                    <div className="bg-warning/15 text-warning p-3 rounded-full w-12 h-12 flex items-center justify-center mx-auto border border-warning/40">
-                      <ShieldAlert className="w-6 h-6" />
-                    </div>
-                    <h5 className="font-bold text-foreground text-sm">Parecer Executivo Indisponível</h5>
-                    <p className="text-muted-foreground text-xs max-w-sm mx-auto leading-normal">
-                      Este item do histórico não possui o parecer executivo formatado. Faça uma nova análise para visualizar o parecer executivo completo.
-                    </p>
-                  </div>
-                )}
-              </Card>
-            </div>
-          )}
-
-          {/* TAB 2: DETAILED STRATEGIC PILLARS */}
-          {analysisActiveTab === "struc" && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-fade-in text-foreground">
-              
-              {/* Pillar 1: IDENTIFICATION */}
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                <div className="flex items-center gap-2 border-b border-border pb-2">
-                  <Landmark className="w-4 h-4 text-primary shrink-0" />
-                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">1. Identificação do Certame</h4>
-                </div>
-                {activeEdital.identificacaoCertame ? (
-                  <div className="text-xs space-y-3 leading-normal">
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Órgão Comprador / Unidade Gestora</span>
-                      <span className="text-foreground font-semibold">{activeEdital.identificacaoCertame.orgaoComprador}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Modalidade do Processo</span>
-                      <span className="text-foreground font-semibold">{activeEdital.identificacaoCertame.modalidade}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Identificação Numérica / PCE</span>
-                      <span className="text-foreground font-semibold">{activeEdital.identificacaoCertame.identificacaoNumerica}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Sessão Pública (Data/Hora/Fuso)</span>
-                      <span className="text-foreground font-extrabold flex items-center gap-1.5 mt-0.5 text-primary">
-                        <Calendar className="w-3.5 h-3.5" />
-                        {getDataHoraDisputa(activeEdital)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Link Direto no Portal PNCP</span>
-                      {getPncpLink(activeEdital) ? (
-                        <a
-                          href={getPncpLink(activeEdital)!}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary font-bold hover:text-primary/80 hover:underline flex items-center gap-1 mt-0.5"
-                        >
-                          <Globe className="w-3.5 h-3.5 shrink-0" />
-                          <span>Acessar Licitação no PNCP</span>
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground">Não informado</span>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground text-xs py-4 text-center">Indisponível para esta análise antiga do histórico.</p>
-                )}
-              </div>
-
-              {/* Pillar 2: TECHNICAL SPECIFICATIONS & SNARES */}
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                <div className="flex items-center gap-2 border-b border-border pb-2">
-                  <Gauge className="w-4 h-4 text-warning shrink-0" />
-                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">2. Especificações Técnicas & Pegadinhas</h4>
-                </div>
-                {activeEdital.especificacoesTecnicas ? (
-                  <div className="text-xs space-y-4 pb-1">
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider mb-1.5">Exigências Físicas do Produto (Checklist Mandatório)</span>
-                      <ul className="list-disc pl-4 space-y-1 text-foreground">
-                        {getFilteredArray(activeEdital.especificacoesTecnicas.exigenciasFisicas).map((item, idx) => (
-                          <li key={idx} className="leading-snug">{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div>
-                      <span className="text-warning block font-mono text-[9px] uppercase tracking-wider mb-1.5 font-bold">Pegadinhas Técnicas Ocultas / Risco de Desclassificação</span>
-                      <ul className="list-disc pl-4 space-y-1 text-foreground">
-                        {getFilteredArray(activeEdital.especificacoesTecnicas.pegadinhasOcultas).map((item, idx) => (
-                          <li key={idx} className="leading-snug">{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground text-xs py-4 text-center">Indisponível para esta análise antiga do histórico.</p>
-                )}
-              </div>
-
-              {/* Pillar 3: BUREAUCRACY & ENTRY BARRIERS */}
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                <div className="flex items-center gap-2 border-b border-border pb-2">
-                  <ShieldAlert className="w-4 h-4 text-destructive shrink-0" />
-                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">3. Burocracia & Barreiras de Entrada</h4>
-                </div>
-                {activeEdital.burocraciaBarreiras ? (
-                  <div className="text-xs space-y-3 leading-normal">
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Amostra Exigida?</span>
-                      <span className="text-foreground font-semibold">{activeEdital.burocraciaBarreiras.exigeAmostra}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Carta de Solidariedade/Exclusividade?</span>
-                      <span className="text-foreground font-semibold">{activeEdital.burocraciaBarreiras.exigeCartaSolidariedade}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Garantia de Proposta ou Contratual?</span>
-                      <span className="text-foreground font-semibold">{activeEdital.burocraciaBarreiras.exigenciaGarantia}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Consórcios ou Subcontratações?</span>
-                      <span className="text-foreground font-semibold">{activeEdital.burocraciaBarreiras.consorcioSubcontratacao}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground text-xs py-4 text-center">Indisponível para esta análise antiga do histórico.</p>
-                )}
-              </div>
-
-              {/* Pillar 4: LOGISTICS & RISK ANALYSIS */}
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                <div className="flex items-center gap-2 border-b border-border pb-2">
-                  <MapPin className="w-4 h-4 text-success shrink-0" />
-                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">4. Logística, Cronograma & Prazo</h4>
-                </div>
-                {activeEdital.logisticaCronograma ? (
-                  <div className="text-xs space-y-3 leading-normal">
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Prazo Real de Entrega</span>
-                      <span className="text-foreground font-semibold flex items-center gap-2">
-                        {activeEdital.logisticaCronograma.prazoEntregaReal}
-                        <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase ${
- activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("crít") || 
- activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("relâ")
- ? "bg-destructive/10 text-destructive border border-destructive/30" 
- : activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("aceit")
- ? "bg-warning/15 text-warning border border-warning/40"
- : "bg-success/10 text-success border border-success/30"
- }`}>
-                          {activeEdital.logisticaCronograma.classificacaoPrazo}
-                        </span>
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Endereço Exato & Almoxarifado</span>
-                      <span className="text-foreground font-semibold">{activeEdital.logisticaCronograma.enderecoEntrega}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Prazo de Garantia Requerido</span>
-                      <span className="text-foreground font-semibold">{activeEdital.logisticaCronograma.prazoGarantia}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground text-xs py-4 text-center">Indisponível para esta análise antiga do histórico.</p>
-                )}
-              </div>
-
-              {/* Pillar 5: FINANCIAL VIABILITY */}
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                <div className="flex items-center gap-2 border-b border-border pb-2">
-                  <Coins className="w-4 h-4 text-primary shrink-0" />
-                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">5. Viabilidade Financeira & Margem</h4>
-                </div>
-                {activeEdital.viabilidadeFinanceira ? (
-                  <div className="text-xs space-y-3 leading-normal">
-                    {activeEdital.itensEdital && activeEdital.itensEdital.length > 0 && (
-                      <div className="bg-accent border border-primary/30 p-2.5 rounded-lg text-primary">
-                        <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">Valor Estimado (Itens Selecionados)</span>
-                        <span className="text-foreground font-mono font-bold text-sm block mt-0.5">
-                          {selectedStats.formattedValorEstimado}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground block mt-0.5">
-                          Referente a {selectedStats.count} de {selectedStats.totalEditalCount} itens ({selectedStats.totalQuantity} un)
-                        </span>
-                      </div>
-                    )}
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Valor Estimado Global (Edital Completo)</span>
-                      <span className="text-foreground font-semibold">{activeEdital.viabilidadeFinanceira.valorEstimado}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Distorções Identificadas vs Mercado Privado</span>
-                      <span className="text-foreground font-semibold">{activeEdital.viabilidadeFinanceira.distorcoesPreco}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">Prazo de Recebimento de Pagamento</span>
-                      <span className="text-foreground font-semibold">{activeEdital.viabilidadeFinanceira.prazoPagamento}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground text-xs py-4 text-center">Indisponível para esta análise antiga do histórico.</p>
-                )}
-              </div>
-
-              {/* Pillar 6: CONCLUDING RECOMMENDATION */}
-              <div className="bg-accent border border-primary/30 rounded-xl p-5 space-y-3 lg:col-span-2 shadow-xs">
-                <div className="flex items-center gap-2 border-b border-primary/30 pb-2">
-                  <TrendingUp className="w-4 h-4 text-primary shrink-0" />
-                  <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">6. Parecer Final do Analista & Estratégia de Lances</h4>
+                  <Badge variant="outline" className="text-[10px] font-mono bg-card border-primary/30 text-primary">
+                    Resumo Decisório
+                  </Badge>
                 </div>
                 {activeEdital.parecerFinal ? (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs leading-normal">
-                    <div>
-                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">Veredito Final</span>
-                      <span className="text-foreground font-bold bg-card px-2 py-1 rounded inline-block border border-primary/30 mt-1">{activeEdital.parecerFinal.veredito}</span>
+                    <div className="bg-card/80 p-3 rounded-lg border border-border">
+                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">
+                        Veredito Final da Disputa
+                      </span>
+                      <span className="text-foreground font-extrabold text-sm inline-block mt-1">
+                        {activeEdital.parecerFinal.veredito}
+                      </span>
                     </div>
-                    <div>
-                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">Grau de Risco Global</span>
-                      <span className={`px-2 py-1 rounded font-bold uppercase inline-block border mt-1 ${
- activeEdital.parecerFinal.grauRisco.toLowerCase().includes("alto") 
- ? "bg-destructive/10 text-destructive border-destructive/30" 
- : activeEdital.parecerFinal.grauRisco.toLowerCase().includes("médio")
- ? "bg-warning/15 text-warning border-warning/40"
- : "bg-success/10 text-success border-success/30"
- }`}>{activeEdital.parecerFinal.grauRisco}</span>
+                    <div className="bg-card/80 p-3 rounded-lg border border-border">
+                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">
+                        Grau de Risco Global
+                      </span>
+                      <span
+                        className={`px-2.5 py-1 rounded font-bold uppercase inline-block border mt-1 ${
+                          activeEdital.parecerFinal.grauRisco.toLowerCase().includes("alto")
+                            ? "bg-destructive/10 text-destructive border-destructive/30"
+                            : activeEdital.parecerFinal.grauRisco.toLowerCase().includes("médio")
+                            ? "bg-warning/15 text-warning border-warning/40"
+                            : "bg-success/10 text-success border-success/30"
+                        }`}
+                      >
+                        {activeEdital.parecerFinal.grauRisco}
+                      </span>
                     </div>
-                    <div>
-                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">Estratégia Recomendada de Lances</span>
-                      <span className="text-foreground block font-semibold mt-1 leading-snug">{activeEdital.parecerFinal.estrategiaLances}</span>
+                    <div className="bg-card/80 p-3 rounded-lg border border-border">
+                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">
+                        Estratégia Recomendada de Lances
+                      </span>
+                      <span className="text-foreground block font-semibold mt-1 leading-snug">
+                        {activeEdital.parecerFinal.estrategiaLances}
+                      </span>
                     </div>
                   </div>
                 ) : (
-                  <p className="text-muted-foreground text-xs py-4 text-center">Indisponível para esta análise antiga do histórico.</p>
+                  <p className="text-muted-foreground text-xs py-2">
+                    Verifique os tópicos estruturados abaixo para definir sua margem e estratégia de lances.
+                  </p>
                 )}
               </div>
 
+              {/* 3. Visão Rápida: Pontos Fortes / Oportunidades vs. Alertas Críticos & Riscos */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-card border border-success/30 rounded-xl p-5 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between border-b border-border pb-2">
+                    <h4 className="font-bold text-foreground flex items-center gap-2 text-xs uppercase tracking-wide">
+                      <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                      Pontos Fortes &amp; Vantagens Competitivas do Edital
+                    </h4>
+                    <Badge variant="outline" className="text-[10px] font-mono text-success border-success/30">
+                      {getFilteredArray(activeEdital.pontosPositivos).length} pontos
+                    </Badge>
+                  </div>
+                  {getFilteredArray(activeEdital.pontosPositivos).length > 0 ? (
+                    <ul className="space-y-2.5 text-xs text-foreground">
+                      {getFilteredArray(activeEdital.pontosPositivos).map((item, idx) => (
+                        <li key={idx} className="flex gap-2.5 items-start">
+                          <span className="bg-success/10 border border-success/30 text-success h-5 w-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold mt-0.5">
+                            {idx + 1}
+                          </span>
+                          <span className="leading-relaxed">{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted-foreground text-xs">Nenhum ponto positivo específico destacado.</p>
+                  )}
+                </div>
+
+                <div className="bg-card border border-warning/40 rounded-xl p-5 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between border-b border-border pb-2">
+                    <h4 className="font-bold text-foreground flex items-center gap-2 text-xs uppercase tracking-wide">
+                      <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
+                      Alertas Críticos, Exigências &amp; Riscos de Desclassificação
+                    </h4>
+                    <Badge variant="outline" className="text-[10px] font-mono text-warning border-warning/40">
+                      {getFilteredArray(activeEdital.pontosAlerta).length} alertas
+                    </Badge>
+                  </div>
+                  {getFilteredArray(activeEdital.pontosAlerta).length > 0 ? (
+                    <ul className="space-y-2.5 text-xs text-foreground">
+                      {getFilteredArray(activeEdital.pontosAlerta).map((item, idx) => (
+                        <li key={idx} className="flex gap-2.5 items-start">
+                          <span className="bg-warning/15 border border-warning/40 text-warning h-5 w-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold mt-0.5">
+                            {idx + 1}
+                          </span>
+                          <span className="leading-relaxed">{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-muted-foreground text-xs">Nenhum alerta crítico identificado.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* 4. Os 5 Pilares Estruturados do Edital (Identificação, Preços, Especificações Técnicas, Burocracia e Logística) */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Pillar 1: IDENTIFICATION */}
+                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
+                    <div className="flex items-center gap-2">
+                      <Landmark className="w-4 h-4 text-primary shrink-0" />
+                      <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
+                        1. Identificação do Certame &amp; Órgão Comprador
+                      </h4>
+                    </div>
+                    {(() => {
+                      const pncpMeta = (activeEdital as any).dadosOficiaisPNCP || {};
+                      const capagEnte = resolverCapagPorOrgaoOuLocal({
+                        uf: pncpMeta.uf,
+                        municipio: pncpMeta.municipio,
+                        orgao:
+                          activeEdital.identificacaoCertame?.orgaoComprador ||
+                          pncpMeta.orgao ||
+                          activeEdital.rawText,
+                      });
+                      const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
+                      return (
+                        <span
+                          className={`text-[10px] font-mono font-extrabold px-2 py-0.5 rounded border ${capagEstilo.badgeBg} ${capagEstilo.badgeText} ${capagEstilo.badgeBorder}`}
+                        >
+                          {capagEstilo.labelCurto}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  {activeEdital.identificacaoCertame ? (
+                    <div className="text-xs space-y-3 leading-normal">
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Órgão Comprador / Unidade Gestora
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.identificacaoCertame.orgaoComprador || "Não informado"}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                            Modalidade do Processo
+                          </span>
+                          <span className="text-foreground font-semibold">
+                            {activeEdital.identificacaoCertame.modalidade || "Não informada"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                            UASG / Código da Unidade
+                          </span>
+                          <span className="text-foreground font-semibold">{getUasg(activeEdital)}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Identificação Numérica / Nº do Edital ou Processo
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.identificacaoCertame.identificacaoNumerica || "Não informado"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Sessão Pública (Data e Hora da Disputa)
+                        </span>
+                        <span className="text-foreground font-extrabold flex items-center gap-1.5 mt-0.5 text-primary">
+                          <Calendar className="w-3.5 h-3.5" />
+                          {getDataHoraDisputa(activeEdital)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Link Direto no Portal PNCP
+                        </span>
+                        {getPncpLink(activeEdital) ? (
+                          <a
+                            href={getPncpLink(activeEdital)!}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary font-bold hover:text-primary/80 hover:underline flex items-center gap-1 mt-0.5"
+                          >
+                            <Globe className="w-3.5 h-3.5 shrink-0" />
+                            <span>Acessar Licitação no PNCP</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground">Não informado</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-xs py-4 text-center">
+                      Indisponível para esta análise antiga do histórico.
+                    </p>
+                  )}
+                </div>
+
+                {/* Pillar 2: FINANCIAL VIABILITY, CAPAG & PRICES */}
+                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
+                  <div className="flex items-center gap-2 border-b border-border pb-2">
+                    <Coins className="w-4 h-4 text-success shrink-0" />
+                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
+                      2. Preços da Disputa, CAPAG (Risco Pagador) &amp; Pagamento
+                    </h4>
+                  </div>
+                  {activeEdital.viabilidadeFinanceira ? (
+                    <div className="text-xs space-y-3 leading-normal">
+                      {activeEdital.itensEdital && activeEdital.itensEdital.length > 0 && (
+                        <div className="bg-success/10 border border-success/30 p-3 rounded-lg">
+                          <span className="text-success block font-mono text-[9px] uppercase tracking-wider font-bold">
+                            Valor Estimado (Itens Selecionados para Disputa)
+                          </span>
+                          <span className="text-success font-mono font-extrabold text-sm block mt-0.5">
+                            {selectedStats.formattedValorEstimado}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground block mt-0.5">
+                            Referente a {selectedStats.count} de {selectedStats.totalEditalCount} itens ({selectedStats.totalQuantity} un)
+                          </span>
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Valor Estimado Global (Edital Completo)
+                        </span>
+                        <span className="text-foreground font-bold">
+                          {activeEdital.viabilidadeFinanceira.valorEstimado || selectedStats.formattedValorEstimado}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Prazo e Condição de Pagamento
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.viabilidadeFinanceira.prazoPagamento || activeEdital.prazoPagamento}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Análise de Preço &amp; Margem vs. Mercado Privado
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.viabilidadeFinanceira.distorcoesPreco || "Consulte os valores unitários dos itens selecionados."}
+                        </span>
+                      </div>
+
+                      {/* Diagnóstico Automático CAPAG do Comprador */}
+                      {(() => {
+                        const pncpMeta = (activeEdital as any).dadosOficiaisPNCP || {};
+                        const capagEnte = resolverCapagPorOrgaoOuLocal({
+                          uf: pncpMeta.uf,
+                          municipio: pncpMeta.municipio,
+                          orgao:
+                            activeEdital.identificacaoCertame?.orgaoComprador ||
+                            pncpMeta.orgao ||
+                            activeEdital.rawText,
+                        });
+                        const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
+                        return (
+                          <div
+                            className={`p-3 rounded-xl border ${capagEstilo.badgeBg} ${capagEstilo.badgeBorder} space-y-2`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <span className="text-[9px] font-mono uppercase tracking-wider font-bold text-muted-foreground block">
+                                  Capacidade de Pagamento (CAPAG / Tesouro Nacional)
+                                </span>
+                                <span className={`font-extrabold text-xs ${capagEstilo.badgeText}`}>
+                                  Nota {capagEnte.notaCapag} — {capagEnte.veredito.statusPagador} ({capagEnte.nome})
+                                </span>
+                              </div>
+                              {onNavigateToCapag && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    onNavigateToCapag({
+                                      uf: capagEnte.uf,
+                                      municipio: capagEnte.esfera === "Município" ? capagEnte.nome : undefined,
+                                      orgao: activeEdital.identificacaoCertame?.orgaoComprador,
+                                    })
+                                  }
+                                  className="h-6 px-2 text-[10px] font-bold bg-card"
+                                >
+                                  Abrir no CAPAG
+                                </Button>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-foreground leading-snug">
+                              {capagEnte.veredito.resumoDividaCaixa}
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] pt-0.5">
+                              <div className="bg-card/80 p-2 rounded border border-border">
+                                <span className="text-[8px] font-mono uppercase text-muted-foreground block">
+                                  Prazo Médio Estimado
+                                </span>
+                                <span className="font-bold text-foreground">
+                                  {capagEnte.veredito.prazoMedioRecebimento}
+                                </span>
+                              </div>
+                              <div className="bg-card/80 p-2 rounded border border-border">
+                                <span className="text-[8px] font-mono uppercase text-muted-foreground block">
+                                  Margem de Segurança Recomendada
+                                </span>
+                                <span className="font-bold text-primary">
+                                  {capagEnte.veredito.margemFinanceiraRecomendada}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-xs py-4 text-center">
+                      Indisponível para esta análise antiga do histórico.
+                    </p>
+                  )}
+                </div>
+
+                {/* Pillar 3: TECHNICAL SPECIFICATIONS & SNARES */}
+                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
+                  <div className="flex items-center gap-2 border-b border-border pb-2">
+                    <Gauge className="w-4 h-4 text-warning shrink-0" />
+                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
+                      3. Especificações Técnicas do Objeto &amp; Pegadinhas Ocultas
+                    </h4>
+                  </div>
+                  <div className="text-xs space-y-4 pb-1">
+                    <div>
+                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider mb-1">
+                        Síntese do Objeto / Produto Solicitado
+                      </span>
+                      <p className="text-foreground font-semibold leading-relaxed whitespace-pre-line">
+                        {getDynamicDescricaoProduto()}
+                      </p>
+                    </div>
+                    {activeEdital.especificacoesTecnicas && (
+                      <>
+                        <div>
+                          <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider mb-1.5">
+                            Exigências Físicas e Técnicas Mandatórias
+                          </span>
+                          <ul className="list-disc pl-4 space-y-1 text-foreground">
+                            {getFilteredArray(activeEdital.especificacoesTecnicas.exigenciasFisicas).map((item, idx) => (
+                              <li key={idx} className="leading-snug">{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <span className="text-warning block font-mono text-[9px] uppercase tracking-wider mb-1.5 font-bold">
+                            Pegadinhas Técnicas Ocultas / Risco de Desclassificação
+                          </span>
+                          <ul className="list-disc pl-4 space-y-1 text-foreground">
+                            {getFilteredArray(activeEdital.especificacoesTecnicas.pegadinhasOcultas).map((item, idx) => (
+                              <li key={idx} className="leading-snug">{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Pillar 4: BUREAUCRACY & ENTRY BARRIERS */}
+                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
+                  <div className="flex items-center gap-2 border-b border-border pb-2">
+                    <ShieldAlert className="w-4 h-4 text-destructive shrink-0" />
+                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
+                      4. Burocracia, Garantias, Amostras &amp; Barreiras de Entrada
+                    </h4>
+                  </div>
+                  {activeEdital.burocraciaBarreiras ? (
+                    <div className="text-xs space-y-3 leading-normal">
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Amostra ou Prova de Conceito Exigida?
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.burocraciaBarreiras.exigeAmostra}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Carta de Solidariedade / Exclusividade do Fabricante?
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.burocraciaBarreiras.exigeCartaSolidariedade}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Garantia de Proposta ou Garantia Contratual?
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.burocraciaBarreiras.exigenciaGarantia}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Consórcios, Subcontratação ou Vistoria Técnica?
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.burocraciaBarreiras.consorcioSubcontratacao}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-xs py-4 text-center">
+                      Indisponível para esta análise antiga do histórico.
+                    </p>
+                  )}
+                </div>
+
+                {/* Pillar 5: LOGISTICS, DELIVERY & WARRANTY (Full width) */}
+                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs lg:col-span-2">
+                  <div className="flex items-center justify-between border-b border-border pb-2">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-success shrink-0" />
+                      <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
+                        5. Logística, Prazo de Entrega, Local &amp; Garantia Exigida
+                      </h4>
+                    </div>
+                    {activeEdital.logisticaCronograma?.classificacaoPrazo && (
+                      <span
+                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                          activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("crít") ||
+                          activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("relâ")
+                            ? "bg-destructive/10 text-destructive border border-destructive/30"
+                            : activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("aceit")
+                            ? "bg-warning/15 text-warning border border-warning/40"
+                            : "bg-success/10 text-success border border-success/30"
+                        }`}
+                      >
+                        {activeEdital.logisticaCronograma.classificacaoPrazo}
+                      </span>
+                    )}
+                  </div>
+                  {activeEdital.logisticaCronograma ? (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs leading-normal">
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Prazo Real de Entrega / Execução
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.logisticaCronograma.prazoEntregaReal || activeEdital.prazoEntrega}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Endereço Exato de Entrega &amp; Almoxarifado
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.logisticaCronograma.enderecoEntrega}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
+                          Prazo de Garantia / Assistência Técnica Requerido
+                        </span>
+                        <span className="text-foreground font-semibold">
+                          {activeEdital.logisticaCronograma.prazoGarantia}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-xs py-2">
+                      Prazo de Entrega: <strong>{activeEdital.prazoEntrega}</strong>
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* 5. Síntese Executiva Detalhada do Edital (Relatório Completo e Tabelas da IA) */}
+              {activeEdital.reportMarkdown && (
+                <Card className="p-5 md:p-6 space-y-4 relative overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-border pb-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-primary" />
+                      <h3 className="text-xs md:text-sm font-bold text-foreground uppercase tracking-wide">
+                        6. Síntese Executiva Detalhada &amp; Cláusulas Relevantes do Edital
+                      </h3>
+                    </div>
+                    <Badge variant="secondary" className="font-mono text-[9px]">
+                      Leitura Completa da IA
+                    </Badge>
+                  </div>
+                  <div className="prose max-w-none text-foreground text-xs md:text-sm leading-relaxed">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        h1: ({ node, ...props }) => (
+                          <h1
+                            className="text-sm md:text-base font-bold text-foreground border-b border-border pb-2 mt-5 mb-3 flex items-center gap-2 uppercase tracking-wide text-primary"
+                            {...props}
+                          />
+                        ),
+                        h2: ({ node, ...props }) => (
+                          <h2
+                            className="text-xs md:text-sm font-bold text-foreground mt-4 mb-2 border-b border-border pb-1 flex items-center gap-2"
+                            {...props}
+                          />
+                        ),
+                        h3: ({ node, ...props }) => (
+                          <h3 className="text-xs md:text-sm font-bold text-primary mt-3 mb-1.5" {...props} />
+                        ),
+                        p: ({ node, ...props }) => (
+                          <p
+                            className="mb-3 text-foreground leading-relaxed font-sans text-xs md:text-sm font-medium"
+                            {...props}
+                          />
+                        ),
+                        ul: ({ node, ...props }) => (
+                          <ul
+                            className="list-disc pl-5 mb-3 space-y-1.5 text-foreground font-sans text-xs md:text-sm font-medium"
+                            {...props}
+                          />
+                        ),
+                        ol: ({ node, ...props }) => (
+                          <ol
+                            className="list-decimal pl-5 mb-3 space-y-1.5 text-foreground font-sans text-xs md:text-sm font-medium"
+                            {...props}
+                          />
+                        ),
+                        li: ({ node, ...props }) => <li className="leading-relaxed text-foreground" {...props} />,
+                        hr: ({ node, ...props }) => <hr className="border-t border-border my-4" {...props} />,
+                        blockquote: ({ node, ...props }) => (
+                          <blockquote
+                            className="border-l-4 border-primary pl-4 py-2 my-3 bg-accent rounded-r-lg text-xs md:text-sm text-foreground italic font-medium"
+                            {...props}
+                          />
+                        ),
+                        table: ({ node, ...props }) => (
+                          <div className="overflow-x-auto my-3 rounded-xl border border-border bg-card">
+                            <table className="w-full text-left border-collapse text-[11px] md:text-xs" {...props} />
+                          </div>
+                        ),
+                        thead: ({ node, ...props }) => (
+                          <thead className="bg-muted border-b border-border text-foreground font-bold" {...props} />
+                        ),
+                        th: ({ node, ...props }) => (
+                          <th
+                            className="p-2.5 font-bold text-[10px] uppercase tracking-wider text-foreground"
+                            {...props}
+                          />
+                        ),
+                        tbody: ({ node, ...props }) => <tbody className="divide-y divide-border" {...props} />,
+                        td: ({ node, ...props }) => (
+                          <td className="p-2.5 text-foreground font-sans leading-normal" {...props} />
+                        ),
+                        strong: ({ node, ...props }) => (
+                          <strong className="font-extrabold text-foreground" {...props} />
+                        ),
+                      }}
+                    >
+                      {cleanMarkdownText(activeEdital.reportMarkdown)}
+                    </ReactMarkdown>
+                  </div>
+                </Card>
+              )}
             </div>
           )}
 

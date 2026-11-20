@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { normalizarCodigoUasg, extrairCodigoUasg, extrairNumeroEdital } from "../utils/identificacaoEdital";
 import {
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
@@ -13,6 +13,7 @@ import { valorDoCartao } from "../utils/disputaCartao";
 import { getContrastTextColor } from "../utils/disputaDates";
 import { useEditalHistory } from "../utils/editalHistory";
 import DisputaDateTag from "./DisputaDateTag";
+import CalendarTab from "./CalendarTab";
 import {
   fetchDisputasFromSupabase,
   saveDisputaToSupabase,
@@ -186,9 +187,10 @@ const STATUS_COLOR_PALETTE = [
   "#d946ef", "#ec4899", "#f43f5e", "#64748b"
 ];
 
-const VIEW_MODES: { id: "spreadsheet" | "kanban"; label: string; icon: typeof FileSpreadsheet }[] = [
+const VIEW_MODES: { id: "spreadsheet" | "kanban" | "calendar"; label: string; icon: typeof FileSpreadsheet }[] = [
   { id: "spreadsheet", label: "Painel", icon: LayoutGrid },
-  { id: "kanban", label: "Kanban", icon: Kanban }
+  { id: "kanban", label: "Kanban", icon: Kanban },
+  { id: "calendar", label: "Calendário", icon: Calendar }
 ];
 
 const PORTAL_OPTIONS = ["Compras.gov.br", "BLL Compras", "Licitações-e", "Bec SP", "PNCP", "Outro Portal"];
@@ -292,10 +294,11 @@ function StatusColorEditor({
 export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps) {
   const editalHistory = useEditalHistory();
 
-  // Mode Switcher: "spreadsheet" (Painel — cartões somente leitura, edição via ícone lápis) ou "kanban" (Quadro Kanban)
-  const [viewMode, setViewMode] = useState<"spreadsheet" | "kanban">(() => {
+  // Mode Switcher: "spreadsheet" (Painel), "kanban" (Quadro Kanban) ou "calendar" (Calendário)
+  const [viewMode, setViewMode] = useState<"spreadsheet" | "kanban" | "calendar">(() => {
     const stored = localStorage.getItem("aip_disputas_view_mode");
-    return stored === "kanban" ? "kanban" : "spreadsheet";
+    if (stored === "kanban" || stored === "calendar") return stored;
+    return "spreadsheet";
   });
 
   // Tipos de status personalizados do usuário (rótulo + cor), usados nos seletores
@@ -469,7 +472,14 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
       }
     );
 
-    const handleFocus = () => refreshFromSupabase(false);
+    let lastFocusRefresh = Date.now();
+    const handleFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusRefresh > 30000) {
+        lastFocusRefresh = now;
+        refreshFromSupabase(false);
+      }
+    };
     const handleCustomSync = () => refreshFromSupabase(false);
     window.addEventListener("focus", handleFocus);
     window.addEventListener("aip_sync_disputas", handleCustomSync);
@@ -739,7 +749,10 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     handleUpdateStatusType(id, { label: editColumnLabel, color: editColumnColor });
   };
 
-  const sortedStatusTypes = [...statusTypes].sort((a, b) => a.position - b.position);
+  const sortedStatusTypes = useMemo(
+    () => [...statusTypes].sort((a, b) => a.position - b.position),
+    [statusTypes]
+  );
 
   // History Editais list for auto-fill feature
   const [historyOptions, setHistoryOptions] = useState<AnalyzedEditalOption[]>([]);
@@ -1207,35 +1220,38 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     showToast("Dados copiados em formato de tabela! Cole no Excel ou Google Sheets.");
   };
 
-  // Filtering logic
-  const filteredDisputas = disputas.filter(row => {
-    const matchesSearch = 
-      row.orgao.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      row.uasgUndCompradora.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      row.numeroLicitacao.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      row.produtoItem.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (row.linkPNCP && row.linkPNCP.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (row.observacoes && row.observacoes.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Filtering logic (memoized so Kanban drag-and-drop does not re-filter/sort on every mouse move)
+  const filteredDisputas = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return disputas.filter(row => {
+      const matchesSearch = !q ||
+        row.orgao.toLowerCase().includes(q) ||
+        row.uasgUndCompradora.toLowerCase().includes(q) ||
+        row.numeroLicitacao.toLowerCase().includes(q) ||
+        row.produtoItem.toLowerCase().includes(q) ||
+        (row.linkPNCP && row.linkPNCP.toLowerCase().includes(q)) ||
+        (row.observacoes && row.observacoes.toLowerCase().includes(q));
 
-    const matchesStatus = statusFilter === "Todas" || row.status === statusFilter;
-    const matchesPortal = portalFilter === "Todos" || row.portal === portalFilter;
+      const matchesStatus = statusFilter === "Todas" || row.status === statusFilter;
+      const matchesPortal = portalFilter === "Todos" || row.portal === portalFilter;
 
-    return matchesSearch && matchesStatus && matchesPortal;
-  }).sort((a, b) => {
-    let valA = a[sortField];
-    let valB = b[sortField];
-    
-    if (typeof valA === "string") valA = (valA as string).toLowerCase();
-    if (typeof valB === "string") valB = (valB as string).toLowerCase();
+      return matchesSearch && matchesStatus && matchesPortal;
+    }).sort((a, b) => {
+      let valA = a[sortField];
+      let valB = b[sortField];
+      
+      if (typeof valA === "string") valA = (valA as string).toLowerCase();
+      if (typeof valB === "string") valB = (valB as string).toLowerCase();
 
-    if (valA! < valB!) return sortAsc ? -1 : 1;
-    if (valA! > valB!) return sortAsc ? 1 : -1;
-    return 0;
-  });
+      if (valA! < valB!) return sortAsc ? -1 : 1;
+      if (valA! > valB!) return sortAsc ? 1 : -1;
+      return 0;
+    });
+  }, [disputas, searchQuery, statusFilter, portalFilter, sortField, sortAsc]);
 
   // Totais exibidos no rodapé do Painel
-  const valorTotalEstimado = disputas.reduce((sum, r) => sum + r.valorEstimadoItem, 0);
-  const valorNossoAlvo = disputas.reduce((sum, r) => sum + r.nossoValorAlvo, 0);
+  const valorTotalEstimado = useMemo(() => disputas.reduce((sum, r) => sum + r.valorEstimadoItem, 0), [disputas]);
+  const valorNossoAlvo = useMemo(() => disputas.reduce((sum, r) => sum + r.nossoValorAlvo, 0), [disputas]);
 
   // Encontra a cor cadastrada para um status (ou cinza neutro, se ainda não sincronizada)
   const getStatusColor = (status: DisputaStatus): string => {
@@ -1467,13 +1483,30 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   >
                     {row.orgao || "Órgão não informado"}
                   </p>
-                  <span
+                  <select
+                    value={row.status}
+                    onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
                     style={getStatusBadgeStyle(row.status)}
-                    className="ml-auto rounded-lg border px-2 py-1 text-[11px] font-bold sm:ml-0"
+                    title="Alterar status com 1 clique"
+                    className="ml-auto cursor-pointer rounded-lg border px-2 py-1 text-[11px] font-bold focus:outline-none sm:ml-0"
                   >
-                    {row.status}
-                  </span>
+                    {sortedStatusTypes.map(s => (
+                      <option key={s.id} value={s.label} className="bg-popover text-popover-foreground">
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
                   <div className="flex shrink-0 items-center gap-0.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => abrirChatDaDisputa(row)}
+                      className="h-7 w-7 text-muted-foreground hover:text-primary"
+                      title="Conversar com o Assessor IA sobre esta disputa"
+                    >
+                      <MessageSquarePlus className="h-3.5 w-3.5" />
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
@@ -1590,7 +1623,7 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           )}
         </div>
 
-      ) : (
+      ) : viewMode === "kanban" ? (
 
         /* ─────────── MODO 2: KANBAN (colunas = status, sem rolagem lateral) ─────────── */
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
@@ -1637,41 +1670,17 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     >
                       {cards.length}
                     </Badge>
-                    <Popover onOpenChange={(open) => { if (open) handleOpenColumnEditor(col); }}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 opacity-80 hover:bg-black/15 hover:opacity-100"
-                          style={{ color: getContrastTextColor(col.color) }}
-                          title="Editar nome e cor deste status"
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent align="end" className="w-64 space-y-3">
-                        <StatusColorEditor
-                          label={editColumnLabel}
-                          color={editColumnColor}
-                          onLabelChange={setEditColumnLabel}
-                          onLabelCommit={() => handleConfirmEditColumn(col.id)}
-                          onColorChange={(c) => { setEditColumnColor(c); handleUpdateStatusType(col.id, { color: c }); }}
-                        />
-                        <div className="flex justify-end border-t border-border pt-2.5">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteStatusType(col.id)}
-                            className="gap-1.5 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Excluir status
-                          </Button>
-                        </div>
-                      </PopoverContent>
-                    </Popover>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setShowStatusManager(true)}
+                      className="h-6 w-6 opacity-80 hover:bg-black/15 hover:opacity-100"
+                      style={{ color: getContrastTextColor(col.color) }}
+                      title="Editar nome e cor deste status"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </Button>
                   </div>
                 </div>
 
@@ -1711,6 +1720,16 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           </p>
                           {/* Em telas sem hover (toque) as ações ficam sempre visíveis */}
                           <div className="flex shrink-0 items-center gap-0.5 transition lg:opacity-0 lg:group-hover:opacity-100 lg:focus-within:opacity-100">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={(e) => { e.stopPropagation(); abrirChatDaDisputa(row); }}
+                              className="h-6 w-6 text-muted-foreground hover:text-primary"
+                              title="Conversar com a IA sobre esta disputa"
+                            >
+                              <MessageSquarePlus className="h-3 w-3" />
+                            </Button>
                             <Button
                               type="button"
                               variant="ghost"
@@ -1767,40 +1786,19 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           })}
 
           {/* Criar nova coluna / status */}
-          <Popover open={isAddColumnOpen} onOpenChange={setIsAddColumnOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="flex min-h-[120px] w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border p-3 text-xs font-bold text-muted-foreground transition hover:border-primary/40 hover:bg-muted/40 hover:text-primary"
-              >
-                <Plus className="h-5 w-5" />
-                Nova coluna
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-64 space-y-3">
-              <StatusColorEditor
-                label={newColumnLabel}
-                color={newColumnColor}
-                labelPlaceholder="Ex: Aguardando recurso"
-                autoFocus
-                onLabelChange={setNewColumnLabel}
-                onLabelSubmit={handleConfirmAddColumn}
-                onColorChange={setNewColumnColor}
-              />
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleConfirmAddColumn}
-                disabled={!newColumnLabel.trim()}
-                className="w-full"
-              >
-                <Check className="h-3.5 w-3.5" />
-                Criar coluna
-              </Button>
-            </PopoverContent>
-          </Popover>
+          <button
+            type="button"
+            onClick={() => setShowStatusManager(true)}
+            className="flex min-h-[120px] w-full cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border p-3 text-xs font-bold text-muted-foreground transition hover:border-primary/40 hover:bg-muted/40 hover:text-primary"
+          >
+            <Plus className="h-5 w-5" />
+            Nova coluna
+          </button>
         </div>
 
+      ) : (
+        /* ─────────── MODO 3: CALENDÁRIO INTEGRADO ─────────── */
+        <CalendarTab onNavigateToDisputas={() => setViewMode("spreadsheet")} />
       )}
 
       {/* ─────────── Gerenciador de Status (disponível em todos os modos) ─────────── */}

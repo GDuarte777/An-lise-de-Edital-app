@@ -4,10 +4,13 @@ import {
   PNCP_MODALIDADES_POR_RELEVANCIA,
   PNCP_MODALIDADES,
   montarQueryContratacoes,
+  montarQueryBuscaIndexadaPncp,
+  normalizarItemBuscaIndexadaPncp,
   temProximaPagina,
   chaveContratacao,
   parseNumeroControlePNCP,
   escolherArquivoEdital,
+  escolherArquivosPrincipaisEdital,
   formatarDataPncp,
   nomeModalidade,
   PNCP_LATENCIA_OK_MEDIDA_MS,
@@ -163,13 +166,21 @@ describe("parseNumeroControlePNCP", () => {
     });
   });
 
+  it("decompõe URL direta de edital do PNCP", () => {
+    expect(parseNumeroControlePNCP("https://pncp.gov.br/app/editais/79151312000156/2026/000501")).toEqual({
+      cnpj: "79151312000156",
+      sequencial: "501",
+      ano: "2026",
+    });
+  });
+
   it("devolve null para número fora do formato", () => {
     expect(parseNumeroControlePNCP("qualquer coisa")).toBeNull();
     expect(parseNumeroControlePNCP("")).toBeNull();
   });
 });
 
-describe("escolherArquivoEdital", () => {
+describe("escolherArquivoEdital e escolherArquivosPrincipaisEdital", () => {
   it("prefere o edital ao termo de referência e aos anexos", () => {
     const escolhido = escolherArquivoEdital([
       { titulo: "Anexo I - Planilha.xlsx", tipo: "Anexo", uri: "u1" },
@@ -177,6 +188,15 @@ describe("escolherArquivoEdital", () => {
       { titulo: "Edital PE 45-2026.pdf", tipo: "Edital", uri: "u3" },
     ]);
     expect(escolhido?.uri).toBe("u3");
+  });
+
+  it("seleciona tanto o Edital quanto o Termo de Referência quando publicados em arquivos separados", () => {
+    const principais = escolherArquivosPrincipaisEdital([
+      { titulo: "Anexo I - Planilha.xlsx", tipo: "Anexo", uri: "u1" },
+      { titulo: "Termo de Referência.pdf", tipo: "Termo de Referência", uri: "u2" },
+      { titulo: "Edital PE 45-2026.pdf", tipo: "Edital", uri: "u3" },
+    ]);
+    expect(principais.map(a => a.uri)).toEqual(["u3", "u2"]);
   });
 
   it("cai para o termo de referência quando não há edital", () => {
@@ -212,6 +232,37 @@ describe("escolherArquivoEdital", () => {
   });
 });
 
+describe("montarQueryBuscaIndexadaPncp e normalizarItemBuscaIndexadaPncp", () => {
+  it("usa status=todos por padrão para exibir licitações abertas e encerradas", () => {
+    const p = new URLSearchParams(montarQueryBuscaIndexadaPncp({ pagina: 1, tamanhoPagina: 20 }));
+    expect(p.get("status")).toBe("todos");
+    expect(p.get("tipos_documento")).toBe("edital");
+    expect(p.get("ordenacao")).toBe("-data");
+  });
+
+  it("normaliza item do índice /api/search/ para o formato da aplicação", () => {
+    const norm = normalizarItemBuscaIndexadaPncp({
+      numero_controle_pncp: "79151312000156-1-000501/2026",
+      orgao_cnpj: "79151312000156",
+      orgao_nome: "Município de Teste",
+      unidade_codigo: "987654",
+      unidade_nome: "Secretaria de Administração",
+      municipio_nome: "Curitiba",
+      uf: "PR",
+      ano: "2026",
+      numero_sequencial: "501",
+      modalidade_licitacao_id: "6",
+      modalidade_licitacao_nome: "Pregão - Eletrônico",
+      description: "Aquisição de notebooks corporativos",
+      valor_global: 125000.5
+    });
+    expect(norm.numeroControlePNCP).toBe("79151312000156-1-000501/2026");
+    expect(norm.linkPNCP).toBe("https://pncp.gov.br/app/editais/79151312000156/2026/000501");
+    expect(norm.valorTotalEstimado).toBe(125000.5);
+    expect(norm.objetoCompra).toBe("Aquisição de notebooks corporativos");
+  });
+});
+
 describe("formatarDataPncp", () => {
   it("usa AAAAMMDD", () => {
     expect(formatarDataPncp(new Date(2026, 8, 5))).toBe("20260905");
@@ -219,10 +270,6 @@ describe("formatarDataPncp", () => {
 });
 
 describe("prazos calibrados pela medição do portal", () => {
-  // Este bloco existe por causa de um defeito real: a medição registrou
-  // consultas boas em 33-34 s, mas o timeout continuou em 22 s. Toda consulta
-  // era abortada antes de o portal responder e o Radar não trazia nada — com a
-  // tela culpando os filtros do usuário.
   it("o timeout por consulta fica acima da resposta 200 mais lenta já medida", () => {
     expect(PNCP_TIMEOUT_PADRAO_MS).toBeGreaterThan(PNCP_LATENCIA_OK_MEDIDA_MS);
   });
@@ -232,8 +279,6 @@ describe("prazos calibrados pela medição do portal", () => {
   });
 
   it("a duração da função comporta o orçamento, com folga para responder", () => {
-    // Sem isto a função morre no padrão de 10 s da plataforma e o usuário
-    // recebe a página de erro dela, não o nosso JSON com o motivo.
     expect(PNCP_MAX_DURACAO_PADRAO_S * 1000).toBeGreaterThan(PNCP_ORCAMENTO_PADRAO_MS);
   });
 
@@ -243,12 +288,6 @@ describe("prazos calibrados pela medição do portal", () => {
 });
 
 describe("classificarStatusPncp", () => {
-  // O teste de contrato contra a API real falhava no main e em branches alheios
-  // sem que ninguém tivesse mexido em nada: ele dispara ~20 cenários seguidos,
-  // esgota o limitador do próprio PNCP e reportava o 429 resultante como
-  // "o portal recusou uma consulta válida". Um alarme que soa por algo que não é
-  // defeito nosso é um alarme que todos aprendem a ignorar — que é justamente o
-  // que o cabeçalho daquele workflow diz para evitar.
   it("trata 429 como condição do portal, não violação de contrato", () => {
     expect(classificarStatusPncp(429)).toBe("portal");
   });
@@ -265,7 +304,6 @@ describe("classificarStatusPncp", () => {
   });
 
   it("continua acusando violação de contrato nos 4xx que dizem respeito à consulta", () => {
-    // 400 é o que o portal devolve para tamanhoPagina inválido: a premissa mudou.
     expect(classificarStatusPncp(400)).toBe("contrato");
     expect(classificarStatusPncp(404)).toBe("contrato");
     expect(classificarStatusPncp(422)).toBe("contrato");
@@ -274,5 +312,79 @@ describe("classificarStatusPncp", () => {
   it("trata as respostas de sucesso como ok", () => {
     expect(classificarStatusPncp(200)).toBe("ok");
     expect(classificarStatusPncp(204)).toBe("ok");
+  });
+});
+
+describe("buscarContratacoesPncp (cliente híbrido navegador + fallback)", () => {
+  it("retorna resultados imediatos quando /api/search/ responde no navegador", async () => {
+    const { buscarContratacoesPncp } = await import("./pncpClient");
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          total: 1,
+          items: [
+            {
+              numero_controle_pncp: "79151312000156-1-000501/2026",
+              orgao_cnpj: "79151312000156",
+              orgao_nome: "Prefeitura Municipal",
+              municipio_nome: "São Paulo",
+              uf: "SP",
+              ano: "2026",
+              numero_sequencial: "501",
+              modalidade_licitacao_id: "6",
+              description: "Aquisição de computadores",
+              valor_global: 50000,
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )) as any;
+
+    try {
+      const res = await buscarContratacoesPncp({
+        pagina: 1,
+        tamanhoPagina: 15,
+        status: "todos",
+      });
+      expect(res.data).toHaveLength(1);
+      expect(res.totalRegistros).toBe(1);
+      expect(res.resultadoParcial).toBe(false);
+      expect(res.data[0].numeroControlePNCP).toBe("79151312000156-1-000501/2026");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it("nunca marca resultadoParcial=true quando a lista retornada pelo fallback está vazia", async () => {
+    const { buscarContratacoesPncp } = await import("./pncpClient");
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      if (String(url).includes("pncp.gov.br")) {
+        throw new Error("CORS blocked in test");
+      }
+      return new Response(
+        JSON.stringify({
+          data: [],
+          totalRegistros: 0,
+          totalPaginas: 1,
+          resultadoParcial: true,
+          source: "pncp_api_real",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const res = await buscarContratacoesPncp({
+        pagina: 1,
+        tamanhoPagina: 15,
+        status: "todos",
+      });
+      expect(res.data).toHaveLength(0);
+      expect(res.resultadoParcial).toBe(false);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 });

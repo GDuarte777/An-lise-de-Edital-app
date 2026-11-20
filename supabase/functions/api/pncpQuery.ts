@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════
-// REGRAS DA API DE CONSULTA DO PNCP
+// REGRAS DA API DE CONSULTA E BUSCA DO PNCP
 //
 // Este módulo concentra o que a API exige e o que ela devolve. Fica separado
 // do server.ts por um motivo prático: era exatamente aqui que estava o defeito
@@ -100,6 +100,8 @@ export function formatarDataPncp(date: Date): string {
 
 export type EndpointContratacao = "publicacao" | "proposta";
 
+export type StatusBuscaPncp = "todos" | "recebendo_proposta" | "encerradas";
+
 export interface ParametrosConsulta {
   endpoint: EndpointContratacao;
   modalidade: string;
@@ -137,6 +139,151 @@ export function montarQueryContratacoes(p: ParametrosConsulta): string {
   if (p.municipio) query.set("codigoMunicipioIbge", p.municipio);
 
   return query.toString();
+}
+
+export interface ParametrosBuscaIndexadaPncp {
+  q?: string;
+  municipio?: string;
+  ufs?: string[];
+  modalidades?: string[];
+  status?: StatusBuscaPncp;
+  pagina?: number;
+  tamanhoPagina?: number;
+}
+
+/**
+ * Monta a query string para a API indexada de busca do Portal PNCP (`/api/search/`).
+ *
+ * Ao contrário do endpoint `/api/consulta/v1/contratacoes`, que exige varrer
+ * uma modalidade por vez e não filtra palavras-chave no servidor, o `/api/search/`
+ * é o mesmo motor usado pela interface web oficial `pncp.gov.br/app/editais`:
+ * pesquisa em todas as modalidades simultaneamente, suporta `status=todos`
+ * (abertas e encerradas), `recebendo_proposta` ou `encerradas`, aceita `q`,
+ * `uf` e `modalidades` separados por `|` e responde em menos de 1 segundo.
+ */
+export function montarQueryBuscaIndexadaPncp(p: ParametrosBuscaIndexadaPncp): string {
+  const pagina = Math.max(1, p.pagina ?? 1);
+  const tamPagina = Math.min(100, Math.max(10, p.tamanhoPagina ?? 20));
+  const status: StatusBuscaPncp =
+    p.status === "recebendo_proposta" || p.status === "encerradas" ? p.status : "todos";
+
+  const query = new URLSearchParams({
+    tipos_documento: "edital",
+    ordenacao: "-data",
+    pagina: String(pagina),
+    tam_pagina: String(tamPagina),
+    status,
+  });
+
+  const termos = [p.q?.trim(), p.municipio && !/^\d+$/.test(p.municipio.trim()) ? p.municipio.trim() : ""]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (termos) {
+    query.set("q", termos);
+  }
+
+  if (Array.isArray(p.ufs) && p.ufs.length > 0) {
+    query.set("uf", p.ufs.map(u => u.trim().toUpperCase()).filter(Boolean).join("|"));
+  }
+
+  if (Array.isArray(p.modalidades) && p.modalidades.length > 0) {
+    query.set("modalidades", p.modalidades.map(m => String(m).trim()).filter(Boolean).join("|"));
+  }
+
+  return query.toString();
+}
+
+/**
+ * Converte um registro retornado pelo `/api/search/` do PNCP para o mesmo
+ * formato estruturado usado pelo restante da plataforma.
+ */
+export function normalizarItemBuscaIndexadaPncp(raw: any): any {
+  const cnpj = String(raw?.orgao_cnpj || raw?.cnpjOrgao || raw?.orgaoEntidade?.cnpj || "").replace(/\D/g, "");
+  const ano = raw?.ano || raw?.anoCompra || new Date().getFullYear();
+  const sequencialRaw = raw?.numero_sequencial ?? raw?.sequencialCompra ?? 1;
+  const sequencial = Number(sequencialRaw) || 1;
+  const numeroControle =
+    raw?.numero_controle_pncp ||
+    raw?.numeroControlePNCP ||
+    (cnpj ? `${cnpj}-1-${String(sequencial).padStart(6, "0")}/${ano}` : "");
+
+  const modalidadeId =
+    raw?.modalidade_licitacao_id != null
+      ? String(raw.modalidade_licitacao_id)
+      : raw?.modalidadeId != null
+      ? String(raw.modalidadeId)
+      : "";
+
+  const modalidadeNome =
+    raw?.modalidade_licitacao_nome ||
+    raw?.modalidadeNome ||
+    PNCP_MODALIDADES[modalidadeId] ||
+    "Licitação Pública";
+
+  const orgaoNome =
+    raw?.orgao_nome ||
+    raw?.orgaoEntidade?.razaoSocial ||
+    "Órgão Público";
+
+  const ufSigla =
+    raw?.uf ||
+    raw?.unidadeOrgao?.ufSigla ||
+    "BR";
+
+  const municipioNome =
+    raw?.municipio_nome ||
+    raw?.unidadeOrgao?.municipioNome ||
+    "";
+
+  const codigoUnidade =
+    raw?.unidade_codigo ||
+    raw?.unidadeOrgao?.codigoUnidade ||
+    "";
+
+  const nomeUnidade =
+    raw?.unidade_nome ||
+    raw?.unidadeOrgao?.nomeUnidade ||
+    "";
+
+  const valorGlobal =
+    typeof raw?.valor_global === "number"
+      ? raw.valor_global
+      : typeof raw?.valorTotalEstimado === "number"
+      ? raw.valorTotalEstimado
+      : 0;
+
+  return {
+    numeroControlePNCP: numeroControle,
+    idContratacaoPNCP: numeroControle,
+    cnpjOrgao: cnpj,
+    anoCompra: Number(ano) || new Date().getFullYear(),
+    sequencialCompra: sequencial,
+    numeroCompra: raw?.numero_compra || raw?.numeroCompra || String(sequencial),
+    processo: raw?.numero_processo || raw?.processo || raw?.title || "",
+    objetoCompra: raw?.description || raw?.objetoCompra || raw?.objeto || raw?.title || "",
+    modalidadeId: modalidadeId ? Number(modalidadeId) || modalidadeId : undefined,
+    modalidadeNome,
+    situacaoCompraNome: raw?.situacao_nome || raw?.situacaoCompraNome || (raw?.cancelado ? "Cancelada" : "Divulgada no PNCP"),
+    dataPublicacaoPncp: raw?.data_publicacao_pncp || raw?.createdAt || raw?.dataPublicacaoPncp || "",
+    dataAberturaProposta: raw?.data_fim_vigencia || raw?.data_inicio_vigencia || raw?.dataAberturaProposta || "",
+    valorTotalEstimado: valorGlobal,
+    orgaoEntidade: {
+      cnpj,
+      razaoSocial: orgaoNome,
+    },
+    unidadeOrgao: {
+      ufSigla,
+      municipioNome,
+      codigoUnidade,
+      nomeUnidade,
+    },
+    uasg: codigoUnidade
+      ? `UASG ${codigoUnidade}${nomeUnidade ? ` - ${nomeUnidade}` : ""}`
+      : "",
+    linkPNCP: cnpj ? `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${String(sequencial).padStart(6, "0")}` : "",
+    fontePNCP: true,
+  };
 }
 
 /** Envelope padronizado que os endpoints de listagem devolvem. */
@@ -178,19 +325,82 @@ export function chaveContratacao(item: any): string {
 }
 
 /**
- * Decompõe o número de controle PNCP ("79151312000156-1-000501/2026") nas
- * partes usadas pelas consultas de detalhe, itens e arquivos.
+ * Decompõe o número de controle PNCP ("79151312000156-1-000501/2026") ou uma
+ * URL direta do PNCP ("https://pncp.gov.br/app/editais/79151312000156/2026/000501")
+ * nas partes usadas pelas consultas de detalhe, itens e arquivos.
  */
 export function parseNumeroControlePNCP(
-  numero: string,
+  numeroOuUrl: string,
 ): { cnpj: string; ano: string; sequencial: string } | null {
-  const m = String(numero || "").match(/(\d{14})-\d+-(\d+)\/(\d{4})/);
-  if (!m) return null;
-  return { cnpj: m[1], sequencial: String(parseInt(m[2], 10)), ano: m[3] };
+  const texto = String(numeroOuUrl || "").trim();
+  if (!texto) return null;
+
+  // 1. Formato Número de Controle PNCP: 79151312000156-1-000501/2026 ou 79151312000156-1-000501-2026
+  const mControle = texto.match(/(\d{14})-\d+-(\d+)[/-](\d{4})/);
+  if (mControle) {
+    return { cnpj: mControle[1], sequencial: String(parseInt(mControle[2], 10)), ano: mControle[3] };
+  }
+
+  // 2. URL do Portal PNCP (/app/editais/CNPJ/ANO/SEQ ou /compras/CNPJ/ANO/SEQ ou /orgaos/CNPJ/compras/ANO/SEQ)
+  const mUrl =
+    texto.match(/pncp\.gov\.br\/(?:app\/)?(?:editais|compras)\/(\d{14})\/(\d{4})\/(\d{1,8})/i) ||
+    texto.match(/orgaos\/(\d{14})\/compras\/(\d{4})\/(\d{1,8})/i);
+  if (mUrl) {
+    return { cnpj: mUrl[1], ano: mUrl[2], sequencial: String(parseInt(mUrl[3], 10)) };
+  }
+
+  // 3. Formato direto CNPJ/ANO/SEQ (ex.: 79151312000156/2026/000501)
+  const mBarra = texto.match(/\b(\d{14})\/(\d{4})\/(\d{1,8})\b/);
+  if (mBarra) {
+    return { cnpj: mBarra[1], ano: mBarra[2], sequencial: String(parseInt(mBarra[3], 10)) };
+  }
+
+  return null;
 }
 
 /**
- * Escolhe, entre os arquivos publicados, qual é o edital.
+ * Pontua um arquivo publicado no PNCP para identificar Edital e Termo de Referência.
+ */
+function pontuarArquivoPncp(arq: { titulo?: string; tipo?: string; uri?: string }): {
+  pontos: number;
+  categoria: "edital" | "tr" | "anexo" | "descartar";
+} {
+  const texto = `${arq?.titulo || ""} ${arq?.tipo || ""}`.toLowerCase();
+  let pontos = 0;
+  let categoria: "edital" | "tr" | "anexo" | "descartar" = "anexo";
+
+  if (/\bedital\b|aviso de (?:contrata|dispensa|licita)/.test(texto)) {
+    pontos += 100;
+    categoria = "edital";
+  } else if (/termo de refer[eê]n|\btr\b|projeto b[aá]sico|estudo t[eé]cnico/.test(texto)) {
+    pontos += 70;
+    categoria = "tr";
+  } else if (/anexo/.test(texto)) {
+    pontos += 20;
+    categoria = "anexo";
+  }
+
+  // Retificação e errata alteram o edital, mas sozinhas não o substituem:
+  // analisar só a errata daria uma leitura incompleta do certame.
+  if (/retifica|errata|adendo|esclarecimento|impugna/.test(texto)) {
+    pontos -= 50;
+  }
+  // Ata e resultado são posteriores à disputa, não servem para decidir se vale participar.
+  if (/ata\b|resultado|homologa|adjudica/.test(texto)) {
+    pontos -= 60;
+    categoria = "descartar";
+  }
+
+  if (/\.pdf\b|pdf/.test(texto)) pontos += 10;
+  if (/\.zip\b|\.rar\b/.test(texto)) pontos -= 30;
+  if (/\.xls|\.xlsx|planilha/.test(texto)) pontos -= 20;
+  if (/\.jpg|\.jpeg|\.png/.test(texto)) pontos -= 40;
+
+  return { pontos, categoria };
+}
+
+/**
+ * Escolhe, entre os arquivos publicados, qual é o edital principal.
  *
  * O PNCP não marca "este é o edital": devolve uma lista com edital, termo de
  * referência, planilhas, minuta de contrato e anexos, em ordem qualquer. Mandar
@@ -203,35 +413,11 @@ export function escolherArquivoEdital<T extends { titulo?: string; tipo?: string
 ): T | null {
   if (!Array.isArray(arquivos) || arquivos.length === 0) return null;
 
-  const pontuar = (arq: T): number => {
-    const texto = `${arq?.titulo || ""} ${arq?.tipo || ""}`.toLowerCase();
-    let pontos = 0;
-
-    if (/\bedital\b/.test(texto)) pontos += 100;
-    else if (/termo de referen|\btr\b|projeto b[aá]sico/.test(texto)) pontos += 60;
-    else if (/anexo/.test(texto)) pontos += 20;
-
-    // Retificação e errata alteram o edital, mas sozinhas não o substituem:
-    // analisar só a errata daria uma leitura incompleta do certame.
-    if (/retifica|errata|adendo|esclarecimento|impugna/.test(texto)) pontos -= 50;
-    // Ata e resultado são posteriores à disputa, não servem para decidir se vale participar.
-    if (/ata\b|resultado|homologa|adjudica/.test(texto)) pontos -= 60;
-
-    if (/\.pdf\b|pdf/.test(texto)) pontos += 10;
-    if (/\.zip\b|\.rar\b/.test(texto)) pontos -= 30;
-    if (/\.xls|\.xlsx|planilha/.test(texto)) pontos -= 20;
-    if (/\.jpg|\.jpeg|\.png/.test(texto)) pontos -= 40;
-
-    return pontos;
-  };
-
-  // Sem nenhum candidato plausível, é melhor não escolher do que mandar a IA
-  // analisar uma ata de registro de preço achando que é o edital.
   let melhor: T | null = null;
   let melhorPontuacao = -Infinity;
   for (const arq of arquivos) {
     if (!arq?.uri) continue;
-    const pontos = pontuar(arq);
+    const { pontos } = pontuarArquivoPncp(arq);
     if (pontos > melhorPontuacao) {
       melhorPontuacao = pontos;
       melhor = arq;
@@ -242,21 +428,65 @@ export function escolherArquivoEdital<T extends { titulo?: string; tipo?: string
 }
 
 /**
+ * Seleciona os documentos principais da contratação no PNCP para leitura conjunta
+ * pela IA: o **Edital** principal + o **Termo de Referência / Projeto Básico**
+ * (quando publicado em arquivo separado).
+ *
+ * Em muitas licitações o Edital traz apenas as regras jurídicas e de habilitação,
+ * enquanto as especificações técnicas e quantitativos dos itens ficam no Termo
+ * de Referência. Ler os dois automaticamente no servidor garante análise completa.
+ */
+export function escolherArquivosPrincipaisEdital<T extends { titulo?: string; tipo?: string; uri?: string }>(
+  arquivos: T[],
+  limite = 2,
+): T[] {
+  if (!Array.isArray(arquivos) || arquivos.length === 0) return [];
+
+  const avaliados = arquivos
+    .filter(arq => Boolean(arq?.uri))
+    .map(arq => ({ arq, ...pontuarArquivoPncp(arq) }))
+    .filter(item => item.pontos > 0 && item.categoria !== "descartar")
+    .sort((a, b) => b.pontos - a.pontos);
+
+  if (avaliados.length === 0) return [];
+
+  const selecionados: T[] = [];
+  const urisVistas = new Set<string>();
+
+  // 1. Garante o melhor Edital (ou o documento de maior pontuação geral)
+  const principal = avaliados[0];
+  selecionados.push(principal.arq);
+  if (principal.arq.uri) urisVistas.add(principal.arq.uri);
+
+  // 2. Se o principal é um Edital e há um Termo de Referência separado, inclui o TR também
+  if (selecionados.length < limite) {
+    const melhorTr = avaliados.find(
+      item => item.categoria === "tr" && item.arq.uri && !urisVistas.has(item.arq.uri),
+    );
+    if (melhorTr) {
+      selecionados.push(melhorTr.arq);
+      if (melhorTr.arq.uri) urisVistas.add(melhorTr.arq.uri);
+    }
+  }
+
+  // 3. Caso ainda haja espaço e outro documento relevante (ex: Anexo I de especificações), adiciona
+  for (const item of avaliados) {
+    if (selecionados.length >= limite) break;
+    if (item.arq.uri && !urisVistas.has(item.arq.uri) && item.pontos >= 25) {
+      selecionados.push(item.arq);
+      urisVistas.add(item.arq.uri);
+    }
+  }
+
+  return selecionados;
+}
+
+/**
  * Como tratar o status que o PNCP devolveu, para o teste de contrato.
  *
  * "contrato" significa: o portal recusou uma consulta que consideramos VÁLIDA,
  * e portanto a premissa da plataforma mudou. É o único caso que deve soar
  * alarme.
- *
- * A regra era "todo 4xx é violação de contrato", e isso varria o 429 junto. Mas
- * 429 quer dizer "você está rápido demais", nunca "esta consulta é inválida": o
- * teste dispara cerca de vinte cenários em sequência e esgota o limitador do
- * próprio portal, e aí reportava o limite que ele mesmo provocou como se o PNCP
- * tivesse mudado a API. Isso fez o workflow falhar no main e em branches alheios
- * sem que ninguém tivesse tocado em nada — exatamente o alarme que, segundo o
- * cabeçalho do workflow, todos aprendem a ignorar.
- *
- * 408 e 425 entram pelo mesmo motivo: são condições de tempo, não de contrato.
  */
 export function classificarStatusPncp(status: number): "ok" | "portal" | "contrato" {
   if (status === 429 || status === 408 || status === 425) return "portal";

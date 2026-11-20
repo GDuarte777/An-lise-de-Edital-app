@@ -1,13 +1,21 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { urlDaApi } from "../utils/apiBase";
 import {
   Search, ShieldCheck, MapPin, Calendar, Clock, Landmark, Coins,
   ExternalLink, Sparkles, RefreshCw, AlertCircle, FileText, CheckCircle2,
-  Filter, Info, ChevronLeft, ChevronRight, ChevronDown, X, Check, Building2, SlidersHorizontal, RotateCcw, Download
+  Filter, Info, ChevronLeft, ChevronRight, ChevronDown, X, Check, Building2, SlidersHorizontal, RotateCcw, Download, Eye
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { escolherArquivoEdital } from "../utils/pncpQuery";
+import { type StatusBuscaPncp } from "../utils/pncpQuery";
+import {
+  buscarContratacoesPncp,
+  enriquecerPrecosEmSegundoPlano,
+  listarArquivosPncp,
+  baixarArquivoPncpComoBase64,
+  listarItensCompraPncp,
+  type ItemPrecoPncp,
+} from "../utils/pncpClient";
 import { Card } from "./ui/card";
 import { Input } from "./ui/input";
 import {
@@ -17,9 +25,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
+import {
+  resolverCapagPorOrgaoOuLocal,
+  obterEstiloNotaCapag,
+} from "../utils/capagData";
 
 interface RadarOportunidadesTabProps {
   onSelectForAnalysis: (text: string) => void;
+  onNavigateToCapag?: (focus: { uf?: string; municipio?: string; orgao?: string }) => void;
 }
 
 interface LicitacaoDetailed {
@@ -37,6 +50,10 @@ interface LicitacaoDetailed {
   dataAbertura: string;
   valorEstimadoRaw: number;
   valorEstimado: string;
+  valorHomologadoRaw?: number;
+  valorHomologado?: string;
+  orcamentoSigiloso?: boolean;
+  precoCarregando?: boolean;
   modalidade: string;
   modalidadeId?: string | number;
   situacao: string;
@@ -90,12 +107,16 @@ const ALL_MODALIDADES = [
   { id: "2", nome: "Diálogo Competitivo" }
 ];
 
-export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOportunidadesTabProps) {
+export default function RadarOportunidadesTab({
+  onSelectForAnalysis,
+  onNavigateToCapag,
+}: RadarOportunidadesTabProps) {
   // Filter States
   const [keyword, setKeyword] = useState("");
   const [cityQuery, setCityQuery] = useState("");
   const [selectedUfs, setSelectedUfs] = useState<string[]>([]); // Default empty = All UFs (Brasil)
   const [selectedModalidades, setSelectedModalidades] = useState<string[]>([]);
+  const [statusFiltro, setStatusFiltro] = useState<StatusBuscaPncp>("todos");
   const [valorMin, setValorMin] = useState<string>("");
   const [valorMax, setValorMax] = useState<string>("");
   const [periodDays, setPeriodDays] = useState<number>(90);
@@ -115,6 +136,8 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   const [arquivos, setArquivos] = useState<Array<{ sequencialDocumento: number; titulo: string; tipo: string; uri: string }>>([]);
   const [arquivosLoading, setArquivosLoading] = useState(false);
   const [arquivosError, setArquivosError] = useState<string | null>(null);
+  const [itensDisputa, setItensDisputa] = useState<ItemPrecoPncp[]>([]);
+  const [itensLoading, setItensLoading] = useState(false);
   const [preparandoAnalise, setPreparandoAnalise] = useState<string | null>(null);
   const [resultadoParcial, setResultadoParcial] = useState(false);
   // Modalidades que o PNCP recusou nesta busca: o usuário precisa saber que o
@@ -125,6 +148,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   const [showStatePicker, setShowStatePicker] = useState<boolean>(false);
   const [showModalidadesPicker, setShowModalidadesPicker] = useState<boolean>(false);
   const [ufSearchQuery, setUfSearchQuery] = useState<string>("");
+  const fetchGenerationRef = useRef<number>(0);
 
   // Toggle UF Selection
   const handleToggleUf = (sigla: string) => {
@@ -168,6 +192,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     setCityQuery("");
     setSelectedUfs([]);
     setSelectedModalidades([]);
+    setStatusFiltro("todos");
     setValorMin("");
     setValorMax("");
     setPeriodDays(90);
@@ -175,52 +200,27 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
     setPage(1);
   };
 
-  // Fetch from PNCP Proxy
+  // Fetch from PNCP (Direct Browser Search + Automatic Progressive Price Resolution)
   const handleFetchPNCP = async (targetPage = page) => {
+    const currentGeneration = ++fetchGenerationRef.current;
     setLoading(true);
     setError(null);
-
+    setResultadoParcial(false);
     setAvisosPNCP([]);
 
     try {
-      const queryParams = new URLSearchParams();
+      const json = await buscarContratacoesPncp({
+        pagina: targetPage,
+        tamanhoPagina: pageSize,
+        status: statusFiltro,
+        q: keyword.trim() || undefined,
+        municipio: cityQuery.trim() || undefined,
+        ufs: selectedUfs,
+        modalidades: selectedModalidades,
+        periodDays,
+      });
 
-      if (selectedUfs.length > 0) {
-        queryParams.set("ufs", selectedUfs.join(","));
-      }
-
-      if (selectedModalidades.length > 0) {
-        queryParams.set("modalidades", selectedModalidades.join(","));
-      }
-
-      if (keyword.trim()) {
-        queryParams.set("q", keyword.trim());
-      }
-
-      if (cityQuery.trim()) {
-        queryParams.set("municipio", cityQuery.trim());
-      }
-
-      queryParams.set("periodDays", String(periodDays));
-      queryParams.set("pagina", String(targetPage));
-      queryParams.set("tamanhoPagina", String(pageSize));
-
-      const res = await fetch(urlDaApi(`/api/pncp/contratacoes?${queryParams.toString()}`));
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
-        // Sem corpo JSON não foi o servidor que respondeu: a requisição morreu
-        // antes (timeout da função, 502 da plataforma). A mensagem genérica
-        // escondia isso e mandava o usuário mexer nos filtros à toa — era
-        // exatamente o que estava acontecendo. O status precisa aparecer.
-        if (!json) {
-          throw new Error(
-            res.status === 504 || res.status === 502
-              ? `A consulta ao PNCP passou do tempo limite (HTTP ${res.status}). O portal está lento; tente de novo em alguns minutos.`
-              : `O servidor respondeu HTTP ${res.status} sem detalhar o motivo.`
-          );
-        }
-        throw new Error(json?.error || `Falha ao comunicar com o servidor PNCP (HTTP ${res.status}).`);
-      }
+      if (currentGeneration !== fetchGenerationRef.current) return;
 
       if (json && Array.isArray(json.data)) {
         const mapped: LicitacaoDetailed[] = json.data.map((item: any, idx: number) => {
@@ -234,16 +234,35 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
           const ufSigla = item.unidadeOrgao?.ufSigla || item.uf || (selectedUfs.length === 1 ? selectedUfs[0] : "BR");
           const municipioNome = item.unidadeOrgao?.municipioNome || "Município Atendido";
           const unidadeNome = item.unidadeOrgao?.nomeUnidade || "Setor de Licitações e Compras";
-          // Sem código de unidade no registro do PNCP, o campo fica vazio. O
-          // fallback anterior escrevia "UASG 925001" — um código real, de uma
-          // unidade que não tem relação nenhuma com a licitação listada.
           const uasgFormatted = item.uasg || (item.unidadeOrgao?.codigoUnidade ? `UASG ${item.unidadeOrgao.codigoUnidade}` : "");
           const desc = item.objetoCompra || item.objeto || "Objeto de aquisição ou prestação de serviço público.";
 
-          const rawVal = typeof item.valorTotalEstimado === "number" ? item.valorTotalEstimado : 0;
-          const valorFormatted = rawVal > 0
-            ? `R$ ${rawVal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            : "Valor sob consulta / Edital";
+          const rawVal =
+            typeof item.valorTotalEstimado === "number"
+              ? item.valorTotalEstimado
+              : Number(item.valorTotalEstimado) || 0;
+          const rawHomologado =
+            typeof item.valorTotalHomologado === "number"
+              ? item.valorTotalHomologado
+              : Number(item.valorTotalHomologado) || 0;
+          const sigiloso = Boolean(item.orcamentoSigiloso);
+          const pendente = Boolean(item.precoPendente) && rawVal <= 0 && rawHomologado <= 0;
+
+          const valorFormatted =
+            rawVal > 0
+              ? `R$ ${rawVal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : rawHomologado > 0
+              ? `R$ ${rawHomologado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (Homologado)`
+              : pendente
+              ? "Calculando preço no PNCP..."
+              : sigiloso
+              ? "Orçamento Sigiloso"
+              : "Preço somente no PDF do Edital";
+
+          const valorHomologadoFormatted =
+            rawHomologado > 0
+              ? `R$ ${rawHomologado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : undefined;
 
           const pubDateFormatted = item.dataPublicacaoPncp
             ? new Date(item.dataPublicacaoPncp).toLocaleDateString("pt-BR")
@@ -266,8 +285,12 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
             objeto: desc,
             dataPublicacao: pubDateFormatted,
             dataAbertura: openDateFormatted,
-            valorEstimadoRaw: rawVal,
+            valorEstimadoRaw: rawVal > 0 ? rawVal : rawHomologado,
             valorEstimado: valorFormatted,
+            valorHomologadoRaw: rawHomologado,
+            valorHomologado: valorHomologadoFormatted,
+            orcamentoSigiloso: sigiloso,
+            precoCarregando: pendente,
             modalidade: item.modalidadeNome || "Pregão Eletrônico",
             modalidadeId: item.modalidadeId,
             situacao: item.situacaoCompraNome || "Divulgada no PNCP",
@@ -275,16 +298,16 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
           };
         });
 
-        // Client-side filtering for value ranges if provided
+        // Client-side filtering for value ranges if provided (mantém itens cujo preço ainda está carregando)
         let filtered = mapped;
         const minV = parseFloat(valorMin);
         const maxV = parseFloat(valorMax);
 
         if (!isNaN(minV) && minV > 0) {
-          filtered = filtered.filter(i => i.valorEstimadoRaw >= minV);
+          filtered = filtered.filter(i => i.precoCarregando || i.valorEstimadoRaw >= minV);
         }
         if (!isNaN(maxV) && maxV > 0) {
-          filtered = filtered.filter(i => i.valorEstimadoRaw <= maxV);
+          filtered = filtered.filter(i => i.precoCarregando || i.valorEstimadoRaw <= maxV);
         }
 
         setResults(filtered);
@@ -292,16 +315,85 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
         setTotalPages(json.totalPaginas || Math.ceil((json.totalRegistros || filtered.length) / pageSize));
         setResultadoParcial(Boolean(json.resultadoParcial));
         setAvisosPNCP(Array.isArray(json.avisosPNCP) ? json.avisosPNCP : []);
-        // O rótulo só pode afirmar "oficial" quando o dado veio mesmo da API do
-        // PNCP. Antes, dados gerados localmente eram exibidos como se fossem
-        // sincronizados do portal.
         setDataSource(json.source === "pncp_api_real" ? "Portal PNCP Oficial (tempo real)" : "Origem desconhecida");
         setLastUpdated(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+        setActiveItem(null);
 
-        if (filtered.length > 0) {
-          setActiveItem(filtered[0]);
-        } else {
-          setActiveItem(null);
+        // Dispara o enriquecimento automático de todos os cards da página em segundo plano (4 por vez)
+        const filaPrecos = filtered
+          .filter((i) => i.precoCarregando)
+          .map((i) => ({ numeroControlePNCP: i.numeroControlePNCP, precoPendente: true }));
+
+        if (filaPrecos.length > 0) {
+          enriquecerPrecosEmSegundoPlano(
+            filaPrecos,
+            (numControle, detalhe) => {
+              if (currentGeneration !== fetchGenerationRef.current) return;
+
+              const vEst = detalhe?.valorTotalEstimado && detalhe.valorTotalEstimado > 0 ? detalhe.valorTotalEstimado : 0;
+              const vHom = detalhe?.valorTotalHomologado && detalhe.valorTotalHomologado > 0 ? detalhe.valorTotalHomologado : 0;
+              const sig = Boolean(detalhe?.orcamentoSigiloso);
+              const rawFinal = vEst > 0 ? vEst : vHom;
+
+              const txtValor =
+                vEst > 0
+                  ? `R$ ${vEst.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : vHom > 0
+                  ? `R$ ${vHom.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (Homologado)`
+                  : sig
+                  ? "Orçamento Sigiloso"
+                  : "Preço somente no PDF do Edital";
+
+              const txtHomologado =
+                vHom > 0
+                  ? `R$ ${vHom.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : undefined;
+
+              const novaAbertura =
+                detalhe?.dataAberturaProposta || detalhe?.dataEncerramentoProposta
+                  ? new Date(detalhe.dataAberturaProposta || detalhe.dataEncerramentoProposta!).toLocaleDateString("pt-BR") +
+                    " às " +
+                    new Date(detalhe.dataAberturaProposta || detalhe.dataEncerramentoProposta!).toLocaleTimeString("pt-BR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : undefined;
+
+              const atualizarCard = (card: LicitacaoDetailed): LicitacaoDetailed => {
+                if (card.numeroControlePNCP !== numControle) return card;
+                return {
+                  ...card,
+                  valorEstimadoRaw: rawFinal > 0 ? rawFinal : card.valorEstimadoRaw,
+                  valorEstimado: rawFinal > 0 ? txtValor : card.valorEstimadoRaw > 0 ? card.valorEstimado : txtValor,
+                  valorHomologadoRaw: vHom > 0 ? vHom : card.valorHomologadoRaw,
+                  valorHomologado: txtHomologado || card.valorHomologado,
+                  orcamentoSigiloso: sig,
+                  precoCarregando: false,
+                  dataAbertura:
+                    card.dataAbertura === "Ver Cronograma no Edital" && novaAbertura
+                      ? novaAbertura
+                      : card.dataAbertura,
+                };
+              };
+
+              setResults((prev) => {
+                let atualizados = prev.map(atualizarCard);
+                if (!isNaN(minV) && minV > 0) {
+                  atualizados = atualizados.filter((i) => i.precoCarregando || i.valorEstimadoRaw >= minV);
+                }
+                if (!isNaN(maxV) && maxV > 0) {
+                  atualizados = atualizados.filter((i) => i.precoCarregando || i.valorEstimadoRaw <= maxV);
+                }
+                return atualizados;
+              });
+
+              setActiveItem((prev) => (prev && prev.numeroControlePNCP === numControle ? atualizarCard(prev) : prev));
+            },
+            {
+              concorrencia: 4,
+              shouldCancel: () => currentGeneration !== fetchGenerationRef.current,
+            }
+          ).catch(() => {});
         }
       } else {
         setResults([]);
@@ -327,33 +419,74 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   };
 
   useEffect(() => {
+    setPage(1);
     handleFetchPNCP(1);
-  }, [selectedUfs, selectedModalidades, pageSize, periodDays]);
+  }, [selectedUfs, selectedModalidades, statusFiltro, pageSize, periodDays]);
 
-  // Busca os documentos oficiais da contratação selecionada assim que ela muda.
+  // Fecha o popup de detalhes ao pressionar ESC
+  useEffect(() => {
+    if (!activeItem) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setActiveItem(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeItem]);
+
+  // Busca os documentos oficiais e os itens com preços da contratação selecionada assim que ela muda.
   useEffect(() => {
     setArquivos([]);
     setArquivosError(null);
+    setItensDisputa([]);
     if (!activeItem?.numeroControlePNCP) return;
 
     let cancelado = false;
     setArquivosLoading(true);
+    setItensLoading(true);
 
-    fetch(urlDaApi(`/api/pncp/arquivos?numeroControle=${encodeURIComponent(activeItem.numeroControlePNCP)}`))
-      .then(async res => {
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(json?.error || "Falha ao listar os arquivos.");
-        return json;
-      })
-      .then(json => {
+    listarArquivosPncp(activeItem.numeroControlePNCP)
+      .then((lista) => {
         if (cancelado) return;
-        setArquivos(Array.isArray(json.arquivos) ? json.arquivos : []);
+        setArquivos(Array.isArray(lista) ? lista : []);
       })
-      .catch(err => {
+      .catch((err) => {
         if (!cancelado) setArquivosError(err?.message || "Não foi possível listar os arquivos deste edital.");
       })
       .finally(() => {
         if (!cancelado) setArquivosLoading(false);
+      });
+
+    listarItensCompraPncp(activeItem.numeroControlePNCP)
+      .then((itens) => {
+        if (cancelado) return;
+        const lista = Array.isArray(itens) ? itens : [];
+        setItensDisputa(lista);
+
+        // Se o cabeçalho não trouxe o preço global, soma os itens e atualiza o card ativo e a lista
+        if (activeItem.valorEstimadoRaw <= 0 && lista.length > 0) {
+          const soma = lista.reduce((acc, it) => acc + (it.valorTotal > 0 ? it.valorTotal : 0), 0);
+          if (soma > 0) {
+            const formatado = `R$ ${soma.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            setActiveItem((prev) =>
+              prev && prev.numeroControlePNCP === activeItem.numeroControlePNCP
+                ? { ...prev, valorEstimadoRaw: soma, valorEstimado: formatado }
+                : prev
+            );
+            setResults((prev) =>
+              prev.map((r) =>
+                r.numeroControlePNCP === activeItem.numeroControlePNCP
+                  ? { ...r, valorEstimadoRaw: soma, valorEstimado: formatado }
+                  : r
+              )
+            );
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelado) setItensLoading(false);
       });
 
     return () => {
@@ -362,48 +495,28 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   }, [activeItem?.numeroControlePNCP]);
 
   const baixarArquivo = (arq: { uri: string; titulo: string }) => {
+    if (/^https:\/\/pncp\.gov\.br\//.test(arq.uri)) {
+      window.open(arq.uri, "_blank");
+      return;
+    }
     const nome = /\.\w{2,5}$/.test(arq.titulo) ? arq.titulo : `${arq.titulo}.pdf`;
     window.open(urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`), "_blank");
   };
 
   /**
    * Manda o ARQUIVO REAL do edital para a análise.
-   *
-   * Antes, "Analisar com IA" enviava um texto-modelo montado aqui, com seções
-   * genéricas de habilitação que não vinham do edital nenhum — a IA analisava um
-   * resumo inventado. Aqui o PDF oficial é baixado pelo proxy do servidor e
-   * segue como anexo de verdade, junto do número de controle PNCP para que o
-   * servidor complete os campos factuais com o dado publicado pelo órgão.
    */
   const analisarArquivoComIA = async (item: LicitacaoDetailed, arq: { uri: string; titulo: string }) => {
     setPreparandoAnalise(arq.uri);
     try {
-      const nome = /\.\w{2,5}$/.test(arq.titulo) ? arq.titulo : `${arq.titulo}.pdf`;
-      const res = await fetch(urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`));
-      if (!res.ok) {
-        const erro = await res.json().catch(() => ({}));
-        throw new Error(erro?.error || "Não foi possível baixar o edital do PNCP.");
+      const arquivoPronto = await baixarArquivoPncpComoBase64(arq);
+      if (!arquivoPronto) {
+        throw new Error("Não foi possível baixar o arquivo selecionado do PNCP.");
       }
 
-      const blob = await res.blob();
-      const base64: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || "").split("base64,")[1] || "");
-        reader.onerror = () => reject(new Error("Falha ao ler o arquivo baixado."));
-        reader.readAsDataURL(blob);
-      });
-
-      // O arquivo não cabe no localStorage (limite de ~5MB), então o repasse
-      // para a aba de análise é feito por uma variável de janela.
       (window as any).__aipPendingEdital = {
         numeroControlePNCP: item.numeroControlePNCP,
-        file: {
-          id: `pncp-${Date.now()}`,
-          name: nome,
-          size: `${(blob.size / 1024).toFixed(1)} KB`,
-          type: blob.type || "application/pdf",
-          base64
-        }
+        file: arquivoPronto,
       };
 
       onSelectForAnalysis(`Edital oficial do PNCP ${item.numeroControlePNCP} — ${item.orgao}`);
@@ -464,36 +577,20 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
   };
 
   /**
-   * Caminho principal da busca: analisar o EDITAL de verdade sem sair da lista.
-   *
-   * Localiza o edital entre os arquivos publicados, baixa o arquivo oficial e
-   * entrega para a análise. Só cai para a ficha resumida quando o órgão não
-   * publicou documento nenhum — e, nesse caso, avisa o usuário, porque uma
-   * análise sem o edital vale bem menos e ele precisa saber disso.
+   * Caminho principal da busca: envia a contratação direto para a Análise de Edital,
+   * onde o servidor baixa automaticamente o Edital + Termo de Referência + Itens Oficiais
+   * publicados no PNCP sem que o usuário precise baixar e fazer upload manualmente.
    */
   const analisarEditalDaLista = async (item: LicitacaoDetailed) => {
     const chave = `lista:${item.numeroControlePNCP}`;
     setPreparandoAnalise(chave);
     try {
-      const res = await fetch(urlDaApi(`/api/pncp/arquivos?numeroControle=${encodeURIComponent(item.numeroControlePNCP)}`));
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json?.error || "Não foi possível consultar os arquivos deste certame no PNCP.");
-
-      const lista = Array.isArray(json.arquivos) ? json.arquivos : [];
-      const edital = escolherArquivoEdital(lista);
-
-      if (!edital?.uri) {
-        const semArquivo = lista.length === 0;
-        const confirmar = window.confirm(
-          semArquivo
-            ? "Este certame não tem arquivos publicados no PNCP. Deseja analisar apenas a ficha oficial resumida? A análise fica bem mais limitada do que com o edital."
-            : "Não foi possível identificar qual dos arquivos publicados é o edital. Deseja analisar apenas a ficha oficial resumida? Você também pode abrir o certame e escolher o arquivo manualmente.",
-        );
-        if (confirmar) analisarSomenteFichaOficial(item);
-        return;
-      }
-
-      await analisarArquivoComIA(item, edital as { uri: string; titulo: string });
+      (window as any).__aipPendingEdital = {
+        numeroControlePNCP: item.numeroControlePNCP
+      };
+      onSelectForAnalysis(
+        `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}`
+      );
     } catch (err: any) {
       alert(err?.message || "Não foi possível preparar a análise deste edital.");
     } finally {
@@ -536,30 +633,30 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
         </div>
       </Card>
 
-      {/* Main Grid Layout: Search Filters & Results */}
+      {/* Main Layout: Top Horizontal Filters & Bottom 2 Vertical Columns */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-        {/* Left Filter Controls Sidebar (4 Columns) */}
-        <Card className="lg:col-span-4 rounded-xl shadow-xs p-5 space-y-5 flex flex-col justify-between">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center gap-2">
-                <SlidersHorizontal className="w-4 h-4 text-primary" />
-                <h4 className="font-bold text-foreground text-sm">Filtros Avançados PNCP</h4>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleResetFilters}
-                className="h-auto p-0 text-[10px] text-muted-foreground hover:text-primary hover:bg-transparent flex items-center gap-1 font-medium"
-                title="Limpar todos os filtros"
-              >
-                <RotateCcw className="w-3 h-3" />
-                Limpar
-              </Button>
+        {/* Top Horizontal Filter Controls (Full Width) */}
+        <Card className="lg:col-span-12 rounded-xl shadow-xs p-5 space-y-4">
+          <div className="flex items-center justify-between border-b border-border pb-3">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="w-4 h-4 text-primary" />
+              <h4 className="font-bold text-foreground text-sm">Filtros Avançados PNCP</h4>
             </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleResetFilters}
+              className="h-auto p-0 text-[10px] text-muted-foreground hover:text-primary hover:bg-transparent flex items-center gap-1 font-medium"
+              title="Limpar todos os filtros"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Limpar Filtros
+            </Button>
+          </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
             {/* Keyword Search */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Palavra-Chave / Produto / Objeto</label>
@@ -606,7 +703,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
                   setShowStatePicker(!showStatePicker);
                   setShowModalidadesPicker(false);
                 }}
-                className="w-full h-auto p-2.5 text-xs justify-between gap-2 font-normal"
+                className="w-full h-9 px-2.5 text-xs justify-between gap-2 font-normal"
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <MapPin className="w-4 h-4 text-primary shrink-0" />
@@ -731,7 +828,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
                   setShowModalidadesPicker(!showModalidadesPicker);
                   setShowStatePicker(false);
                 }}
-                className="w-full h-auto p-2.5 text-xs justify-between gap-2 font-normal"
+                className="w-full h-9 px-2.5 text-xs justify-between gap-2 font-normal"
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <SlidersHorizontal className="w-4 h-4 text-primary shrink-0" />
@@ -816,6 +913,21 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
               )}
             </div>
 
+            {/* Status Filter */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Situação / Status no PNCP</label>
+              <Select value={statusFiltro} onValueChange={(v) => setStatusFiltro(v as StatusBuscaPncp)}>
+                <SelectTrigger className="w-full text-xs font-medium">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="todos">Todas as Publicadas (Abertas e Encerradas)</SelectItem>
+                  <SelectItem value="recebendo_proposta">Recebendo Propostas (Em Aberto)</SelectItem>
+                  <SelectItem value="encerradas">Em Julgamento / Encerradas</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             {/* Period Filter */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Período de Publicação</label>
@@ -854,32 +966,32 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
               </div>
             </div>
 
+            {/* Search Action Button */}
+            <Button
+              type="button"
+              onClick={() => handleFetchPNCP(1)}
+              disabled={loading}
+              className="w-full h-9 font-bold text-xs gap-2"
+            >
+              {loading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Buscando no Portal PNCP...
+                </>
+              ) : (
+                <>
+                  <Search className="w-4 h-4" />
+                  Buscar Licitações no PNCP
+                </>
+              )}
+            </Button>
           </div>
-
-          <Button
-            type="button"
-            onClick={() => handleFetchPNCP(1)}
-            disabled={loading}
-            className="w-full h-auto py-3 mt-2 font-bold text-xs"
-          >
-            {loading ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                Buscando no Portal PNCP...
-              </>
-            ) : (
-              <>
-                <Search className="w-4 h-4" />
-                Buscar Licitações no PNCP
-              </>
-            )}
-          </Button>
         </Card>
 
-        {/* Right Section: Results List & Detail Inspector (8 Columns) */}
-        <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Bottom Section: Full-Width Results List */}
+        <div className="lg:col-span-12">
 
-          {/* List Column */}
+          {/* List Card (Full Width) */}
           <Card className="rounded-xl shadow-xs p-5 flex flex-col justify-between space-y-4">
             <div className="space-y-3.5">
 
@@ -890,7 +1002,7 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
                     Licitações ({totalRecords})
                   </span>
                   <span className="text-[9px] text-muted-foreground font-mono">
-                    {selectedUfs.length > 0 ? `UFs: ${selectedUfs.join(", ")}` : "Todos os Estados"}
+                    {selectedUfs.length > 0 ? `UFs: ${selectedUfs.join(", ")}` : "Todos os Estados"} • Clique em &ldquo;Ver detalhes&rdquo; ou em qualquer card para abrir a ficha completa
                   </span>
                 </div>
 
@@ -908,11 +1020,6 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
                 </Select>
               </div>
 
-              {/* Motivo da falha e alcance da varredura.
-                  Antes o estado `error` era preenchido mas nunca exibido, e
-                  `resultadoParcial` nunca chegava à tela: uma consulta recusada
-                  pelo PNCP aparecia como "nenhum certame localizado com estes
-                  filtros", culpando o filtro do usuário por um erro nosso. */}
               {!loading && error && (
                 <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 mb-3">
                   <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
@@ -953,61 +1060,110 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
                   </div>
                 </div>
               ) : (
-                <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1 scrollbar-thin">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 max-h-[650px] overflow-y-auto pr-1 scrollbar-thin">
                   {results.map((item) => {
                     const isActive = activeItem?.id === item.id;
+                    const capagEnte = resolverCapagPorOrgaoOuLocal({
+                      uf: item.uf,
+                      municipio: item.municipio,
+                      orgao: item.orgao,
+                    });
+                    const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
                     return (
                       <Card
                         key={item.id}
                         onClick={() => setActiveItem(item)}
-                        className={`p-3 rounded-xl transition-all cursor-pointer text-left space-y-2 gap-2 shadow-none ${
+                        className={`p-3.5 rounded-xl transition-all cursor-pointer text-left flex flex-col justify-between space-y-2.5 gap-2 shadow-none ${
                           isActive
                             ? "bg-primary/10 border-primary text-foreground shadow-xs"
-                            : "text-foreground hover:border-muted-foreground/40 hover:bg-muted/50"
+                            : "text-foreground hover:border-primary/40 hover:bg-muted/50"
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-1">
-                          <Badge variant="outline" className="font-bold text-[9px] px-1.5 py-0.5 bg-primary/10 text-primary border-primary/20 rounded font-mono truncate max-w-[160px]">
-                            {item.numero}
-                          </Badge>
-                          <span className="text-[9px] font-mono text-muted-foreground flex items-center gap-1 font-bold shrink-0 bg-muted px-1.5 py-0.5 rounded border border-border">
-                            <MapPin className="w-3 h-3 text-primary" />
-                            {item.municipio} - {item.uf}
-                          </span>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-1 flex-wrap">
+                            <Badge variant="outline" className="font-bold text-[9px] px-1.5 py-0.5 bg-primary/10 text-primary border-primary/20 rounded font-mono truncate max-w-[165px]">
+                              {item.numero}
+                            </Badge>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span
+                                title={`${capagEnte.nome} — ${capagEnte.veredito.statusPagador} (${capagEnte.veredito.prazoMedioRecebimento})`}
+                                className={`text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded border ${capagEstilo.badgeBg} ${capagEstilo.badgeText} ${capagEstilo.badgeBorder}`}
+                              >
+                                {capagEstilo.labelCurto}
+                              </span>
+                              <span className="text-[9px] font-mono text-muted-foreground flex items-center gap-1 font-bold shrink-0 bg-muted px-1.5 py-0.5 rounded border border-border">
+                                <MapPin className="w-3 h-3 text-primary" />
+                                {item.municipio} - {item.uf}
+                              </span>
+                            </div>
+                          </div>
+
+                          <p className="font-bold text-foreground text-[11px] truncate" title={item.orgao}>{item.orgao}</p>
+
+                          <p className="text-[10px] text-muted-foreground leading-relaxed line-clamp-2">
+                            {item.objeto}
+                          </p>
                         </div>
 
-                        <p className="font-bold text-foreground text-[11px] truncate">{item.orgao}</p>
+                        <div className="space-y-2 pt-1.5 border-t border-border">
+                          <div className="flex items-center justify-between gap-2 bg-success/10 border border-success/25 rounded-lg px-2.5 py-1.5">
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                              {item.precoCarregando ? (
+                                <RefreshCw className="w-3 h-3 text-primary animate-spin shrink-0" />
+                              ) : (
+                                <Coins className="w-3 h-3 text-success shrink-0" />
+                              )}
+                              Preço da Disputa:
+                            </span>
+                            <span
+                              className={`font-extrabold font-mono text-[11px] ${
+                                item.precoCarregando ? "text-primary animate-pulse" : "text-success"
+                              }`}
+                            >
+                              {item.valorEstimado}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-[9px] font-mono px-0.5">
+                            <span className="text-muted-foreground">{item.modalidade}</span>
+                            {item.valorHomologado && item.valorEstimadoRaw !== item.valorHomologadoRaw && (
+                              <span className="text-primary font-semibold">Homologado: {item.valorHomologado}</span>
+                            )}
+                          </div>
 
-                        <p className="text-[10px] text-muted-foreground leading-relaxed line-clamp-2">
-                          {item.objeto}
-                        </p>
+                          {/* Action Buttons: Ver detalhes (abre popup) + Analisar com IA */}
+                          <div className="grid grid-cols-2 gap-2 pt-0.5">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveItem(item);
+                              }}
+                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
+                            >
+                              <Eye className="w-3 h-3" />
+                              Ver detalhes
+                            </Button>
 
-                        <div className="flex items-center justify-between text-[9px] font-mono pt-1 border-t border-border">
-                          <span className="font-bold text-success">{item.valorEstimado}</span>
-                          <span className="text-muted-foreground">{item.modalidade}</span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={preparandoAnalise !== null}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                analisarEditalDaLista(item);
+                              }}
+                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
+                            >
+                              <Sparkles className="w-3 h-3 text-primary" />
+                              {preparandoAnalise === `lista:${item.numeroControlePNCP}`
+                                ? "Baixando..."
+                                : "Analisar com IA"}
+                            </Button>
+                          </div>
                         </div>
-
-                        {/* Analisar sem sair da busca: o caminho antigo obrigava a
-                            abrir a ficha, baixar o PDF e subir de novo na aba de
-                            análise. Aqui a plataforma localiza o edital no PNCP,
-                            baixa e manda analisar. */}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={preparandoAnalise !== null}
-                          onClick={(e) => {
-                            // Sem isto o clique também selecionaria o card.
-                            e.stopPropagation();
-                            analisarEditalDaLista(item);
-                          }}
-                          className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          {preparandoAnalise === `lista:${item.numeroControlePNCP}`
-                            ? "Baixando o edital..."
-                            : "Analisar edital com IA"}
-                        </Button>
                       </Card>
                     );
                   })}
@@ -1057,132 +1213,304 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
             )}
           </Card>
 
-          {/* Detailed Inspector Panel */}
-          <Card className="rounded-xl shadow-xs p-5 flex flex-col justify-between">
-            {activeItem ? (
-              <div className="h-full flex flex-col justify-between space-y-4">
-                <div className="space-y-4">
-                  {/* Item Header */}
-                  <div className="border-b border-border pb-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[9px] text-primary uppercase font-mono font-bold tracking-wider">Ficha Oficial do Edital</span>
-                      <Badge variant="secondary" className="text-[9px] px-2 py-0.5 rounded font-mono">
-                        {activeItem.situacao}
-                      </Badge>
-                    </div>
-                    <h4 className="font-bold text-foreground text-sm mt-1">{activeItem.numero}</h4>
-                    <p className="text-muted-foreground text-[10px] font-mono mt-0.5">{activeItem.modalidade}</p>
+        </div>
+
+      </div>
+
+      {/* Popup Modal: Ficha Oficial do Edital (abre somente quando o usuário clica em uma licitação ou em "Ver detalhes") */}
+      {activeItem && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 md:p-6 bg-black/65 backdrop-blur-xs overflow-y-auto animate-fade-in"
+          onClick={() => setActiveItem(null)}
+        >
+          <Card
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-3xl max-h-[90vh] rounded-2xl shadow-2xl border border-border bg-card flex flex-col overflow-hidden my-auto"
+          >
+            {/* Popup Header */}
+            <div className="flex items-start justify-between gap-3 p-4 sm:p-5 border-b border-border bg-muted/60 shrink-0">
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-primary uppercase font-mono font-bold tracking-wider">
+                    Ficha Oficial do Edital
+                  </span>
+                  <Badge variant="secondary" className="text-[9px] px-2 py-0.5 rounded font-mono">
+                    {activeItem.situacao}
+                  </Badge>
+                </div>
+                <h4 className="font-bold text-foreground text-sm sm:text-base truncate">{activeItem.numero}</h4>
+                <p className="text-muted-foreground text-[11px] font-mono">{activeItem.modalidade}</p>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setActiveItem(null)}
+                className="h-8 w-8 p-0 rounded-lg shrink-0"
+                title="Fechar detalhes"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+
+            {/* Popup Scrollable Content */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 scrollbar-thin">
+              {/* Fields */}
+              <div className="space-y-3 text-foreground text-[11px] leading-relaxed">
+                <div className="space-y-1">
+                  <span className="font-bold text-muted-foreground uppercase text-[9px] block tracking-wider">Órgão Comprador</span>
+                  <p className="text-foreground font-semibold flex items-center gap-1.5 text-xs">
+                    <Landmark className="w-4 h-4 text-primary shrink-0" />
+                    {activeItem.orgao}
+                  </p>
+                  {activeItem.cnpjOrgao && (
+                    <p className="text-[10px] text-muted-foreground font-mono">CNPJ: {activeItem.cnpjOrgao}</p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="bg-muted p-2.5 rounded-lg border border-border">
+                    <span className="font-bold text-muted-foreground uppercase text-[8px] block tracking-wider">UASG / Unidade</span>
+                    <p className="text-foreground font-extrabold text-[11px] truncate" title={activeItem.uasg || activeItem.unidade}>
+                      {activeItem.uasg || activeItem.unidade}
+                    </p>
                   </div>
 
-                  {/* Fields */}
-                  <div className="space-y-3 text-foreground text-[11px] leading-relaxed">
-                    <div className="space-y-1">
-                      <span className="font-bold text-muted-foreground uppercase text-[9px] block tracking-wider">Órgão Comprador</span>
-                      <p className="text-foreground font-semibold flex items-center gap-1.5">
-                        <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
-                        {activeItem.orgao}
-                      </p>
-                      {activeItem.cnpjOrgao && (
-                        <p className="text-[9px] text-muted-foreground font-mono">CNPJ: {activeItem.cnpjOrgao}</p>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div className="bg-muted p-2 rounded-lg border border-border">
-                        <span className="font-bold text-muted-foreground uppercase text-[8px] block tracking-wider">UASG / Unidade</span>
-                        <p className="text-foreground font-extrabold text-[10px] truncate" title={activeItem.uasg || activeItem.unidade}>
-                          {activeItem.uasg || activeItem.unidade}
-                        </p>
-                      </div>
-
-                      <div className="bg-muted p-2 rounded-lg border border-border">
-                        <span className="font-bold text-muted-foreground uppercase text-[8px] block tracking-wider">ID Contratação PNCP</span>
-                        <p className="text-primary font-mono font-bold text-[10px] truncate" title={activeItem.numeroControlePNCP}>
-                          {activeItem.numeroControlePNCP}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="font-bold text-muted-foreground uppercase text-[9px] block tracking-wider">Localização</span>
-                      <p className="text-foreground font-medium flex items-center gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
-                        {activeItem.municipio} - {activeItem.uf} ({activeItem.unidade})
-                      </p>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="font-bold text-muted-foreground uppercase text-[9px] block tracking-wider">Objeto / Termo de Referência</span>
-                      <div className="bg-muted p-3 rounded-xl text-foreground border border-border text-[11px] leading-relaxed max-h-36 overflow-y-auto font-sans scrollbar-thin">
-                        {activeItem.objeto}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2.5">
-                      <div className="bg-muted p-2.5 rounded-xl border border-border space-y-0.5">
-                        <span className="text-[8px] text-muted-foreground uppercase font-bold block">Valor Estimado</span>
-                        <p className="text-success font-bold font-mono text-xs">{activeItem.valorEstimado}</p>
-                      </div>
-                      <div className="bg-muted p-2.5 rounded-xl border border-border space-y-0.5">
-                        <span className="text-[8px] text-muted-foreground uppercase font-bold block">Abertura de Propostas</span>
-                        <p className="text-warning font-bold font-mono text-xs">{activeItem.dataAbertura}</p>
-                      </div>
-                    </div>
-
-                    {/* Official Portal Link */}
-                    {activeItem.linkPNCP && (
-                      <div className="pt-1">
-                        <Button
-                          asChild
-                          variant="secondary"
-                          className="w-full h-auto py-2 px-3 bg-primary/10 hover:bg-primary/20 border border-primary/20 text-primary text-xs font-bold gap-2 shadow-2xs"
-                        >
-                          <a
-                            href={activeItem.linkPNCP}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            <span>Ver Edital Completo no Portal PNCP Oficial</span>
-                          </a>
-                        </Button>
-                      </div>
-                    )}
+                  <div className="bg-muted p-2.5 rounded-lg border border-border">
+                    <span className="font-bold text-muted-foreground uppercase text-[8px] block tracking-wider">ID Contratação PNCP</span>
+                    <p className="text-primary font-mono font-bold text-[11px] truncate" title={activeItem.numeroControlePNCP}>
+                      {activeItem.numeroControlePNCP}
+                    </p>
                   </div>
                 </div>
 
-                {/* Documentos oficiais da contratação */}
-                <div className="space-y-2 pt-2">
+                <div className="space-y-1">
+                  <span className="font-bold text-muted-foreground uppercase text-[9px] block tracking-wider">Localização</span>
+                  <p className="text-foreground font-medium flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
+                    {activeItem.municipio} - {activeItem.uf} ({activeItem.unidade})
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <span className="font-bold text-muted-foreground uppercase text-[9px] block tracking-wider">Objeto / Termo de Referência</span>
+                  <div className="bg-muted p-3 rounded-xl text-foreground border border-border text-xs leading-relaxed max-h-40 overflow-y-auto font-sans scrollbar-thin">
+                    {activeItem.objeto}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="bg-success/10 p-3 rounded-xl border border-success/30 space-y-0.5">
+                    <span className="text-[8px] text-muted-foreground uppercase font-bold flex items-center gap-1">
+                      <Coins className="w-3 h-3 text-success" />
+                      Preço Estimado da Disputa
+                    </span>
+                    <p className="text-success font-extrabold font-mono text-sm">{activeItem.valorEstimado}</p>
+                    {activeItem.valorHomologado && (
+                      <p className="text-[9px] font-mono text-primary font-semibold">
+                        Homologado: {activeItem.valorHomologado}
+                      </p>
+                    )}
+                  </div>
+                  <div className="bg-muted p-3 rounded-xl border border-border space-y-0.5">
+                    <span className="text-[8px] text-muted-foreground uppercase font-bold block">Abertura de Propostas</span>
+                    <p className="text-warning font-bold font-mono text-xs">{activeItem.dataAbertura}</p>
+                    <p className="text-[9px] text-muted-foreground font-mono">Publicado: {activeItem.dataPublicacao}</p>
+                  </div>
+                </div>
+
+                {/* Diagnóstico CAPAG & Capacidade de Pagamento do Órgão Comprador */}
+                {(() => {
+                  const capagEnte = resolverCapagPorOrgaoOuLocal({
+                    uf: activeItem.uf,
+                    municipio: activeItem.municipio,
+                    orgao: activeItem.orgao,
+                  });
+                  const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
+                  return (
+                    <div className={`p-3.5 rounded-xl border ${capagEstilo.badgeBg} ${capagEstilo.badgeBorder} space-y-2.5`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <ShieldCheck className={`w-4 h-4 shrink-0 ${capagEstilo.badgeText}`} />
+                          <div>
+                            <span className="text-[8px] font-mono uppercase tracking-wider font-bold text-muted-foreground block">
+                              Saúde Fiscal &amp; Capacidade de Pagamento (CAPAG / Tesouro Nacional)
+                            </span>
+                            <p className={`text-xs font-extrabold ${capagEstilo.badgeText}`}>
+                              Nota CAPAG {capagEnte.notaCapag} — {capagEnte.veredito.statusPagador} ({capagEnte.nome})
+                            </p>
+                          </div>
+                        </div>
+
+                        {onNavigateToCapag && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              const itemRef = activeItem;
+                              setActiveItem(null);
+                              onNavigateToCapag({
+                                uf: itemRef.uf,
+                                municipio: itemRef.municipio,
+                                orgao: itemRef.orgao,
+                              });
+                            }}
+                            className="h-7 px-2.5 text-[10px] font-bold gap-1 bg-card"
+                          >
+                            <ExternalLink className="w-3 h-3 text-primary" />
+                            Ver no Consulta CAPAG
+                          </Button>
+                        )}
+                      </div>
+
+                      <p className="text-[10px] text-foreground leading-relaxed">
+                        {capagEnte.veredito.resumoDividaCaixa}
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px]">
+                        <div className="bg-card/85 p-2 rounded-lg border border-border">
+                          <span className="text-[8px] font-mono uppercase text-muted-foreground block">
+                            Indicadores STN (I / II / III)
+                          </span>
+                          <span className="font-mono font-bold text-foreground">
+                            Endiv. {capagEnte.indicadores.endividamento.valorPercentual}% ({capagEnte.indicadores.endividamento.nota}) • Liq.{" "}
+                            {capagEnte.indicadores.liquidez.valorPercentual}% ({capagEnte.indicadores.liquidez.nota})
+                          </span>
+                        </div>
+                        <div className="bg-card/85 p-2 rounded-lg border border-border">
+                          <span className="text-[8px] font-mono uppercase text-muted-foreground block">
+                            Prazo Médio de Pagamento
+                          </span>
+                          <span className="font-bold text-foreground">
+                            {capagEnte.veredito.prazoMedioRecebimento}
+                          </span>
+                        </div>
+                        <div className="bg-card/85 p-2 rounded-lg border border-border">
+                          <span className="text-[8px] font-mono uppercase text-muted-foreground block">
+                            Margem Recomendada
+                          </span>
+                          <span className="font-bold text-primary">
+                            {capagEnte.veredito.margemFinanceiraRecomendada}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Preços por Item da Disputa */}
+                <div className="space-y-1.5 pt-1">
                   <div className="flex items-center justify-between">
-                    <h5 className="font-bold text-foreground text-[11px] uppercase tracking-wide">Documentos do Edital</h5>
-                    {arquivos.length > 0 && (
-                      <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 rounded-full">
-                        {arquivos.length} arquivo{arquivos.length > 1 ? "s" : ""}
+                    <span className="font-bold text-muted-foreground uppercase text-[9px] tracking-wider flex items-center gap-1">
+                      <Coins className="w-3 h-3 text-primary" />
+                      Preços dos Itens da Disputa
+                    </span>
+                    {itensDisputa.length > 0 && (
+                      <Badge variant="outline" className="text-[9px] font-mono px-1.5 py-0">
+                        {itensDisputa.length} {itensDisputa.length === 1 ? "item" : "itens"}
                       </Badge>
                     )}
                   </div>
-
-                  {arquivosLoading && (
-                    <p className="text-muted-foreground text-[10px] py-2">Buscando os arquivos oficiais no PNCP...</p>
-                  )}
-
-                  {!arquivosLoading && arquivosError && (
-                    <p className="text-destructive text-[10px] py-2">{arquivosError}</p>
-                  )}
-
-                  {!arquivosLoading && !arquivosError && arquivos.length === 0 && (
-                    <p className="text-muted-foreground text-[10px] py-2">
-                      Esta contratação não tem arquivos publicados no PNCP.
+                  {itensLoading ? (
+                    <p className="text-[10px] text-muted-foreground py-1.5">Consultando preços dos itens no PNCP...</p>
+                  ) : itensDisputa.length === 0 ? (
+                    <p className="text-[10px] text-muted-foreground py-1">
+                      Itens e preços unitários detalhados diretamente no PDF do edital.
                     </p>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
+                      {itensDisputa.map((it) => (
+                        <div
+                          key={it.numeroItem}
+                          className="p-2.5 rounded-lg border border-border bg-muted/60 text-[10px] space-y-1"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="font-bold text-foreground">
+                              Item {String(it.numeroItem).padStart(2, "0")}:{" "}
+                              <span className="font-normal text-foreground/90">{it.descricao}</span>
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[9px] pt-1 border-t border-border/60">
+                            <span className="text-muted-foreground">
+                              Qtd: <strong className="text-foreground">{it.quantidade}</strong> {it.unidadeMedida}
+                            </span>
+                            <span className="text-muted-foreground">
+                              Unit.:{" "}
+                              <strong className="text-foreground">
+                                {it.valorUnitarioEstimado > 0
+                                  ? `R$ ${it.valorUnitarioEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                  : "Sigiloso"}
+                              </strong>
+                            </span>
+                            <span className="text-success font-bold">
+                              Total:{" "}
+                              {it.valorTotal > 0
+                                ? `R$ ${it.valorTotal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : "Sob consulta"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   )}
+                </div>
 
+                {/* Official Portal Link */}
+                {activeItem.linkPNCP && (
+                  <div className="pt-1">
+                    <Button
+                      asChild
+                      variant="secondary"
+                      className="w-full h-auto py-2 px-3 bg-primary/10 hover:bg-primary/20 border border-primary/20 text-primary text-xs font-bold gap-2 shadow-2xs"
+                    >
+                      <a
+                        href={activeItem.linkPNCP}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Ver Edital Completo no Portal PNCP Oficial</span>
+                      </a>
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              {/* Documentos oficiais da contratação */}
+              <div className="space-y-2 pt-2 border-t border-border">
+                <div className="flex items-center justify-between">
+                  <h5 className="font-bold text-foreground text-[11px] uppercase tracking-wide">Documentos do Edital</h5>
+                  {arquivos.length > 0 && (
+                    <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 rounded-full">
+                      {arquivos.length} arquivo{arquivos.length > 1 ? "s" : ""}
+                    </Badge>
+                  )}
+                </div>
+
+                {arquivosLoading && (
+                  <p className="text-muted-foreground text-[10px] py-2">Buscando os arquivos oficiais no PNCP...</p>
+                )}
+
+                {!arquivosLoading && arquivosError && (
+                  <p className="text-destructive text-[10px] py-2">{arquivosError}</p>
+                )}
+
+                {!arquivosLoading && !arquivosError && arquivos.length === 0 && (
+                  <p className="text-muted-foreground text-[10px] py-2">
+                    Esta contratação não tem arquivos publicados no PNCP.
+                  </p>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {arquivos.map(arq => (
                     <div
                       key={arq.sequencialDocumento}
-                      className="p-2.5 rounded-xl border border-border bg-card space-y-2"
+                      className="p-2.5 rounded-xl border border-border bg-muted/40 space-y-2 flex flex-col justify-between"
                     >
                       <div className="min-w-0">
-                        <p className="font-semibold text-foreground text-[11px] truncate">{arq.titulo}</p>
+                        <p className="font-semibold text-foreground text-[11px] truncate" title={arq.titulo}>{arq.titulo}</p>
                         <p className="text-muted-foreground text-[10px]">{arq.tipo}</p>
                       </div>
                       <div className="flex gap-2">
@@ -1208,40 +1536,41 @@ export default function RadarOportunidadesTab({ onSelectForAnalysis }: RadarOpor
                     </div>
                   ))}
                 </div>
-
-                {/* Análise a partir dos dados do resumo */}
-                <div className="space-y-2 pt-2">
-                  <div className="p-3 bg-primary/10 rounded-xl border border-primary/20 text-foreground text-[10px] leading-normal flex items-start gap-2">
-                    <Sparkles className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                    <span>
-                      Para a análise mais completa, use <strong>Analisar com IA</strong> em um dos arquivos acima — a IA lê o edital
-                      inteiro. O botão abaixo usa somente os campos desta ficha, que são poucos: sem o edital, a análise
-                      não tem como apontar exigências de habilitação, prazos ou pegadinhas.
-                    </span>
-                  </div>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => analisarSomenteFichaOficial(activeItem)}
-                    className="w-full h-auto py-2.5 font-bold text-xs gap-2"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    Analisar apenas a ficha oficial
-                  </Button>
-                </div>
               </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground text-center py-20 gap-2">
-                <FileText className="w-10 h-10 text-muted-foreground/50" />
-                <p className="text-xs">Selecione uma oportunidade ao lado para ver todos os detalhes.</p>
+            </div>
+
+            {/* Popup Footer: Análise Completa Automática + Fechar */}
+            <div className="p-4 sm:p-5 border-t border-border bg-muted/60 space-y-2.5 shrink-0">
+              <div className="p-2.5 bg-primary/10 rounded-xl border border-primary/20 text-foreground text-[10px] leading-normal flex items-start gap-2">
+                <Sparkles className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                <span>
+                  Ao clicar abaixo, o servidor baixa e lê automaticamente o <strong>Edital + Termo de Referência + Itens Oficiais</strong> direto do PNCP, sem precisar baixar e enviar arquivos manualmente.
+                </span>
               </div>
-            )}
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setActiveItem(null)}
+                  className="sm:w-32 h-auto py-2.5 font-bold text-xs"
+                >
+                  Fechar
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => analisarEditalDaLista(activeItem)}
+                  disabled={preparandoAnalise !== null}
+                  className="flex-1 h-auto py-2.5 font-bold text-xs gap-2"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  Analisar Edital + TR + Itens com IA (Automático)
+                </Button>
+              </div>
+            </div>
           </Card>
-
         </div>
-
-      </div>
+      )}
 
     </div>
   );

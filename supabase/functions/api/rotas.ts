@@ -47,12 +47,15 @@ import {
   PNCP_ORCAMENTO_PADRAO_MS,
   PNCP_TIMEOUT_PADRAO_MS,
   chaveContratacao,
+  escolherArquivosPrincipaisEdital,
   formatarDataPncp,
+  montarQueryBuscaIndexadaPncp,
   montarQueryContratacoes,
+  normalizarItemBuscaIndexadaPncp,
   parseNumeroControlePNCP,
   temProximaPagina
 } from "./pncpQuery.ts";
-import type { EndpointContratacao } from "./pncpQuery.ts";
+import type { EndpointContratacao, StatusBuscaPncp } from "./pncpQuery.ts";
 import { registrarRotasRoboLances } from "./roboLances.ts";
 
 /**
@@ -708,6 +711,7 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
 }
 
   const pncpCache = new Map<string, { timestamp: number; data: any }>();
+  const acervoCache = new Map<string, { timestamp: number; data: Awaited<ReturnType<typeof montarAcervo>> }>();
 
   // API Route: Proxy PNCP Contratacoes
   /**
@@ -742,7 +746,8 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         tamanhoPagina = "20",
         q = "",
         municipio = "",
-        fonte = "proposta",
+        status: reqStatus,
+        fonte,
         dataInicial: reqDataInicial,
         dataFinal: reqDataFinal
       } = req.query;
@@ -768,9 +773,75 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
       const pageNum = Math.max(1, parseInt(String(pagina), 10) || 1);
       const pageSize = Math.min(200, Math.max(1, parseInt(String(tamanhoPagina), 10) || 20));
 
-      // "proposta" traz o que ainda aceita proposta — é o que um Radar de
-      // Oportunidades quer. "publicacao" traz tudo que foi publicado no período.
-      const endpoint: "publicacao" | "proposta" = fonte === "publicacao" ? "publicacao" : "proposta";
+      // Define o status da consulta: por padrão traz TODAS as licitações publicadas
+      // (abertas e encerradas), permitindo filtrar por "recebendo_proposta" ou "encerradas".
+      const statusBusca: StatusBuscaPncp = (() => {
+        const s = String(reqStatus || "").trim().toLowerCase();
+        if (s === "recebendo_proposta" || s === "proposta" || s === "abertas") return "recebendo_proposta";
+        if (s === "encerradas" || s === "encerrada" || s === "julgamento") return "encerradas";
+        if (s === "todos" || s === "todas" || s === "publicacao") return "todos";
+        if (fonte === "proposta") return "recebendo_proposta";
+        return "todos";
+      })();
+
+      const endpoint: "publicacao" | "proposta" =
+        statusBusca === "recebendo_proposta" ? "proposta" : "publicacao";
+
+      // 1. Consulta prioritária no índice unificado do PNCP (/api/search/):
+      // Responde em ~1s cobrindo todas as 13 modalidades e 27 UFs simultaneamente,
+      // suporta busca textual nativa no servidor (`q`) e paginação real sobre todo o acervo.
+      const searchCacheKey = `search_v1|${statusBusca}|${selectedUfs.join(",")}|${selectedModalidades.join(",")}|${q}|${municipio}|${pageNum}|${pageSize}`;
+      const cachedSearch = pncpCache.get(searchCacheKey);
+      if (cachedSearch && Date.now() - cachedSearch.timestamp < 300_000) {
+        return res.json(cachedSearch.data);
+      }
+
+      const queryCombinada = [String(q || "").trim(), (!/^\d+$/.test(String(municipio || "").trim()) ? String(municipio || "").trim() : "")]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      const searchQuery = montarQueryBuscaIndexadaPncp({
+        pagina: pageNum,
+        tamanhoPagina: pageSize,
+        status: statusBusca,
+        q: queryCombinada || undefined,
+        ufs: selectedUfs,
+        modalidades: selectedModalidades
+      });
+
+      const searchRes = await pncpFetchRaw(`https://pncp.gov.br/api/search/?${searchQuery}`, 15_000);
+      if (searchRes.ok && Array.isArray(searchRes.json?.items)) {
+        const rawItems = searchRes.json.items;
+        const total = Number(searchRes.json.total) || rawItems.length;
+        let normalizados = rawItems.map((it: any) => normalizarItemBuscaIndexadaPncp(it));
+
+        const municipioTermo = String(municipio || "").trim().toLowerCase();
+        if (municipioTermo && !/^\d+$/.test(municipioTermo)) {
+          normalizados = normalizados.filter((i: any) =>
+            `${i.unidadeOrgao?.municipioNome || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.objetoCompra || ""}`
+              .toLowerCase()
+              .includes(municipioTermo)
+          );
+        }
+
+        const totalPaginas = Math.max(1, Math.ceil(total / pageSize));
+        const payload = {
+          data: normalizados,
+          totalRegistros: total,
+          totalPaginas,
+          numeroPagina: pageNum,
+          totalDisponivelPNCP: total,
+          resultadoParcial: false,
+          modalidadesConsultadas: selectedModalidades.length > 0 ? selectedModalidades.length : PNCP_MODALIDADES_POR_RELEVANCIA.length,
+          status: statusBusca,
+          fonte: endpoint,
+          source: "pncp_api_real"
+        };
+
+        pncpCache.set(searchCacheKey, { timestamp: Date.now(), data: payload });
+        return res.json(payload);
+      }
 
       const hoje = new Date();
       const daysBack = parseInt(String(req.query.periodDays || 90), 10) || 90;
@@ -794,20 +865,13 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
       // Sem UF escolhida, uma única consulta sem filtro cobre o Brasil inteiro.
       const targetUfs = selectedUfs.length > 0 ? selectedUfs : [""];
 
-      const cacheKey = `${endpoint}|${targetUfs.join(",")}|${targetMods.join(",")}|${municipio}|${dataInicial}|${dataFinal}`;
+      const cacheKey = `${endpoint}|${statusBusca}|${targetUfs.join(",")}|${targetMods.join(",")}|${municipio}|${dataInicial}|${dataFinal}`;
       const cached = pncpCache.get(cacheKey);
       let agregado: { items: any[]; totalPNCP: number; truncado: boolean; erros: string[] };
 
-      // Cada varredura custa mais de 30 s contra um portal que responde 500
-      // em boa parte das modalidades. Com 3 minutos de validade, quase toda
-      // visita pagava esse preço de novo. O dado de licitação não muda de
-      // minuto a minuto; 15 minutos de cache trocam frescor por uma tela que
-      // abre na hora.
       if (cached && Date.now() - cached.timestamp < 900_000) {
         agregado = cached.data;
       } else {
-        // Orçamento de tempo: a rota agrega muitas páginas, mas não pode
-        // estourar o limite de duração da função serverless.
         const deadline = Date.now() + PNCP_ORCAMENTO_MS;
         const maxPaginasPorCombo = 20; // até 1.000 registros por combinação
 
@@ -994,6 +1058,17 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
       const { textInput, fileBase64, fileName, fileType, attachments, attachedFiles, files, aiConfig: clientAiConfig, selectedItems } = req.body;
       let aiConfig = await resolveAiConfig(req.headers.authorization, clientAiConfig);
 
+      // Antecipa a detecção do número de controle ou URL do PNCP para disparar a consulta
+      // oficial e o download automático de Edital + Termo de Referência em paralelo.
+      const textForEarlyPncp = ((req.body.numeroControlePNCP || "") + "\n" + (req.body.textInput || "") + "\n" + (req.body.editalText || "")).trim();
+      const earlyAlvoPncp = parseNumeroControlePNCP(textForEarlyPncp);
+      const earlyPncpPromise = earlyAlvoPncp
+        ? pncpFetchContratacao(earlyAlvoPncp.cnpj, earlyAlvoPncp.ano, earlyAlvoPncp.sequencial).catch(() => null)
+        : Promise.resolve(null);
+      const earlyArquivosPromise = earlyAlvoPncp
+        ? pncpFetchArquivos(earlyAlvoPncp.cnpj, earlyAlvoPncp.ano, earlyAlvoPncp.sequencial).catch(() => [])
+        : Promise.resolve([]);
+
       // Collect all file attachments uniquely
       const rawFileList = collectUniqueFiles([
         attachments, 
@@ -1002,14 +1077,91 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         fileBase64 ? { base64: fileBase64, type: fileType, name: fileName } : null
       ]);
 
-      if (!textInput && rawFileList.length === 0) {
+      // Quando o usuário aciona a análise a partir do Radar ou cola apenas o link/ID do PNCP
+      // sem anexar arquivos manualmente, o servidor baixa automaticamente o Edital + Termo de Referência!
+      const arquivosBaixadosPNCP: string[] = [];
+      let effectiveTextInput = String(textInput || "").trim();
+
+      if (earlyAlvoPncp && rawFileList.length === 0) {
+        try {
+          const listaArquivos = await earlyArquivosPromise;
+          const principais = escolherArquivosPrincipaisEdital(listaArquivos, 2);
+          await Promise.all(
+            principais.map(async (arq) => {
+              if (!arq.uri || !/^https:\/\/pncp\.gov\.br\//.test(arq.uri)) return;
+              try {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 25_000);
+                const upstream = await fetch(arq.uri, { headers: PNCP_HEADERS, signal: controller.signal });
+                clearTimeout(timer);
+                if (!upstream.ok) return;
+                const ab = await upstream.arrayBuffer();
+                // Limita anexos automáticos a 25MB cada para não estourar memória da Edge Function
+                if (ab.byteLength > 25 * 1024 * 1024 || ab.byteLength === 0) return;
+                const contentType = upstream.headers.get("content-type") || "application/pdf";
+                const rawTitle = arq.titulo || "Documento_PNCP.pdf";
+                const nome = /\.\w{2,5}$/.test(rawTitle) ? rawTitle : `${rawTitle}.pdf`;
+                rawFileList.push({
+                  name: nome,
+                  type: contentType.includes("text") ? "text/plain" : "application/pdf",
+                  base64: Buffer.from(ab).toString("base64")
+                });
+                arquivosBaixadosPNCP.push(nome);
+              } catch (err: any) {
+                console.warn(`[analyze-edital] Falha ao baixar documento automático (${arq.titulo}):`, err?.message || err);
+              }
+            })
+          );
+        } catch (err: any) {
+          console.warn("[analyze-edital] Falha ao listar documentos automáticos do PNCP:", err?.message || err);
+        }
+      }
+
+      // Se temos dados oficiais do PNCP, montamos um resumo estruturado dos dados e itens
+      // publicados pelo órgão para enriquecer a leitura da IA (ou suprir quando não há PDF).
+      if (earlyAlvoPncp) {
+        const oficialPre = await earlyPncpPromise;
+        if (oficialPre) {
+          const resumoItens = Array.isArray(oficialPre.itens) && oficialPre.itens.length > 0
+            ? "\nITENS OFICIAIS PUBLICADOS NO PNCP:\n" +
+              oficialPre.itens.slice(0, 200).map((it: any, idx: number) => {
+                const num = it.numeroItem ?? idx + 1;
+                const desc = it.descricao || it.materialOuServicoNome || "Item";
+                const qtd = it.quantidade ?? 1;
+                const und = it.unidadeMedida || "Unidade";
+                const vUnit = typeof it.valorUnitarioEstimado === "number"
+                  ? `R$ ${it.valorUnitarioEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : "Não informado";
+                return `- Item ${num}: ${desc} | Quantidade: ${qtd} ${und} | Valor Unitário Estimado: ${vUnit}`;
+              }).join("\n")
+            : "";
+
+          const fichaOficialTexto = [
+            `DADOS OFICIAIS DA CONTRATAÇÃO NO PNCP (${earlyAlvoPncp.cnpj}-1-${String(earlyAlvoPncp.sequencial).padStart(6, "0")}/${earlyAlvoPncp.ano}):`,
+            oficialPre.orgaoEntidade?.razaoSocial ? `Órgão Comprador: ${oficialPre.orgaoEntidade.razaoSocial} (CNPJ: ${earlyAlvoPncp.cnpj})` : "",
+            oficialPre.unidadeOrgao?.codigoUnidade ? `Unidade / UASG: ${oficialPre.unidadeOrgao.codigoUnidade} - ${oficialPre.unidadeOrgao.nomeUnidade || ""}` : "",
+            oficialPre.modalidadeNome ? `Modalidade: ${oficialPre.modalidadeNome}` : "",
+            oficialPre.numeroCompra || oficialPre.processo ? `Número/Processo: ${oficialPre.numeroCompra || oficialPre.processo}/${oficialPre.anoCompra || earlyAlvoPncp.ano}` : "",
+            oficialPre.objetoCompra ? `Objeto Oficial: ${oficialPre.objetoCompra}` : "",
+            typeof oficialPre.valorTotalEstimado === "number" && oficialPre.valorTotalEstimado > 0
+              ? `Valor Total Estimado Oficial: R$ ${oficialPre.valorTotalEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : "",
+            oficialPre.dataAberturaProposta ? `Data de Abertura/Sessão: ${new Date(oficialPre.dataAberturaProposta).toLocaleString("pt-BR")}` : "",
+            resumoItens
+          ].filter(Boolean).join("\n");
+
+          effectiveTextInput = [effectiveTextInput, fichaOficialTexto].filter(Boolean).join("\n\n");
+        }
+      }
+
+      if (!effectiveTextInput && rawFileList.length === 0) {
         return res.status(400).json({ error: "Nenhum conteúdo de edital ou anexo enviado." });
       }
 
       // If no AI key configured anywhere, smoothly process with local parser directly without failing
       if (!aiConfig) {
         console.log("[analyze-edital] Sem chave de IA configurada, extraindo texto e processando localmente...");
-        let extractedText = textInput || "";
+        let extractedText = effectiveTextInput || "";
         for (const f of rawFileList) {
           try {
             if (f.uploadId) {
@@ -1174,8 +1326,8 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
 `;
 
       contentParts.push({
-        text: textInput 
-          ? `${basePrompt}\n${itemFocusInstructions}\n\nTexto adicional / Edital:\n${textInput}` 
+        text: effectiveTextInput 
+          ? `${basePrompt}\n${itemFocusInstructions}\n\nTexto adicional / Edital:\n${effectiveTextInput}` 
           : `${basePrompt}\n${itemFocusInstructions}`
       });
 
@@ -1229,7 +1381,7 @@ REGRAS:
       };
 
       itensPromise = generateAiResponse({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: [{ text: promptItens }, ...contentParts],
         aiConfig,
         jsonMode: true,
@@ -1244,7 +1396,7 @@ REGRAS:
 
       console.log("Chamando AI Router para análise de edital...");
       const response = await generateAiResponse({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: contentParts,
         aiConfig,
         jsonMode: true,
@@ -1594,11 +1746,17 @@ REGRAS:
       const numeroControleInformado =
         String(req.body.numeroControlePNCP || "").trim() ||
         String(parsedData.idContratacaoPNCP || "").trim();
-      const alvoPncp = numeroControleInformado ? parseNumeroControlePNCP(numeroControleInformado) : null;
+      const alvoPncp = numeroControleInformado ? parseNumeroControlePNCP(numeroControleInformado) : earlyAlvoPncp;
 
       if (alvoPncp) {
         try {
-          const oficial = await pncpFetchContratacao(alvoPncp.cnpj, alvoPncp.ano, alvoPncp.sequencial);
+          const oficial =
+            earlyAlvoPncp &&
+            earlyAlvoPncp.cnpj === alvoPncp.cnpj &&
+            String(earlyAlvoPncp.ano) === String(alvoPncp.ano) &&
+            String(earlyAlvoPncp.sequencial) === String(alvoPncp.sequencial)
+              ? await earlyPncpPromise
+              : await pncpFetchContratacao(alvoPncp.cnpj, alvoPncp.ano, alvoPncp.sequencial);
           if (oficial) {
             if (!parsedData.identificacaoCertame) parsedData.identificacaoCertame = {};
             const ident = parsedData.identificacaoCertame;
@@ -1662,9 +1820,25 @@ REGRAS:
               camposOficiais.push(`${parsedData.itensEdital.length} itens`);
             }
 
+            if (arquivosBaixadosPNCP.length > 0) {
+              camposOficiais.push(`arquivos lidos: ${arquivosBaixadosPNCP.join(", ")}`);
+            }
+
+            const idControleFormatado =
+              numeroControleInformado ||
+              `${alvoPncp.cnpj}-1-${String(alvoPncp.sequencial).padStart(6, "0")}/${alvoPncp.ano}`;
+
+            ident.idContratacaoPNCP = ident.idContratacaoPNCP || idControleFormatado;
+            ident.linkPNCP =
+              ident.linkPNCP ||
+              `https://pncp.gov.br/app/editais/${alvoPncp.cnpj}/${alvoPncp.ano}/${String(alvoPncp.sequencial).padStart(6, "0")}`;
+            parsedData.idContratacaoPNCP = ident.idContratacaoPNCP;
+            parsedData.linkPNCP = ident.linkPNCP;
+
             parsedData.dadosOficiaisPNCP = {
-              numeroControlePNCP: numeroControleInformado,
+              numeroControlePNCP: idControleFormatado,
               camposSubstituidos: camposOficiais,
+              arquivosLidosPNCP: arquivosBaixadosPNCP,
               consultadoEm: new Date().toISOString()
             };
             console.log(`[PNCP] Análise enriquecida com dado oficial (${camposOficiais.join(", ")}).`);
@@ -1832,7 +2006,7 @@ O formato de retorno DEVE ser obrigatoriamente um objeto JSON com o esquema defi
 
       console.log("Chamando AI Router para auditoria jurídica do concorrente...");
       const response = await generateAiResponse({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: contentParts,
         aiConfig,
         jsonMode: true,
@@ -2061,7 +2235,7 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
 
       console.log(`Chamando AI Router para análise da certidão: ${docName || fileName}...`);
       const response = await generateAiResponse({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: contentParts,
         systemInstruction,
         aiConfig,
@@ -2236,7 +2410,7 @@ Manter a redação original do modelo fornecido pelo usuário, apenas aprimorand
 
       console.log(`Chamando AI Router para gerar documento (${docType})...`);
       const response = await generateAiResponse({
-        model: "gemini-3.7-flash",
+        model: "gemini-3.8-flash",
         contents: [{ text: prompt }],
         aiConfig,
       });
@@ -2415,11 +2589,33 @@ Retorne exclusivamente o JSON bruto estruturado e validável.`;
         };
       });
 
-      // O acervo é lido com o JWT do próprio usuário, então o RLS continua
-      // valendo: cada um enxerga apenas o que é seu. Falha na leitura não
-      // derruba o chat — o contexto passa a dizer que não deu para consultar,
-      // o que é melhor do que o modelo responder de memória.
-      const acervo = await montarAcervo(req.headers.authorization);
+      // O acervo é lido com o JWT do próprio usuário (com cache de 30s para
+      // não repetir 2 consultas REST a cada mensagem seguida na conversa).
+      const authKey = String(req.headers.authorization || "");
+      const nowMs = Date.now();
+      const cachedAcervo = authKey ? acervoCache.get(authKey) : undefined;
+      let acervo;
+      if (cachedAcervo && nowMs - cachedAcervo.timestamp < 30_000) {
+        acervo = cachedAcervo.data;
+      } else {
+        acervo = await montarAcervo(req.headers.authorization);
+        if (authKey && acervo.leu) {
+          acervoCache.set(authKey, { timestamp: nowMs, data: acervo });
+        }
+      }
+
+      // Enxuga o edital ativo enviado ao prompt do chat: remove rawText bruto
+      // duplicado quando o relatório estruturado já está presente, reduzindo
+      // drasticamente a latência de envio e leitura do modelo.
+      const editalCompacto = activeEditalAnalysis
+        ? (() => {
+            const { rawText, ...resto } = activeEditalAnalysis as Record<string, any>;
+            const temEstruturado = Boolean(resto.reportMarkdown || resto.descricaoProduto || (Array.isArray(resto.itensEdital) && resto.itensEdital.length > 0));
+            return temEstruturado
+              ? resto
+              : { ...resto, rawText: typeof rawText === "string" ? rawText.slice(0, 20_000) : undefined };
+          })()
+        : null;
 
       // In the system instruction (or prepended context), we provide info about the company certs and active edital analysis if present!
       const contextPrefix = `
@@ -2460,7 +2656,7 @@ Informações da Empresa do Usuário:
 ${companyData ? `- Razão Social: ${companyData.razonSocial}\n- CNPJ: ${companyData.cnpj}\n- Representante: ${companyData.representativeName}` : "Empresa não fornecida."}
 
 Edital Selecionado pelo Usuário nesta Conversa:
-${activeEditalAnalysis ? JSON.stringify(activeEditalAnalysis, null, 2) : "Nenhum edital selecionado pelo usuário para esta conversa."}
+${editalCompacto ? JSON.stringify(editalCompacto, null, 2) : "Nenhum edital selecionado pelo usuário para esta conversa."}
 
 ═══ ACERVO DA PLATAFORMA (dados reais deste usuário, somente registros existentes) ═══
 ${acervo.leu ? acervo.texto : "Não foi possível ler o acervo nesta requisição. Se o usuário perguntar o que existe na plataforma, diga que não conseguiu consultar agora — não responda de memória nem suponha."}

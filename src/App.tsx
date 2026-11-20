@@ -1,35 +1,18 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import {
-  FileText, ShieldCheck, FolderGit, FileSpreadsheet, CloudLightning,
-  HelpCircle, Settings, LogIn, ExternalLink, RefreshCw, LogOut, ListTodo, Calculator, Sparkles, Cpu, Users,
-  Search, AlertTriangle, Check, FileEdit, ChevronsUpDown, CircleUser, CalendarDays, ClipboardCheck,
-  NotebookPen
+  FileText, ShieldCheck, FileSpreadsheet,
+  Settings, LogOut, ListTodo, Calculator, Sparkles, Cpu, Users,
+  Search, Check, FileEdit, ChevronsUpDown, ClipboardCheck,
+  NotebookPen, MessageSquare, Loader2, Scale
 } from "lucide-react";
-import { CompanyData, EditalAnalysis, SyncItem } from "./types";
+import { CompanyData, EditalAnalysis } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
-import RadarOportunidadesTab from "./components/RadarOportunidadesTab";
-import DisputasSheetTab from "./components/DisputasSheetTab";
-import CalendarTab from "./components/CalendarTab";
 import { resetEditalHistory } from "./utils/editalHistory";
-import HabilitacaoChecklistTab from "./components/HabilitacaoChecklistTab";
-import CompanyDocsTab from "./components/CompanyDocsTab";
-import CreateDocTab from "./components/CreateDocTab";
-import PricingCalculatorTab from "./components/PricingCalculatorTab";
-import ProductComparatorTab from "./components/ProductComparatorTab";
-import LanceBotTab from "./components/LanceBotTab";
-import CompetitorAnalyzerTab from "./components/CompetitorAnalyzerTab";
-import NotepadTab from "./components/NotepadTab";
-import AiConfigTab from "./components/AiConfigTab";
 import FloatingAiChat from "./components/FloatingAiChat";
 import DocPreviewModal from "./components/DocPreviewModal";
 import {
-  getSyncedItems, getGoogleAccessToken, isGoogleConnected, initAuth, googleSignIn, logout
-} from "./utils/googleSync";
-import {
   getSupabaseConfig,
   getSupabaseClient,
-  signUpWithSupabase,
-  signInWithSupabase,
   signOutWithSupabase,
   fetchCompanyDataFromSupabase,
   fetchUserConfigFromSupabase,
@@ -38,18 +21,7 @@ import {
 import SupabaseLoginScreen from "./components/SupabaseLoginScreen";
 import ThemeToggle from "./components/ThemeToggle";
 import { Button } from "./components/ui/button";
-import { Badge } from "./components/ui/badge";
-import { Input } from "./components/ui/input";
-import { Label } from "./components/ui/label";
-import { Progress } from "./components/ui/progress";
 import { Separator } from "./components/ui/separator";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "./components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -75,6 +47,19 @@ import {
   SidebarTrigger,
 } from "./components/ui/sidebar";
 
+const RadarOportunidadesTab = lazy(() => import("./components/RadarOportunidadesTab"));
+const CapagSearchTab = lazy(() => import("./components/CapagSearchTab"));
+const DisputasSheetTab = lazy(() => import("./components/DisputasSheetTab"));
+const HabilitacaoChecklistTab = lazy(() => import("./components/HabilitacaoChecklistTab"));
+const CompanyDocsTab = lazy(() => import("./components/CompanyDocsTab"));
+const CreateDocTab = lazy(() => import("./components/CreateDocTab"));
+const PricingCalculatorTab = lazy(() => import("./components/PricingCalculatorTab"));
+const ProductComparatorTab = lazy(() => import("./components/ProductComparatorTab"));
+const LanceBotTab = lazy(() => import("./components/LanceBotTab"));
+const CompetitorAnalyzerTab = lazy(() => import("./components/CompetitorAnalyzerTab"));
+const NotepadTab = lazy(() => import("./components/NotepadTab"));
+const AiConfigTab = lazy(() => import("./components/AiConfigTab"));
+
 // Default Initial Corporate profile representing a Brazilian company
 const DEFAULT_COMPANY_DATA: CompanyData = {
   razonSocial: "",
@@ -87,51 +72,58 @@ const DEFAULT_COMPANY_DATA: CompanyData = {
   bankDetails: ""
 };
 
-type TabId = "analyzer" | "radar" | "disputasSheet" | "calendar" | "habilitacao" | "createDoc" | "documents" | "notepad" | "calculator" | "comparator" | "bot" | "competitors" | "aiConfig";
+type TabId =
+  | "analyzer"
+  | "radar"
+  | "capag"
+  | "disputasSheet"
+  | "documents"
+  | "calculator"
+  | "createDoc"
+  | "competitors"
+  | "bot"
+  | "notepad"
+  | "aiConfig";
 
 const CORE_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
   { id: "analyzer", label: "Análise de Edital", icon: FileText },
   { id: "radar", label: "Radar de Oportunidades", icon: Search },
-  { id: "disputasSheet", label: "Planilha de Disputas", icon: FileSpreadsheet },
-  { id: "calendar", label: "Calendário", icon: CalendarDays },
+  { id: "capag", label: "Consulta CAPAG", icon: Scale },
+  { id: "disputasSheet", label: "Gestão de Disputas", icon: FileSpreadsheet },
 ];
 
 const OPERATIONS_NAV: { id: TabId; label: string; icon: typeof FileText }[] = [
-  { id: "habilitacao", label: "Checklist de Habilitação", icon: ClipboardCheck },
+  { id: "documents", label: "Certidões & Habilitação", icon: ClipboardCheck },
+  { id: "calculator", label: "Cotação & Calculadora", icon: Calculator },
   { id: "createDoc", label: "Criar Documentos", icon: FileEdit },
-  { id: "documents", label: "Gestão de Certidões", icon: ListTodo },
-  { id: "notepad", label: "Bloco de Notas", icon: NotebookPen },
-  { id: "calculator", label: "Calculadora de Preços", icon: Calculator },
-  { id: "comparator", label: "Comparador de Produtos", icon: Sparkles },
+  { id: "competitors", label: "Auditar Concorrentes", icon: Users },
   { id: "bot", label: "Robô de Lances", icon: Cpu },
-  { id: "competitors", label: "Analisar Concorrentes", icon: Users },
+  { id: "notepad", label: "Bloco de Notas", icon: NotebookPen },
 ];
 
 const TAB_LABELS: Record<TabId, string> = {
   analyzer: "Análise de Edital",
   radar: "Radar de Oportunidades",
-  disputasSheet: "Planilha de Disputas",
-  calendar: "Calendário",
-  habilitacao: "Checklist de Habilitação",
+  capag: "Consulta CAPAG & Risco Pagador (Tesouro Nacional)",
+  disputasSheet: "Gestão de Disputas (Painel, Kanban & Calendário)",
+  documents: "Certidões & Habilitação",
+  calculator: "Cotação & Calculadora",
   createDoc: "Criar Documentos",
-  documents: "Gestão de Certidões",
-  notepad: "Bloco de Notas",
-  calculator: "Calculadora de Preços",
-  comparator: "Comparador de Produtos",
+  competitors: "Auditar Concorrentes",
   bot: "Robô de Lances",
-  competitors: "Analisar Concorrentes",
+  notepad: "Bloco de Notas",
   aiConfig: "IA & Modelos",
 };
 
 const AI_PROVIDER_LABELS: Record<string, string> = {
-  gemini: "Gemini 3.5",
+  gemini: "Gemini 3.8",
   openai: "GPT-4o",
   anthropic: "Claude 3.7",
   deepseek: "DeepSeek V3",
 };
 
 const AI_PROVIDERS = [
-  { id: "gemini", name: "Gemini 3.5", desc: "Google AI" },
+  { id: "gemini", name: "Gemini 3.8", desc: "Google AI" },
   { id: "openai", name: "GPT-4o", desc: "OpenAI" },
   { id: "anthropic", name: "Claude 3.7", desc: "Anthropic" },
   { id: "deepseek", name: "DeepSeek V3", desc: "DeepSeek" },
@@ -139,6 +131,13 @@ const AI_PROVIDERS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("analyzer");
+  const [docsSubView, setDocsSubView] = useState<"certs" | "checklist">("certs");
+  const [calcSubView, setCalcSubView] = useState<"pricing" | "comparator">("pricing");
+  const [capagFocusQuery, setCapagFocusQuery] = useState<{
+    uf?: string;
+    municipio?: string;
+    orgao?: string;
+  } | null>(null);
 
   // App-wide state
   const [companyData, setCompanyData] = useState<CompanyData>(() => {
@@ -176,46 +175,9 @@ export default function App() {
     return null;
   });
 
-  // Synced files stream
-  const [syncedItems, setSyncedItems] = useState<SyncItem[]>([]);
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-
-  // Supabase SaaS states
+  // Supabase Auth state
   const [supabaseUser, setSupabaseUser] = useState<any | null>(null);
-  const [supabaseModalOpen, setSupabaseModalOpen] = useState(false);
-  const [saasPlan, setSaasPlan] = useState<string>(() => {
-    return localStorage.getItem("supabase_saas_plan") || "Free";
-  });
-  const [supabaseConnected, setSupabaseConnected] = useState(false);
-  const [aiQuotaWarning, setAiQuotaWarning] = useState<string | null>(null);
-
-  useEffect(() => {
-    const handleQuotaWarning = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail && customEvent.detail.message) {
-        setAiQuotaWarning(customEvent.detail.message);
-      }
-    };
-    window.addEventListener("ai-quota-warning", handleQuotaWarning);
-    return () => {
-      window.removeEventListener("ai-quota-warning", handleQuotaWarning);
-    };
-  }, []);
-
-  // Supabase dynamic auth credentials inside modal
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authMessage, setAuthMessage] = useState<{ success: boolean; message: string } | null>(null);
   const [activeProvider, setActiveProvider] = useState<string>("gemini");
-
-  // Sync Log list
-  const [syncLogs, setSyncLogs] = useState<string[]>([
-    "Sistema inicializado com sucesso.",
-    "Módulo de conformidade regulatória pronto."
-  ]);
 
   // Modal preview states
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
@@ -262,7 +224,6 @@ export default function App() {
   const handleGlobalProviderChange = async (newProvider: string) => {
     setActiveProvider(newProvider);
     localStorage.setItem("ai_active_provider", newProvider);
-    addLogMessage(`Provedor de IA ativo alterado para: ${newProvider}`);
     window.dispatchEvent(new Event("user-config-loaded"));
 
     // Persist to Supabase dynamically
@@ -291,8 +252,6 @@ export default function App() {
   const loadUserDataFromSupabase = async (user: any) => {
     if (!user) return;
     try {
-      addLogMessage(`Carregando dados específicos do usuário do Supabase...`);
-
       // 1. Fetch Company Data
       const dbCompany = await fetchCompanyDataFromSupabase();
       if (dbCompany) {
@@ -308,7 +267,6 @@ export default function App() {
         };
         setCompanyData(loadedCompany);
         localStorage.setItem("aip_company_data", JSON.stringify(loadedCompany));
-        addLogMessage("Perfil corporativo do usuário carregado com sucesso.");
       } else if (user?.user_metadata) {
         const meta = user.user_metadata;
         const loadedCompany: CompanyData = {
@@ -323,7 +281,6 @@ export default function App() {
         };
         setCompanyData(loadedCompany);
         localStorage.setItem("aip_company_data", JSON.stringify(loadedCompany));
-        addLogMessage("Perfil corporativo inicializado a partir do cadastro.");
       }
 
       // 2. Fetch User AI Config / Keys
@@ -350,8 +307,6 @@ export default function App() {
           localStorage.setItem("ai_deepseek_key", dbConfig.deepseek_key);
         }
         if (dbConfig.deepseek_model) localStorage.setItem("ai_deepseek_model", dbConfig.deepseek_model);
-
-        addLogMessage("Configurações de chaves de API do usuário carregadas.");
       }
       window.dispatchEvent(new Event("user-config-loaded"));
     } catch (e: any) {
@@ -379,40 +334,10 @@ export default function App() {
     }
   }, [activeEdital]);
 
-  useEffect(() => {
-    // Read synced items list
-    setSyncedItems(getSyncedItems());
-    setGoogleConnected(isGoogleConnected());
-
-    const unsubscribe = initAuth(
-      (user) => {
-        setGoogleConnected(true);
-        setUserEmail(user.email);
-        addLogMessage(`Sincronismo com Google Workspace ativo: ${user.email}`);
-      },
-      () => {
-        setGoogleConnected(false);
-        setUserEmail(null);
-      }
-    );
-
-    const handleSyncUpdate = () => {
-      setSyncedItems(getSyncedItems());
-      setGoogleConnected(isGoogleConnected());
-    };
-    window.addEventListener("gdrive-sync-updated", handleSyncUpdate);
-
-    return () => {
-      unsubscribe();
-      window.removeEventListener("gdrive-sync-updated", handleSyncUpdate);
-    };
-  }, []);
-
   // Sync Supabase user session on mount
   useEffect(() => {
     const config = getSupabaseConfig();
     const isConn = !!config.url && !!config.anonKey;
-    setSupabaseConnected(isConn);
 
     if (isConn) {
       const client = getSupabaseClient();
@@ -420,7 +345,6 @@ export default function App() {
         client.auth.getUser().then(({ data }) => {
           if (data?.user) {
             setSupabaseUser(data.user);
-            addLogMessage(`Sessão SaaS Supabase carregada: ${data.user.email}`);
             loadUserDataFromSupabase(data.user);
           }
         }).catch(() => {});
@@ -440,72 +364,7 @@ export default function App() {
         };
       }
     }
-  }, [supabaseModalOpen]);
-
-  const addLogMessage = (msg: string) => {
-    const timestamp = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    setSyncLogs(prev => [`[${timestamp}] ${msg}`, ...prev.slice(0, 8)]);
-    // Re-trigger synced list refreshing
-    setSyncedItems(getSyncedItems());
-  };
-
-  // Client side Google OAuth loader using Firebase SDK
-  const handleGoogleLogin = async () => {
-    try {
-      addLogMessage("Iniciando fluxo de login do Google...");
-      const result = await googleSignIn();
-      if (result) {
-        setGoogleConnected(true);
-        setUserEmail(result.user.email);
-        addLogMessage(`Conectado com sucesso à sua conta Google: ${result.user.email}`);
-        addLogMessage("Pronto para sincronizar arquivos com o Google Drive e Sheets real!");
-      }
-    } catch (err: any) {
-      console.error(err);
-      addLogMessage(`Erro ao autenticar com o Google: ${err.message || err}`);
-    }
-  };
-
-  const handleGoogleLogout = async () => {
-    try {
-      await logout();
-      setGoogleConnected(false);
-      setUserEmail(null);
-      addLogMessage("Desconectado da conta Google Workspace.");
-    } catch (err: any) {
-      console.error(err);
-      addLogMessage(`Erro ao fazer logout: ${err.message || err}`);
-    }
-  };
-
-  const handleSaaSAuthAction = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthMessage(null);
-    try {
-      if (authMode === "signup") {
-        const res = await signUpWithSupabase(authEmail, authPassword);
-        setAuthMessage(res);
-        if (res.success && res.user) {
-          setSupabaseUser(res.user);
-          addLogMessage(`Nova conta SaaS criada no Supabase Auth: ${res.user.email}`);
-        }
-      } else {
-        const res = await signInWithSupabase(authEmail, authPassword);
-        setAuthMessage(res);
-        if (res.success && res.session?.user) {
-          setSupabaseUser(res.session.user);
-          loadUserDataFromSupabase(res.session.user);
-          addLogMessage(`Sessão SaaS Supabase autenticada: ${res.session.user.email}`);
-          setTimeout(() => setSupabaseModalOpen(false), 1500);
-        }
-      }
-    } catch (err: any) {
-      setAuthMessage({ success: false, message: err.message || "Erro no processamento da autenticação." });
-    } finally {
-      setAuthLoading(false);
-    }
-  };
+  }, []);
 
   const handleSaaSSignOut = async () => {
     try {
@@ -534,27 +393,15 @@ export default function App() {
       // Reset state variables
       setCompanyData(DEFAULT_COMPANY_DATA);
       setActiveEdital(null);
-      setSyncedItems([]);
       setSupabaseUser(null);
-
-      addLogMessage("Sessão SaaS encerrada. Todos os dados locais e cache foram apagados.");
-      setSupabaseModalOpen(false);
     } catch (err: any) {
       console.error(err);
-      addLogMessage(`Erro ao encerrar sessão: ${err.message || err}`);
     }
-  };
-
-  const handleChangePlan = (newPlan: string) => {
-    setSaasPlan(newPlan);
-    localStorage.setItem("supabase_saas_plan", newPlan);
-    addLogMessage(`Plano SaaS atualizado para: ${newPlan}`);
   };
 
   const handleOpenDocPreview = (title: string, markdown: string, type: "proposal" | "declaration") => {
     setPreviewData({ title, markdown, type });
     setPreviewModalOpen(true);
-    addLogMessage(`Criado documento "${title}" via IA Gemini 3.5-flash.`);
   };
 
   if (!supabaseUser) {
@@ -562,8 +409,6 @@ export default function App() {
       <SupabaseLoginScreen
         onLoginSuccess={(user) => {
           setSupabaseUser(user);
-          setSupabaseConnected(true);
-          addLogMessage(`Sessão SaaS autenticada: ${user.email}`);
           loadUserDataFromSupabase(user);
         }}
       />
@@ -585,7 +430,7 @@ export default function App() {
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold font-mono tracking-wide">HORASIS</span>
-                  <span className="truncate text-xs text-muted-foreground">Enterprise SaaS v3.0</span>
+                  <span className="truncate text-xs text-muted-foreground">Licitações Inteligentes</span>
                 </div>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -594,7 +439,7 @@ export default function App() {
 
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>Core</SidebarGroupLabel>
+            <SidebarGroupLabel>Principal</SidebarGroupLabel>
             <SidebarMenu>
               {CORE_NAV.map((item) => (
                 <SidebarMenuItem key={item.id}>
@@ -614,7 +459,7 @@ export default function App() {
           </SidebarGroup>
 
           <SidebarGroup>
-            <SidebarGroupLabel>Operations</SidebarGroupLabel>
+            <SidebarGroupLabel>Operações</SidebarGroupLabel>
             <SidebarMenu>
               {OPERATIONS_NAV.map((item) => (
                 <SidebarMenuItem key={item.id}>
@@ -634,7 +479,7 @@ export default function App() {
           </SidebarGroup>
 
           <SidebarGroup>
-            <SidebarGroupLabel>Settings</SidebarGroupLabel>
+            <SidebarGroupLabel>Configurações</SidebarGroupLabel>
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
@@ -645,7 +490,7 @@ export default function App() {
                   className="cursor-pointer"
                 >
                   <Settings />
-                  <span>IA & Modelos</span>
+                  <span>IA &amp; Modelos</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -653,27 +498,7 @@ export default function App() {
         </SidebarContent>
 
         <SidebarFooter>
-          <div className="group-data-[collapsible=icon]:hidden space-y-2.5 px-1 pb-1">
-            {/* Plan usage progress bar (Tokens / Quota Card) */}
-            <div className="bg-sidebar-accent/60 border border-sidebar-border text-sidebar-foreground p-3 rounded-lg space-y-2">
-              <div className="flex justify-between items-center text-xs font-medium">
-                <span className="text-muted-foreground">Tokens / Cota IA</span>
-                <span className="font-mono font-semibold">40%</span>
-              </div>
-              <Progress value={40} className="h-1.5" />
-            </div>
-
-            {/* Upgrade Plan Secondary Button */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full cursor-pointer justify-center gap-2"
-              onClick={() => setActiveTab("aiConfig")}
-            >
-              <Sparkles className="size-3.5" />
-              Upgrade Plan
-            </Button>
-
+          <div className="group-data-[collapsible=icon]:hidden space-y-2 px-1 pb-1">
             {/* Active AI Selector */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -712,7 +537,7 @@ export default function App() {
                     </Avatar>
                     <div className="grid flex-1 text-left text-sm leading-tight">
                       <span className="truncate font-medium">{userHandle}</span>
-                      <span className="truncate text-xs text-muted-foreground">Plano {saasPlan}</span>
+                      <span className="truncate text-xs text-muted-foreground">{supabaseUser?.email}</span>
                     </div>
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
@@ -737,19 +562,15 @@ export default function App() {
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuGroup>
-                    <DropdownMenuItem onClick={() => setSupabaseModalOpen(true)} className="cursor-pointer">
-                      <CircleUser />
-                      Portal de Clientes SaaS
-                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => setActiveTab("aiConfig")} className="cursor-pointer">
                       <Settings />
-                      IA & Modelos
+                      IA &amp; Modelos
                     </DropdownMenuItem>
                   </DropdownMenuGroup>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleSaaSSignOut} className="cursor-pointer text-destructive focus:text-destructive">
                     <LogOut />
-                    Sair
+                    Sair da Conta
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -775,6 +596,17 @@ export default function App() {
 
             <div className="ml-auto flex items-center gap-2 shrink-0">
               <Button
+                variant="outline"
+                size="sm"
+                className="cursor-pointer gap-1.5"
+                onClick={() => window.dispatchEvent(new CustomEvent("aip_open_ai_chat", { detail: { editalId: activeEdital ? "active" : undefined } }))}
+                title="Abrir Assessor IA"
+              >
+                <MessageSquare className="size-3.5 text-primary" />
+                <span className="hidden sm:inline">Assessor IA</span>
+              </Button>
+
+              <Button
                 size="sm"
                 className="cursor-pointer"
                 onClick={() => setActiveTab("analyzer")}
@@ -782,10 +614,6 @@ export default function App() {
                 <FileText />
                 <span className="hidden sm:inline">Analisar Novo Edital</span>
                 <span className="sm:hidden">Novo Edital</span>
-              </Button>
-
-              <Button variant="ghost" size="icon" className="cursor-pointer" title="Notificações e Suporte">
-                <HelpCircle />
               </Button>
 
               <ThemeToggle />
@@ -797,72 +625,162 @@ export default function App() {
         <main className="flex-1 p-4 md:p-6">
           <div className="max-w-7xl mx-auto space-y-6">
             <div className="select-text w-full">
-              {activeTab === "analyzer" ? (
-                <EditalAnalyzerTab
-                  companyData={companyData}
-                  activeEdital={activeEdital}
-                  setActiveEdital={setActiveEdital}
-                  onOpenDocPreview={handleOpenDocPreview}
-                  onNavigateToCreateDoc={() => setActiveTab("createDoc")}
-                />
-              ) : activeTab === "radar" ? (
-                <RadarOportunidadesTab
-                  onSelectForAnalysis={(text) => {
-                    localStorage.setItem("aip_auto_analyze_text", text);
-                    setActiveTab("analyzer");
-                    setTimeout(() => {
-                      window.dispatchEvent(new Event("aip_trigger_external_text"));
-                    }, 50);
-                  }}
-                />
-              ) : activeTab === "disputasSheet" ? (
-                <DisputasSheetTab
-                  activeEdital={activeEdital}
-                  onNavigateToAnalyzer={() => setActiveTab("analyzer")}
-                />
-              ) : activeTab === "calendar" ? (
-                <CalendarTab onNavigateToDisputas={() => setActiveTab("disputasSheet")} />
-              ) : activeTab === "habilitacao" ? (
-                <HabilitacaoChecklistTab
-                  activeEdital={activeEdital}
-                  onNavigateToDocs={() => setActiveTab("documents")}
-                  onNavigateToCreateDoc={() => setActiveTab("createDoc")}
-                  onNavigateToAnalyzer={() => setActiveTab("analyzer")}
-                />
-              ) : activeTab === "createDoc" ? (
-                <CreateDocTab
-                  companyData={companyData}
-                  activeEdital={activeEdital}
-                  onOpenDocPreview={handleOpenDocPreview}
-                />
-              ) : activeTab === "documents" ? (
-                <CompanyDocsTab
-                  companyData={companyData}
-                  setCompanyData={setCompanyData}
-                  activeEdital={activeEdital}
-                />
-              ) : activeTab === "notepad" ? (
-                <NotepadTab />
-              ) : activeTab === "calculator" ? (
-                <PricingCalculatorTab
-                  companyData={companyData}
-                  activeEdital={activeEdital}
-                />
-              ) : activeTab === "comparator" ? (
-                <ProductComparatorTab
-                  activeEdital={activeEdital}
-                />
-              ) : activeTab === "bot" ? (
-                <LanceBotTab
-                  activeEdital={activeEdital}
-                />
-              ) : activeTab === "aiConfig" ? (
-                <AiConfigTab />
-              ) : (
-                <CompetitorAnalyzerTab
-                  activeEdital={activeEdital}
-                />
-              )}
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-20 text-muted-foreground gap-2 text-sm">
+                    <Loader2 className="size-5 animate-spin text-primary" />
+                    <span>Carregando módulo...</span>
+                  </div>
+                }
+              >
+                {activeTab === "analyzer" ? (
+                  <EditalAnalyzerTab
+                    companyData={companyData}
+                    activeEdital={activeEdital}
+                    setActiveEdital={setActiveEdital}
+                    onOpenDocPreview={handleOpenDocPreview}
+                    onNavigateToCreateDoc={() => setActiveTab("createDoc")}
+                    onNavigateToDisputas={() => setActiveTab("disputasSheet")}
+                    onNavigateToHabilitacao={() => {
+                      setDocsSubView("checklist");
+                      setActiveTab("documents");
+                    }}
+                    onNavigateToCalculator={() => {
+                      setCalcSubView("pricing");
+                      setActiveTab("calculator");
+                    }}
+                    onNavigateToCapag={(focus) => {
+                      setCapagFocusQuery(focus);
+                      setActiveTab("capag");
+                    }}
+                  />
+                ) : activeTab === "radar" ? (
+                  <RadarOportunidadesTab
+                    onSelectForAnalysis={(text) => {
+                      localStorage.setItem("aip_auto_analyze_text", text);
+                      setActiveTab("analyzer");
+                      setTimeout(() => {
+                        window.dispatchEvent(new Event("aip_trigger_external_text"));
+                      }, 50);
+                    }}
+                    onNavigateToCapag={(focus) => {
+                      setCapagFocusQuery(focus);
+                      setActiveTab("capag");
+                    }}
+                  />
+                ) : activeTab === "capag" ? (
+                  <CapagSearchTab
+                    initialFocusQuery={capagFocusQuery}
+                    onClearInitialFocus={() => setCapagFocusQuery(null)}
+                  />
+                ) : activeTab === "disputasSheet" ? (
+                  <DisputasSheetTab
+                    activeEdital={activeEdital}
+                    onNavigateToAnalyzer={() => setActiveTab("analyzer")}
+                  />
+                ) : activeTab === "documents" ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3">
+                      <div className="flex items-center gap-2">
+                        <ClipboardCheck className="size-4 text-primary" />
+                        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                          Central de Documentação &amp; Conformidade
+                        </span>
+                      </div>
+                      <div className="flex items-center rounded-lg border border-border bg-muted p-1">
+                        <Button
+                          type="button"
+                          variant={docsSubView === "certs" ? "default" : "ghost"}
+                          size="sm"
+                          onClick={() => setDocsSubView("certs")}
+                          className="h-7 gap-1.5 px-3 text-xs font-semibold cursor-pointer"
+                        >
+                          <ListTodo className="size-3.5" />
+                          Gestão de Certidões &amp; Empresa
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={docsSubView === "checklist" ? "default" : "ghost"}
+                          size="sm"
+                          onClick={() => setDocsSubView("checklist")}
+                          className="h-7 gap-1.5 px-3 text-xs font-semibold cursor-pointer"
+                        >
+                          <ClipboardCheck className="size-3.5" />
+                          Checklist do Edital Ativo
+                        </Button>
+                      </div>
+                    </div>
+
+                    {docsSubView === "checklist" ? (
+                      <HabilitacaoChecklistTab
+                        activeEdital={activeEdital}
+                        onNavigateToDocs={() => setDocsSubView("certs")}
+                        onNavigateToCreateDoc={() => setActiveTab("createDoc")}
+                        onNavigateToAnalyzer={() => setActiveTab("analyzer")}
+                      />
+                    ) : (
+                      <CompanyDocsTab
+                        companyData={companyData}
+                        setCompanyData={setCompanyData}
+                        activeEdital={activeEdital}
+                      />
+                    )}
+                  </div>
+                ) : activeTab === "calculator" ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3">
+                      <div className="flex items-center gap-2">
+                        <Calculator className="size-4 text-primary" />
+                        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                          Precificação &amp; Aderência Técnica
+                        </span>
+                      </div>
+                      <div className="flex items-center rounded-lg border border-border bg-muted p-1">
+                        <Button
+                          type="button"
+                          variant={calcSubView === "pricing" ? "default" : "ghost"}
+                          size="sm"
+                          onClick={() => setCalcSubView("pricing")}
+                          className="h-7 gap-1.5 px-3 text-xs font-semibold cursor-pointer"
+                        >
+                          <Calculator className="size-3.5" />
+                          Calculadora de Preços
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={calcSubView === "comparator" ? "default" : "ghost"}
+                          size="sm"
+                          onClick={() => setCalcSubView("comparator")}
+                          className="h-7 gap-1.5 px-3 text-xs font-semibold cursor-pointer"
+                        >
+                          <Sparkles className="size-3.5" />
+                          Comparador Técnico de Produtos
+                        </Button>
+                      </div>
+                    </div>
+
+                    {calcSubView === "comparator" ? (
+                      <ProductComparatorTab activeEdital={activeEdital} />
+                    ) : (
+                      <PricingCalculatorTab companyData={companyData} activeEdital={activeEdital} />
+                    )}
+                  </div>
+                ) : activeTab === "createDoc" ? (
+                  <CreateDocTab
+                    companyData={companyData}
+                    activeEdital={activeEdital}
+                    onOpenDocPreview={handleOpenDocPreview}
+                  />
+                ) : activeTab === "notepad" ? (
+                  <NotepadTab />
+                ) : activeTab === "bot" ? (
+                  <LanceBotTab activeEdital={activeEdital} />
+                ) : activeTab === "aiConfig" ? (
+                  <AiConfigTab />
+                ) : (
+                  <CompetitorAnalyzerTab activeEdital={activeEdital} />
+                )}
+              </Suspense>
             </div>
           </div>
         </main>
@@ -875,223 +793,8 @@ export default function App() {
         title={previewData.title}
         initialMarkdown={previewData.markdown}
         type={previewData.type}
-        onAddLog={addLogMessage}
+        onAddLog={() => {}}
       />
-
-      {/* Supabase SaaS Authentication & Account Switcher Modal */}
-      <Dialog open={supabaseModalOpen} onOpenChange={(open) => { setSupabaseModalOpen(open); if (!open) setAuthMessage(null); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2.5">
-              <div className="p-2 bg-accent text-accent-foreground rounded-lg border">
-                <Users className="size-4" />
-              </div>
-              Portal de Clientes SaaS
-            </DialogTitle>
-            <DialogDescription>Supabase Auth Multi-tenant</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-5">
-            {!supabaseConnected ? (
-              // Supabase not configured warning
-              <div className="space-y-4 text-center py-4">
-                <div className="w-12 h-12 bg-warning/15 text-warning rounded-full flex items-center justify-center mx-auto border border-warning/30">
-                  <CloudLightning className="w-6 h-6 animate-pulse" />
-                </div>
-                <div className="space-y-2">
-                  <h4 className="font-semibold text-sm">Credenciais não configuradas</h4>
-                  <p className="text-muted-foreground text-xs leading-relaxed max-w-sm mx-auto">
-                    Para usar a Autenticação SaaS real e isolar dados de múltiplos usuários, configure sua <strong>URL</strong> e <strong>Anon Key</strong> do Supabase primeiro.
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  className="cursor-pointer"
-                  onClick={() => {
-                    setSupabaseModalOpen(false);
-                    setActiveTab("aiConfig");
-                  }}
-                >
-                  Configurar Provedores de IA
-                </Button>
-              </div>
-            ) : supabaseUser ? (
-              // Active User Session panel
-              <div className="space-y-5">
-                <div className="bg-success/10 border border-success/30 p-4 rounded-lg space-y-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-success animate-pulse" />
-                    <span className="font-semibold text-success text-xs">Sessão Ativa no Supabase</span>
-                  </div>
-
-                  <div className="space-y-1.5 font-mono text-[11px]">
-                    <div className="flex justify-between border-b border-success/20 pb-1 text-muted-foreground">
-                      <span>Usuário</span>
-                      <span className="font-semibold text-foreground truncate max-w-[200px]">{supabaseUser.email}</span>
-                    </div>
-                    <div className="flex justify-between border-b border-success/20 pb-1 text-muted-foreground">
-                      <span>UUID</span>
-                      <span className="font-semibold truncate max-w-[180px]" title={supabaseUser.id}>
-                        {supabaseUser.id}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-muted-foreground">
-                      <span>Plano Escolhido</span>
-                      <span className="font-semibold text-foreground">{saasPlan}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Plan Switcher */}
-                <div className="space-y-2">
-                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">Escolha o Plano SaaS da Conta</Label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {["Free", "Pro", "Enterprise"].map((plan) => {
-                      const isActive = saasPlan === plan;
-                      return (
-                        <Button
-                          key={plan}
-                          type="button"
-                          variant={isActive ? "default" : "outline"}
-                          size="sm"
-                          className="cursor-pointer text-xs"
-                          onClick={() => handleChangePlan(plan)}
-                        >
-                          {plan === "Free" ? "Gratuito" : plan === "Pro" ? "SaaS Pro" : "Enterprise"}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-xs text-muted-foreground leading-normal">
-                    Ao trocar de plano, os limites e volume de análises são recalculados para este e-mail.
-                  </p>
-                </div>
-
-                <Separator />
-
-                <div className="flex flex-col gap-2">
-                  <Button
-                    variant="outline"
-                    className="w-full cursor-pointer text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
-                    onClick={handleSaaSSignOut}
-                  >
-                    <LogOut />
-                    Encerrar Sessão (Sign Out)
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full cursor-pointer"
-                    onClick={() => {
-                      setSupabaseUser(null);
-                      setAuthMode("signin");
-                      setAuthMessage(null);
-                    }}
-                  >
-                    <Users />
-                    Entrar com Outro Usuário
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              // Authentication Form (Login / Register)
-              <form onSubmit={handleSaaSAuthAction} className="space-y-4">
-                {/* Selector */}
-                <div className="flex bg-muted p-1 rounded-lg border">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("signin");
-                      setAuthMessage(null);
-                    }}
-                    className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-                      authMode === "signin"
-                        ? "bg-background text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    Acessar Conta
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("signup");
-                      setAuthMessage(null);
-                    }}
-                    className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-                      authMode === "signup"
-                        ? "bg-background text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    Criar Nova Conta
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="saas-email" className="text-xs uppercase tracking-wider text-muted-foreground">Endereço de E-mail</Label>
-                    <Input
-                      id="saas-email"
-                      type="email"
-                      required
-                      placeholder="seu-email@exemplo.com"
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="saas-password" className="text-xs uppercase tracking-wider text-muted-foreground">Senha Secreta</Label>
-                    <Input
-                      id="saas-password"
-                      type="password"
-                      required
-                      placeholder="••••••••"
-                      value={authPassword}
-                      onChange={(e) => setAuthPassword(e.target.value)}
-                      className="font-mono"
-                    />
-                  </div>
-                </div>
-
-                {authMessage && (
-                  <div className={`p-3 rounded-lg text-xs leading-relaxed border ${
-                    authMessage.success
-                      ? "bg-success/10 border-success/30 text-success"
-                      : "bg-destructive/10 border-destructive/30 text-destructive"
-                  }`}>
-                    {authMessage.message}
-                  </div>
-                )}
-
-                <Button type="submit" disabled={authLoading} className="w-full cursor-pointer">
-                  {authLoading ? (
-                    <>
-                      <RefreshCw className="animate-spin" />
-                      Autenticando...
-                    </>
-                  ) : authMode === "signup" ? (
-                    <>
-                      <Users />
-                      Criar Conta SaaS
-                    </>
-                  ) : (
-                    <>
-                      <LogIn />
-                      Entrar na Plataforma
-                    </>
-                  )}
-                </Button>
-              </form>
-            )}
-
-            <div className="text-xs text-muted-foreground bg-muted p-3 rounded-lg border leading-relaxed">
-              ℹ️ <strong>Isolamento Multi-tenant:</strong> Ao logar com e-mails diferentes, o Supabase Auth atribui IDs únicos (UUIDs) para cada usuário. Suas análises e documentos são segregados automaticamente, permitindo simular perfeitamente um SaaS em produção!
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* Bottom Floating Interactive Chat popup */}
       <FloatingAiChat
