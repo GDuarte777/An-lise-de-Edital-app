@@ -16,9 +16,11 @@ export interface ParametrosBuscaPncpCliente {
   tamanhoPagina: number;
   status: StatusBuscaPncp;
   q?: string;
+  pncpLinkOrId?: string;
   municipio?: string;
   ufs?: string[];
   modalidades?: string[];
+  fontes?: string[];
   periodDays?: number;
 }
 
@@ -107,6 +109,12 @@ function normalizarItemConsultaDireta(item: any): any {
     item?.numeroControlePNCP || (cnpj ? `${cnpj}-1-${seqPadded}/${ano}` : "");
   const modalidadeId = item?.modalidadeId != null ? String(item.modalidadeId) : "";
 
+  const modalidadeNome = item?.modalidadeNome || PNCP_MODALIDADES[modalidadeId] || "Pregão Eletrônico";
+  const tipoInstrumento = item?.tipoInstrumentoConvocatorioNome || "Edital";
+  const numCompra = item?.numeroCompra || sequencial;
+  const tituloDocumento =
+    item?.tituloDocumento || `${tipoInstrumento} nº ${numCompra}/${ano}`;
+
   return {
     ...item,
     numeroControlePNCP: numeroControle,
@@ -114,7 +122,11 @@ function normalizarItemConsultaDireta(item: any): any {
     cnpjOrgao: cnpj,
     anoCompra: ano,
     sequencialCompra: sequencial,
-    modalidadeNome: item?.modalidadeNome || PNCP_MODALIDADES[modalidadeId] || "Pregão Eletrônico",
+    tituloDocumento,
+    modalidadeNome,
+    fonteId: item?.usuarioId != null ? String(item.usuarioId) : item?.fonteId || "",
+    fonteNome: item?.usuarioNome || item?.fonteNome || "",
+    dataAtualizacaoPncp: item?.dataAtualizacao || item?.dataPublicacaoPncp || "",
     uasg: item?.unidadeOrgao?.codigoUnidade
       ? `UASG ${item.unidadeOrgao.codigoUnidade} - ${item.unidadeOrgao.nomeUnidade || item.unidadeOrgao.municipioNome || "Unidade Compradora"}`
       : "",
@@ -356,6 +368,160 @@ export async function enriquecerPrecosEmSegundoPlano(
 }
 
 /**
+ * Busca diretamente uma contratação específica a partir do link oficial do PNCP
+ * (ex: `https://pncp.gov.br/app/editais/00394460000141/2026/000123`) ou do
+ * Número de Controle PNCP (ex: `00394460000141-1-000123/2026`).
+ */
+export async function buscarContratacaoPorLinkOuIdPncp(
+  linkOuIdBruto: string
+): Promise<RespostaBuscaPncpCliente | null> {
+  const texto = String(linkOuIdBruto || "").trim();
+  if (!texto) return null;
+
+  const alvo = parseNumeroControlePNCP(texto);
+
+  // 1. Se conseguimos extrair CNPJ + Ano + Sequencial do link ou ID, busca o registro exato na API oficial
+  if (alvo && alvo.cnpj.length === 14) {
+    const seqNum = Number(alvo.sequencial);
+    const seqPadded = String(seqNum).padStart(6, "0");
+    const numeroControle = `${alvo.cnpj}-1-${seqPadded}/${alvo.ano}`;
+
+    try {
+      const urlCompra = `${PNCP_INTEGRACAO_URL}/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
+      const resp = await fetchComTimeout(urlCompra, { headers: { Accept: "application/json" } }, 10_000);
+      if (resp.ok) {
+        const det = await resp.json().catch(() => null);
+        if (det) {
+          let normalizado = normalizarItemConsultaDireta({
+            ...det,
+            numeroControlePNCP: det.numeroControlePNCP || numeroControle,
+            cnpjOrgao: alvo.cnpj,
+            anoCompra: Number(alvo.ano),
+            sequencialCompra: seqNum,
+          });
+
+          const vEst =
+            typeof normalizado.valorTotalEstimado === "number"
+              ? normalizado.valorTotalEstimado
+              : Number(normalizado.valorTotalEstimado) || 0;
+          const vHom =
+            typeof normalizado.valorTotalHomologado === "number"
+              ? normalizado.valorTotalHomologado
+              : Number(normalizado.valorTotalHomologado) || 0;
+
+          if (vEst <= 0 && vHom <= 0 && !normalizado.orcamentoSigiloso) {
+            const itens = await listarItensCompraPncp(numeroControle);
+            if (itens.length > 0) {
+              const soma = itens.reduce((acc, it) => acc + (it.valorTotal > 0 ? it.valorTotal : 0), 0);
+              if (soma > 0) {
+                normalizado = {
+                  ...normalizado,
+                  valorTotalEstimado: soma,
+                  precoPendente: false,
+                };
+              }
+            }
+          }
+
+          const enriquecidos = aplicarCachePrecosContratacoesPncp([normalizado]);
+          return {
+            data: enriquecidos,
+            totalRegistros: 1,
+            totalPaginas: 1,
+            numeroPagina: 1,
+            resultadoParcial: false,
+            avisosPNCP: [],
+            source: "pncp_api_real",
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("[pncpClient] Falha ao consultar endpoint direto da compra por link/ID:", err);
+    }
+
+    // Fallback no índice /api/search/ procurando pelo número de controle exato
+    try {
+      const qSearch = montarQueryBuscaIndexadaPncp({
+        pagina: 1,
+        tamanhoPagina: 10,
+        status: "todos",
+        q: numeroControle,
+      });
+      const respSearch = await fetchComTimeout(
+        `${PNCP_SEARCH_URL}?${qSearch}`,
+        { headers: { Accept: "application/json" } },
+        10_000
+      );
+      if (respSearch.ok) {
+        const json = await respSearch.json().catch(() => null);
+        if (json && Array.isArray(json.items) && json.items.length > 0) {
+          const normalizados = json.items.map((it: any) => normalizarItemBuscaIndexadaPncp(it));
+          const enriquecidos = aplicarCachePrecosContratacoesPncp(normalizados);
+          return {
+            data: enriquecidos,
+            totalRegistros: enriquecidos.length,
+            totalPaginas: 1,
+            numeroPagina: 1,
+            resultadoParcial: false,
+            avisosPNCP: [],
+            source: "pncp_api_real",
+          };
+        }
+      }
+    } catch {
+      // prossegue para fallback final
+    }
+  }
+
+  // 2. Se o usuário colou uma URL de busca do PNCP (ex: https://pncp.gov.br/app/editais?q=...) ou termo de ID
+  const urlMatchQ = texto.match(/[?&]q=([^&#]+)/i);
+  const termoExtraido = urlMatchQ ? decodeURIComponent(urlMatchQ[1]).trim() : texto;
+
+  try {
+    const qSearch = montarQueryBuscaIndexadaPncp({
+      pagina: 1,
+      tamanhoPagina: 15,
+      status: "todos",
+      q: termoExtraido,
+    });
+    const respSearch = await fetchComTimeout(
+      `${PNCP_SEARCH_URL}?${qSearch}`,
+      { headers: { Accept: "application/json" } },
+      10_000
+    );
+    if (respSearch.ok) {
+      const json = await respSearch.json().catch(() => null);
+      if (json && Array.isArray(json.items) && json.items.length > 0) {
+        const normalizados = json.items.map((it: any) => normalizarItemBuscaIndexadaPncp(it));
+        const enriquecidos = aplicarCachePrecosContratacoesPncp(normalizados);
+        return {
+          data: enriquecidos,
+          totalRegistros: Number(json.total) || enriquecidos.length,
+          totalPaginas: 1,
+          numeroPagina: 1,
+          resultadoParcial: false,
+          avisosPNCP: [],
+          source: "pncp_api_real",
+        };
+      }
+    }
+  } catch {
+    // sem resultado
+  }
+
+  return {
+    data: [],
+    totalRegistros: 0,
+    totalPaginas: 1,
+    numeroPagina: 1,
+    resultadoParcial: false,
+    avisosPNCP: [],
+    source: "pncp_api_real",
+    aviso: "Nenhuma disputa encontrada no PNCP para o link ou ID informado. Verifique se o endereço está completo (ex: https://pncp.gov.br/app/editais/CNPJ/ANO/SEQUENCIAL).",
+  };
+}
+
+/**
  * Busca contratações no PNCP priorizando chamadas diretas do navegador do usuário
  * (que está no Brasil e responde em < 1s no índice `/api/search/`), com enriquecimento
  * automático dos preços reais da disputa e fallback para a API de consulta e Edge Function.
@@ -367,8 +533,17 @@ export async function buscarContratacoesPncp(
   const pageSize = Math.min(100, Math.max(1, params.tamanhoPagina || 15));
   const selectedUfs = params.ufs || [];
   const selectedModalidades = params.modalidades || [];
+  const selectedFontes = params.fontes || [];
   const q = String(params.q || "").trim();
+  const pncpLinkOrId = String(params.pncpLinkOrId || "").trim();
   const municipio = String(params.municipio || "").trim();
+
+  // 0ª Camada: Se o usuário preencheu o filtro de Link ou ID direto do PNCP (ou colou um link PNCP na busca)
+  const linkCandidato = pncpLinkOrId || (parseNumeroControlePNCP(q) ? q : "");
+  if (linkCandidato) {
+    const direto = await buscarContratacaoPorLinkOuIdPncp(linkCandidato);
+    if (direto) return direto;
+  }
 
   // 1ª Camada: Índice Oficial de Busca do PNCP (/api/search/) direto do navegador
   try {
@@ -384,6 +559,7 @@ export async function buscarContratacoesPncp(
       q: queryCombinada || undefined,
       ufs: selectedUfs,
       modalidades: selectedModalidades,
+      fontes: selectedFontes,
     });
 
     const respSearch = await fetchComTimeout(

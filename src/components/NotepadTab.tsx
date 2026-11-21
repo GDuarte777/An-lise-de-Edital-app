@@ -116,9 +116,9 @@ function ItemPasta({
           e.preventDefault();
           onSoltar(id);
         }}
-        className={`group/pasta flex items-center gap-1 rounded-lg transition ${
+        className={`group/pasta flex items-center gap-1 rounded-lg border transition ${
           recebendoArraste ? "ring-2 ring-primary ring-offset-1 ring-offset-background" : ""
-        } ${ativa ? "bg-primary/10" : "hover:bg-muted/70"}`}
+        } ${ativa ? "border-primary/40 bg-primary/10" : "border-border/70 bg-background hover:bg-muted/70"}`}
       >
         <button
           type="button"
@@ -126,7 +126,7 @@ function ItemPasta({
           aria-label={`Ver ${nome}`}
           aria-current={ativa ? "true" : undefined}
           title={real && arrastandoNota ? `Soltar a nota em ${nome}` : nome}
-          className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-xs transition ${
+          className={`flex min-w-0 cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs transition ${
             ativa ? "font-semibold text-primary" : "text-muted-foreground hover:text-foreground"
           }`}
         >
@@ -138,8 +138,8 @@ function ItemPasta({
           ) : (
             <Icone className="h-3.5 w-3.5 shrink-0" />
           )}
-          <span className="truncate">{nome}</span>
-          <span className="ml-auto shrink-0 font-mono text-[10px] opacity-70">{total}</span>
+          <span className="truncate max-w-[11rem]">{nome}</span>
+          <span className="ml-1 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] opacity-80">{total}</span>
         </button>
 
         {/* Pastas de verdade podem ser renomeadas, recoloridas e excluídas.
@@ -635,12 +635,12 @@ export default function NotepadTab() {
         </div>
       </div>
 
-      {/* ─────────── Três colunas ─────────── */}
-      <div className="grid gap-4 lg:grid-cols-[15rem_19rem_minmax(0,1fr)]">
+      {/* ─────────── Visualização Horizontal: Pastas + Lista de Notas + Editor ─────────── */}
+      <div className="flex flex-col gap-4">
 
-        {/* ─── Coluna 1: pastas ─── */}
-        <aside className="space-y-1 rounded-xl border border-border bg-card p-2 lg:self-start">
-          <p className="px-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+        {/* ─── Painel 1 (Horizontal): pastas ─── */}
+        <aside className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
+          <p className="px-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground shrink-0">
             Pastas
           </p>
 
@@ -663,11 +663,11 @@ export default function NotepadTab() {
             {...propsComunsPasta}
           />
 
-          {pastasOrdenadas.length > 0 && <div className="my-1 border-t border-border" />}
+          {pastasOrdenadas.length > 0 && <div className="mx-1 h-5 w-px bg-border shrink-0" />}
 
           {pastasOrdenadas.map((p) =>
             pastaRenomeando === p.id ? (
-              <div key={p.id} className="space-y-1 px-1 py-1">
+              <div key={p.id} className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1">
                 <Input
                   autoFocus
                   value={nomeEmEdicao}
@@ -685,7 +685,7 @@ export default function NotepadTab() {
                       setErroPasta(null);
                     }
                   }}
-                  className="h-7 text-xs"
+                  className="h-7 w-40 text-xs"
                   aria-label={`Novo nome para ${p.nome}`}
                 />
                 {erroPasta && <p className="text-[10px] font-medium text-destructive">{erroPasta}</p>}
@@ -693,7 +693,7 @@ export default function NotepadTab() {
                   <Button
                     type="button"
                     size="sm"
-                    className="h-6 flex-1 text-[11px]"
+                    className="h-6 px-2.5 text-[11px]"
                     onClick={() => renomearPasta(p.id)}
                   >
                     Salvar
@@ -702,7 +702,7 @@ export default function NotepadTab() {
                     type="button"
                     size="sm"
                     variant="ghost"
-                    className="h-6 text-[11px]"
+                    className="h-6 px-1.5 text-[11px]"
                     onClick={() => {
                       setPastaRenomeando("");
                       setErroPasta(null);
@@ -728,14 +728,14 @@ export default function NotepadTab() {
           )}
 
           {pastasOrdenadas.length === 0 && (
-            <p className="px-2 py-3 text-[11px] leading-relaxed text-muted-foreground">
+            <p className="px-2 py-1 text-[11px] leading-relaxed text-muted-foreground">
               Nenhuma pasta ainda. Crie uma para separar as anotações por certame, órgão ou mês.
             </p>
           )}
         </aside>
 
-        {/* ─── Coluna 2: lista ─── */}
-        <section className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-card p-2">
+        {/* ─── Painel 2 (Horizontal): busca e lista de notas ─── */}
+        <section className="flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-card p-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -748,11 +748,15 @@ export default function NotepadTab() {
           </div>
 
           <div
-            className="min-h-[12rem] space-y-1.5 overflow-y-auto scrollbar-thin"
-            style={{ maxHeight: "60vh" }}
+            className={
+              visiveis.length === 0
+                ? "w-full"
+                : "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 overflow-y-auto scrollbar-thin pr-1"
+            }
+            style={{ maxHeight: "38vh" }}
           >
             {visiveis.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border px-3 py-8 text-center">
+              <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center">
                 <FileText className="mx-auto mb-2 h-6 w-6 text-muted-foreground/60" />
                 <p className="text-[11px] leading-relaxed text-muted-foreground">
                   {busca

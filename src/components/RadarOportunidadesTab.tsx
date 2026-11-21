@@ -3,7 +3,7 @@ import { urlDaApi } from "../utils/apiBase";
 import {
   Search, ShieldCheck, MapPin, Calendar, Clock, Landmark, Coins,
   ExternalLink, Sparkles, RefreshCw, AlertCircle, FileText, CheckCircle2,
-  Filter, Info, ChevronLeft, ChevronRight, ChevronDown, X, Check, Building2, SlidersHorizontal, RotateCcw, Download, Eye
+  Filter, Info, ChevronLeft, ChevronRight, ChevronDown, X, Check, Building2, SlidersHorizontal, RotateCcw, Download, Eye, Link2, LayoutGrid, List, Globe
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -39,6 +39,7 @@ interface LicitacaoDetailed {
   id: string;
   numeroControlePNCP: string;
   numero: string;
+  tituloPncp: string;
   orgao: string;
   cnpjOrgao?: string;
   uf: string;
@@ -47,6 +48,7 @@ interface LicitacaoDetailed {
   uasg?: string;
   objeto: string;
   dataPublicacao: string;
+  dataAtualizacao: string;
   dataAbertura: string;
   valorEstimadoRaw: number;
   valorEstimado: string;
@@ -57,6 +59,8 @@ interface LicitacaoDetailed {
   modalidade: string;
   modalidadeId?: string | number;
   situacao: string;
+  fonteId?: string;
+  fonteNome?: string;
   linkPNCP?: string;
 }
 
@@ -107,21 +111,58 @@ const ALL_MODALIDADES = [
   { id: "2", nome: "Diálogo Competitivo" }
 ];
 
+// Tabela oficial das Plataformas / Fontes integradas ao PNCP (`parametro: fontes`)
+const ALL_FONTES_PNCP = [
+  { id: "3", nome: "Compras.gov.br (Governo Federal / Comprasnet)" },
+  { id: "5", nome: "Portal de Compras Públicas (ECustomize)" },
+  { id: "6", nome: "BLL Compras (Bolsa de Licitações e Leilões)" },
+  { id: "13", nome: "Licitar Digital - Plataforma de Licitações Online" },
+  { id: "12", nome: "Bolsa Nacional De Compras - BNC" },
+  { id: "18", nome: "Licitanet Licitações Eletrônicas" },
+  { id: "40", nome: "Licitações-E BB (Banco do Brasil)" },
+  { id: "90", nome: "Novo BBMNET Licitações" },
+  { id: "7", nome: "Bolsa Brasileira de Mercadorias - BBMNET" },
+  { id: "84", nome: "Betha Sistemas" },
+  { id: "41", nome: "Elotech Gestão Pública" },
+  { id: "96", nome: "BR Conectado" },
+  { id: "77", nome: "LicitaCon - TCE-RS" },
+  { id: "10", nome: "Portal de Compras do Estado de Minas Gerais" },
+  { id: "14", nome: "Portal de Compras Públicas do Estado do RJ" },
+  { id: "131", nome: "PROCERGS - Compras RS" },
+  { id: "16", nome: "Compras Pará" },
+  { id: "51", nome: "Secretaria do Planejamento e Gestão do Ceará (SEPLAG-CE)" },
+  { id: "58", nome: "Secretaria de Administração de Pernambuco (SAD-PE)" },
+  { id: "154", nome: "Secretaria da Administração da Bahia (SAEB-BA)" },
+  { id: "99", nome: "Instituto Municipal de Administração Pública - IMAP" },
+  { id: "102", nome: "SMARAPD Informática" },
+  { id: "116", nome: "SELCORP Licitações" },
+  { id: "171", nome: "STARTGOV Soluções em Tecnologia" },
+  { id: "203", nome: "3Tecnos Tecnologia" },
+  { id: "30", nome: "Ascontech Solutions" },
+  { id: "85", nome: "Grupo Assessor" },
+  { id: "59", nome: "IBDM Modernização Assessoria e Consultoria" },
+  { id: "64", nome: "Tribunal de Justiça do Estado de São Paulo (TJSP)" },
+  { id: "80", nome: "Elmar Tecnologia" },
+];
+
 export default function RadarOportunidadesTab({
   onSelectForAnalysis,
   onNavigateToCapag,
 }: RadarOportunidadesTabProps) {
   // Filter States
   const [keyword, setKeyword] = useState("");
+  const [pncpLinkFilter, setPncpLinkFilter] = useState("");
   const [cityQuery, setCityQuery] = useState("");
   const [selectedUfs, setSelectedUfs] = useState<string[]>([]); // Default empty = All UFs (Brasil)
   const [selectedModalidades, setSelectedModalidades] = useState<string[]>([]);
+  const [selectedFontes, setSelectedFontes] = useState<string[]>([]);
   const [statusFiltro, setStatusFiltro] = useState<StatusBuscaPncp>("todos");
   const [valorMin, setValorMin] = useState<string>("");
   const [valorMax, setValorMax] = useState<string>("");
   const [periodDays, setPeriodDays] = useState<number>(90);
 
   // UI & Data States
+  const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [page, setPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(15);
   const [loading, setLoading] = useState<boolean>(false);
@@ -147,7 +188,9 @@ export default function RadarOportunidadesTab({
   const [dataSource, setDataSource] = useState<string>("PNCP Live");
   const [showStatePicker, setShowStatePicker] = useState<boolean>(false);
   const [showModalidadesPicker, setShowModalidadesPicker] = useState<boolean>(false);
+  const [showFontesPicker, setShowFontesPicker] = useState<boolean>(false);
   const [ufSearchQuery, setUfSearchQuery] = useState<string>("");
+  const [fonteSearchQuery, setFonteSearchQuery] = useState<string>("");
   const fetchGenerationRef = useRef<number>(0);
 
   // Toggle UF Selection
@@ -157,6 +200,18 @@ export default function RadarOportunidadesTab({
         return prev.filter(s => s !== sigla);
       } else {
         return [...prev, sigla];
+      }
+    });
+    setPage(1);
+  };
+
+  // Toggle Fonte/Plataforma Selection
+  const handleToggleFonte = (id: string) => {
+    setSelectedFontes(prev => {
+      if (prev.includes(id)) {
+        return prev.filter(f => f !== id);
+      } else {
+        return [...prev, id];
       }
     });
     setPage(1);
@@ -186,27 +241,41 @@ export default function RadarOportunidadesTab({
     return ALL_UFS.filter(uf => uf.sigla.toLowerCase().includes(q) || uf.nome.toLowerCase().includes(q));
   }, [ufSearchQuery]);
 
+  // Filter Fontes/Plataformas list by search query
+  const filteredFontes = useMemo(() => {
+    if (!fonteSearchQuery.trim()) return ALL_FONTES_PNCP;
+    const q = fonteSearchQuery.toLowerCase();
+    return ALL_FONTES_PNCP.filter(f => f.nome.toLowerCase().includes(q) || f.id.includes(q));
+  }, [fonteSearchQuery]);
+
   // Clear all filters
   const handleResetFilters = () => {
     setKeyword("");
+    setPncpLinkFilter("");
     setCityQuery("");
     setSelectedUfs([]);
     setSelectedModalidades([]);
+    setSelectedFontes([]);
     setStatusFiltro("todos");
     setValorMin("");
     setValorMax("");
     setPeriodDays(90);
     setUfSearchQuery("");
+    setFonteSearchQuery("");
     setPage(1);
+    handleFetchPNCP(1, "");
   };
 
   // Fetch from PNCP (Direct Browser Search + Automatic Progressive Price Resolution)
-  const handleFetchPNCP = async (targetPage = page) => {
+  const handleFetchPNCP = async (targetPage = page, overridePncpLink?: string) => {
     const currentGeneration = ++fetchGenerationRef.current;
     setLoading(true);
     setError(null);
     setResultadoParcial(false);
     setAvisosPNCP([]);
+
+    const linkFiltroAtivo =
+      overridePncpLink !== undefined ? overridePncpLink.trim() : pncpLinkFilter.trim();
 
     try {
       const json = await buscarContratacoesPncp({
@@ -214,9 +283,11 @@ export default function RadarOportunidadesTab({
         tamanhoPagina: pageSize,
         status: statusFiltro,
         q: keyword.trim() || undefined,
+        pncpLinkOrId: linkFiltroAtivo || undefined,
         municipio: cityQuery.trim() || undefined,
         ufs: selectedUfs,
         modalidades: selectedModalidades,
+        fontes: selectedFontes,
         periodDays,
       });
 
@@ -235,7 +306,15 @@ export default function RadarOportunidadesTab({
           const municipioNome = item.unidadeOrgao?.municipioNome || "Município Atendido";
           const unidadeNome = item.unidadeOrgao?.nomeUnidade || "Setor de Licitações e Compras";
           const uasgFormatted = item.uasg || (item.unidadeOrgao?.codigoUnidade ? `UASG ${item.unidadeOrgao.codigoUnidade}` : "");
-          const desc = item.objetoCompra || item.objeto || "Objeto de aquisição ou prestação de serviço público.";
+          const desc = String(item.objetoCompra || item.objeto || "Objeto não informado no registro do PNCP.").trim();
+          const tituloPncp =
+            String(item.tituloDocumento || "").trim() ||
+            `Edital nº ${item.numeroCompra || seq}/${ano}`;
+          const fonteId = item.fonteId ? String(item.fonteId) : "";
+          const fonteNome =
+            String(item.fonteNome || "").trim() ||
+            ALL_FONTES_PNCP.find((f) => f.id === fonteId)?.nome ||
+            "Portal Nacional de Contratações Públicas";
 
           const rawVal =
             typeof item.valorTotalEstimado === "number"
@@ -268,6 +347,10 @@ export default function RadarOportunidadesTab({
             ? new Date(item.dataPublicacaoPncp).toLocaleDateString("pt-BR")
             : "Data Recente";
 
+          const updateDateFormatted = item.dataAtualizacaoPncp
+            ? new Date(item.dataAtualizacaoPncp).toLocaleDateString("pt-BR")
+            : pubDateFormatted;
+
           const openDateFormatted = item.dataAberturaProposta
             ? new Date(item.dataAberturaProposta).toLocaleDateString("pt-BR") + " às " + new Date(item.dataAberturaProposta).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
             : "Ver Cronograma no Edital";
@@ -276,6 +359,7 @@ export default function RadarOportunidadesTab({
             id: `pncp-${numControle}-${idx}`,
             numeroControlePNCP: numControle,
             numero: `Certame PNCP: ${item.processo || item.numeroCompra || seq}/${ano}`,
+            tituloPncp,
             orgao: orgaoNome,
             cnpjOrgao: cnpj,
             uf: ufSigla,
@@ -284,6 +368,7 @@ export default function RadarOportunidadesTab({
             uasg: uasgFormatted,
             objeto: desc,
             dataPublicacao: pubDateFormatted,
+            dataAtualizacao: updateDateFormatted,
             dataAbertura: openDateFormatted,
             valorEstimadoRaw: rawVal > 0 ? rawVal : rawHomologado,
             valorEstimado: valorFormatted,
@@ -294,6 +379,8 @@ export default function RadarOportunidadesTab({
             modalidade: item.modalidadeNome || "Pregão Eletrônico",
             modalidadeId: item.modalidadeId,
             situacao: item.situacaoCompraNome || "Divulgada no PNCP",
+            fonteId,
+            fonteNome,
             linkPNCP: linkDirect
           };
         });
@@ -421,7 +508,7 @@ export default function RadarOportunidadesTab({
   useEffect(() => {
     setPage(1);
     handleFetchPNCP(1);
-  }, [selectedUfs, selectedModalidades, statusFiltro, pageSize, periodDays]);
+  }, [selectedUfs, selectedModalidades, selectedFontes, statusFiltro, pageSize, periodDays]);
 
   // Fecha o popup de detalhes ao pressionar ESC
   useEffect(() => {
@@ -654,6 +741,76 @@ export default function RadarOportunidadesTab({
               <RotateCcw className="w-3 h-3" />
               Limpar Filtros
             </Button>
+          </div>
+
+          {/* Direct PNCP Dispute Link or Control ID Filter Input */}
+          <div className="bg-primary/5 border border-primary/20 rounded-xl p-3 space-y-1.5">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label
+                htmlFor="pncp-link-filter-input"
+                className="text-[10px] font-bold text-primary uppercase tracking-wider flex items-center gap-1.5"
+              >
+                <Link2 className="w-3.5 h-3.5" />
+                Buscar por Link Direto ou ID de Disputa do PNCP
+              </label>
+              <span className="text-[9px] text-muted-foreground font-mono">
+                Cole o link do edital no PNCP para exibi-lo na lista abaixo, ver detalhes ou analisar com IA
+              </span>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-primary" />
+                <Input
+                  id="pncp-link-filter-input"
+                  type="text"
+                  placeholder="Ex: https://pncp.gov.br/app/editais/00394460000141/2026/000123 ou 00394460000141-1-000123/2026"
+                  value={pncpLinkFilter}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPncpLinkFilter(val);
+                    // Se o usuário colou um link completo do PNCP, já dispara a busca imediatamente
+                    if (/pncp\.gov\.br\/(?:app\/)?(?:editais|compras)\/\d{14}\/\d{4}\/\d+/i.test(val.trim())) {
+                      setPage(1);
+                      handleFetchPNCP(1, val.trim());
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      setPage(1);
+                      handleFetchPNCP(1, pncpLinkFilter);
+                    }
+                  }}
+                  className="w-full pl-9 pr-8 text-xs font-mono bg-background"
+                />
+                {pncpLinkFilter && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPncpLinkFilter("");
+                      setPage(1);
+                      handleFetchPNCP(1, "");
+                    }}
+                    title="Limpar link do PNCP"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setPage(1);
+                  handleFetchPNCP(1, pncpLinkFilter);
+                }}
+                disabled={loading || !pncpLinkFilter.trim()}
+                className="h-9 px-4 text-xs font-bold gap-1.5 bg-primary/15 hover:bg-primary/25 text-primary border border-primary/30 shrink-0"
+              >
+                <Search className="w-3.5 h-3.5" />
+                Carregar Disputa do Link
+              </Button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
@@ -913,6 +1070,131 @@ export default function RadarOportunidadesTab({
               )}
             </div>
 
+            {/* Fontes / Plataformas Dropdown */}
+            <div className="space-y-1.5 relative">
+              <label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">
+                Fontes / Plataformas {selectedFontes.length > 0 ? `(${selectedFontes.length})` : "(Todas do PNCP)"}
+              </label>
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setShowFontesPicker(!showFontesPicker);
+                  setShowStatePicker(false);
+                  setShowModalidadesPicker(false);
+                }}
+                className="w-full h-9 px-2.5 text-xs justify-between gap-2 font-normal"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Globe className="w-4 h-4 text-primary shrink-0" />
+                  <span className="truncate font-semibold text-foreground">
+                    {selectedFontes.length === 0
+                      ? "Todas as Fontes (Compras.gov, BLL, BNC...)"
+                      : selectedFontes
+                          .map(id => ALL_FONTES_PNCP.find(f => f.id === id)?.nome || `Fonte ${id}`)
+                          .join(", ")}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {selectedFontes.length > 0 && (
+                    <Badge className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
+                      {selectedFontes.length}
+                    </Badge>
+                  )}
+                  <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${showFontesPicker ? "rotate-180 text-primary" : ""}`} />
+                </div>
+              </Button>
+
+              {showFontesPicker && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-popover text-popover-foreground border border-border rounded-xl shadow-xl z-50 p-2.5 space-y-2 animate-in fade-in zoom-in-95 duration-150">
+                  {/* Search inside dropdown */}
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                    <Input
+                      type="text"
+                      placeholder="Buscar plataforma (Compras.gov, BLL, BNC, Licitanet)..."
+                      value={fonteSearchQuery}
+                      onChange={(e) => setFonteSearchQuery(e.target.value)}
+                      className="w-full h-auto bg-muted pl-8 pr-2 py-1.5 text-xs"
+                    />
+                    {fonteSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setFonteSearchQuery("")}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Actions Header */}
+                  <div className="flex items-center justify-between border-b border-border pb-1.5 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFontes([]);
+                        setPage(1);
+                      }}
+                      className={`font-bold transition-colors ${selectedFontes.length === 0 ? "text-primary" : "text-muted-foreground hover:text-primary"}`}
+                    >
+                      ✓ Todas as Fontes / Plataformas
+                    </button>
+                    {selectedFontes.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedFontes([]);
+                          setPage(1);
+                        }}
+                        className="text-destructive hover:underline font-medium"
+                      >
+                        Limpar seleção
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Scrollable Fontes Options List */}
+                  <div className="max-h-56 overflow-y-auto space-y-1 scrollbar-thin pr-1">
+                    {filteredFontes.length === 0 ? (
+                      <div className="p-3 text-center text-xs text-muted-foreground">Nenhuma plataforma encontrada</div>
+                    ) : (
+                      filteredFontes.map(fonte => {
+                        const isSelected = selectedFontes.includes(fonte.id);
+                        return (
+                          <button
+                            type="button"
+                            key={fonte.id}
+                            onClick={() => handleToggleFonte(fonte.id)}
+                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                              isSelected
+                                ? "bg-primary/10 text-primary font-bold"
+                                : "hover:bg-muted text-foreground"
+                            }`}
+                          >
+                            <span className="truncate pr-2">{fonte.nome}</span>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-primary shrink-0" />}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="pt-1 border-t border-border flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => setShowFontesPicker(false)}
+                      className="h-auto px-3 py-1 text-[10px] font-bold"
+                    >
+                      Concluir
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Status Filter */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Situação / Status no PNCP</label>
@@ -967,24 +1249,26 @@ export default function RadarOportunidadesTab({
             </div>
 
             {/* Search Action Button */}
-            <Button
-              type="button"
-              onClick={() => handleFetchPNCP(1)}
-              disabled={loading}
-              className="w-full h-9 font-bold text-xs gap-2"
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  Buscando no Portal PNCP...
-                </>
-              ) : (
-                <>
-                  <Search className="w-4 h-4" />
-                  Buscar Licitações no PNCP
-                </>
-              )}
-            </Button>
+            <div className="sm:col-span-2 lg:col-span-1">
+              <Button
+                type="button"
+                onClick={() => handleFetchPNCP(1)}
+                disabled={loading}
+                className="w-full h-9 font-bold text-xs gap-2"
+              >
+                {loading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Buscando no Portal PNCP...
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-4 h-4" />
+                    Buscar Licitações no PNCP
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </Card>
 
@@ -995,29 +1279,62 @@ export default function RadarOportunidadesTab({
           <Card className="rounded-xl shadow-xs p-5 flex flex-col justify-between space-y-4">
             <div className="space-y-3.5">
 
-              {/* Header Info */}
-              <div className="flex items-center justify-between border-b border-border pb-3">
+              {/* Header Info + View Mode Switcher (Linha PNCP vs Cards) */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
                 <div>
                   <span className="font-bold text-foreground text-xs uppercase tracking-wider block">
                     Licitações ({totalRecords})
                   </span>
                   <span className="text-[9px] text-muted-foreground font-mono">
-                    {selectedUfs.length > 0 ? `UFs: ${selectedUfs.join(", ")}` : "Todos os Estados"} • Clique em &ldquo;Ver detalhes&rdquo; ou em qualquer card para abrir a ficha completa
+                    {selectedUfs.length > 0 ? `UFs: ${selectedUfs.join(", ")}` : "Todos os Estados"}
+                    {selectedFontes.length > 0 ? ` • ${selectedFontes.length} plataforma(s)` : ""} • Clique em &ldquo;Ver detalhes&rdquo; ou no item para abrir a ficha completa
                   </span>
                 </div>
 
-                {/* Page Size Selector */}
-                <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
-                  <SelectTrigger size="sm" className="text-[10px] font-mono h-auto px-2 py-1">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="10">10 por pág.</SelectItem>
-                    <SelectItem value="15">15 por pág.</SelectItem>
-                    <SelectItem value="25">25 por pág.</SelectItem>
-                    <SelectItem value="50">50 por pág.</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                  {/* View Mode Toggle: Linha (Padrão PNCP) vs Cards */}
+                  <div className="flex items-center bg-muted p-0.5 rounded-lg border border-border">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("list")}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1 cursor-pointer ${
+                        viewMode === "list"
+                          ? "bg-primary text-primary-foreground shadow-2xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      title="Visualização por Linha (Igual ao Portal PNCP)"
+                    >
+                      <List className="w-3.5 h-3.5" />
+                      <span>Linha (PNCP)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("card")}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1 cursor-pointer ${
+                        viewMode === "card"
+                          ? "bg-primary text-primary-foreground shadow-2xs"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                      title="Visualização em Cards (Grade)"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      <span>Cards</span>
+                    </button>
+                  </div>
+
+                  {/* Page Size Selector */}
+                  <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                    <SelectTrigger size="sm" className="text-[10px] font-mono h-auto px-2 py-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">10 por pág.</SelectItem>
+                      <SelectItem value="15">15 por pág.</SelectItem>
+                      <SelectItem value="25">25 por pág.</SelectItem>
+                      <SelectItem value="50">50 por pág.</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               {!loading && error && (
@@ -1059,8 +1376,143 @@ export default function RadarOportunidadesTab({
                     <p className="text-[10px] text-muted-foreground max-w-[200px] mt-1">Experimente limpar as palavras-chave ou selecionar mais estados.</p>
                   </div>
                 </div>
+              ) : viewMode === "list" ? (
+                /* MODO LINHA (Visualização Horizontal Idêntica ao Portal PNCP) */
+                <div className="space-y-3 max-h-[720px] overflow-y-auto pr-1 scrollbar-thin">
+                  {results.map((item) => {
+                    const isActive = activeItem?.id === item.id;
+                    const capagEnte = resolverCapagPorOrgaoOuLocal({
+                      uf: item.uf,
+                      municipio: item.municipio,
+                      orgao: item.orgao,
+                    });
+                    const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
+                    return (
+                      <Card
+                        key={item.id}
+                        onClick={() => setActiveItem(item)}
+                        className={`p-4 rounded-xl transition-all cursor-pointer text-left flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-none ${
+                          isActive
+                            ? "bg-primary/10 border-primary text-foreground shadow-xs"
+                            : "text-foreground hover:border-primary/40 hover:bg-muted/40"
+                        }`}
+                      >
+                        {/* Coluna Principal (Estilo Portal PNCP) */}
+                        <div className="space-y-2 flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h5 className="font-extrabold text-primary text-sm">
+                                {item.tituloPncp}
+                              </h5>
+                              <Badge variant="outline" className="text-[10px] font-mono px-2 py-0.5 bg-muted/60">
+                                Id contratação PNCP: {item.numeroControlePNCP}
+                              </Badge>
+                              {item.fonteNome && (
+                                <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 gap-1">
+                                  <Globe className="w-2.5 h-2.5 text-primary" />
+                                  Fonte: {item.fonteNome}
+                                </Badge>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                title={`${capagEnte.nome} — ${capagEnte.veredito.statusPagador}`}
+                                className={`text-[10px] font-mono font-extrabold px-2 py-0.5 rounded border ${capagEstilo.badgeBg} ${capagEstilo.badgeText} ${capagEstilo.badgeBorder}`}
+                              >
+                                {capagEstilo.labelCurto}
+                              </span>
+                              <span className="text-[10px] font-mono text-muted-foreground">
+                                Última Atualização: <strong className="text-foreground">{item.dataAtualizacao}</strong>
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Metadados do Órgão, Local e Modalidade (Igual às duas colunas do PNCP) */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1 text-[11px] text-foreground/90">
+                            <p className="truncate" title={item.orgao}>
+                              <strong className="text-foreground">Órgão:</strong> {item.orgao}
+                            </p>
+                            <p className="truncate">
+                              <strong className="text-foreground">Local:</strong> {item.municipio}/{item.uf}
+                            </p>
+                            <p className="truncate">
+                              <strong className="text-foreground">Modalidade da Contratação:</strong> {item.modalidade}
+                            </p>
+                          </div>
+
+                          {/* Descrição do Objeto Idêntica ao PNCP */}
+                          <p className="text-xs text-foreground leading-relaxed bg-muted/40 border border-border/70 rounded-lg p-2.5">
+                            <strong className="text-foreground font-bold">Objeto: </strong>
+                            {item.objeto}
+                          </p>
+                        </div>
+
+                        {/* Coluna Direita: Preço da Disputa + Ações */}
+                        <div className="flex flex-col sm:flex-row lg:flex-col justify-between lg:items-end gap-2.5 shrink-0 lg:w-64 lg:border-l lg:border-border lg:pl-4">
+                          <div className="w-full bg-success/10 border border-success/25 rounded-lg px-3 py-2 text-left lg:text-right">
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground flex lg:justify-end items-center gap-1">
+                              {item.precoCarregando ? (
+                                <RefreshCw className="w-3 h-3 text-primary animate-spin shrink-0" />
+                              ) : (
+                                <Coins className="w-3 h-3 text-success shrink-0" />
+                              )}
+                              Preço da Disputa
+                            </span>
+                            <span
+                              className={`font-extrabold font-mono text-xs block mt-0.5 ${
+                                item.precoCarregando ? "text-primary animate-pulse" : "text-success"
+                              }`}
+                            >
+                              {item.valorEstimado}
+                            </span>
+                            {item.valorHomologado && item.valorEstimadoRaw !== item.valorHomologadoRaw && (
+                              <span className="text-[9px] font-mono text-primary font-semibold block">
+                                Homologado: {item.valorHomologado}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 w-full">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveItem(item);
+                              }}
+                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
+                            >
+                              <Eye className="w-3 h-3" />
+                              Ver detalhes
+                            </Button>
+
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={preparandoAnalise !== null}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                analisarEditalDaLista(item);
+                              }}
+                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
+                            >
+                              <Sparkles className="w-3 h-3 text-primary" />
+                              {preparandoAnalise === `lista:${item.numeroControlePNCP}`
+                                ? "Baixando..."
+                                : "Analisar com IA"}
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 max-h-[650px] overflow-y-auto pr-1 scrollbar-thin">
+                /* MODO CARDS (Grade de 3 Colunas com Objeto Completo Igual ao PNCP) */
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 max-h-[720px] overflow-y-auto pr-1 scrollbar-thin">
                   {results.map((item) => {
                     const isActive = activeItem?.id === item.id;
                     const capagEnte = resolverCapagPorOrgaoOuLocal({
@@ -1082,7 +1534,7 @@ export default function RadarOportunidadesTab({
                         <div className="space-y-2">
                           <div className="flex items-center justify-between gap-1 flex-wrap">
                             <Badge variant="outline" className="font-bold text-[9px] px-1.5 py-0.5 bg-primary/10 text-primary border-primary/20 rounded font-mono truncate max-w-[165px]">
-                              {item.numero}
+                              {item.tituloPncp}
                             </Badge>
                             <div className="flex items-center gap-1 shrink-0">
                               <span
@@ -1093,16 +1545,29 @@ export default function RadarOportunidadesTab({
                               </span>
                               <span className="text-[9px] font-mono text-muted-foreground flex items-center gap-1 font-bold shrink-0 bg-muted px-1.5 py-0.5 rounded border border-border">
                                 <MapPin className="w-3 h-3 text-primary" />
-                                {item.municipio} - {item.uf}
+                                {item.municipio}/{item.uf}
                               </span>
                             </div>
                           </div>
 
-                          <p className="font-bold text-foreground text-[11px] truncate" title={item.orgao}>{item.orgao}</p>
+                          <p className="font-bold text-foreground text-[11px] truncate" title={item.orgao}>
+                            {item.orgao}
+                          </p>
 
-                          <p className="text-[10px] text-muted-foreground leading-relaxed line-clamp-2">
+                          <p className="text-[11px] text-foreground/90 leading-relaxed">
+                            <strong className="text-foreground font-bold">Objeto: </strong>
                             {item.objeto}
                           </p>
+
+                          {item.fonteNome && (
+                            <div className="flex items-center justify-between gap-2 text-[9px] font-mono text-muted-foreground pt-0.5">
+                              <span className="truncate flex items-center gap-1" title={item.fonteNome}>
+                                <Globe className="w-2.5 h-2.5 text-primary shrink-0" />
+                                Fonte: {item.fonteNome}
+                              </span>
+                              <span className="shrink-0">Atualizado: {item.dataAtualizacao}</span>
+                            </div>
+                          )}
                         </div>
 
                         <div className="space-y-2 pt-1.5 border-t border-border">
