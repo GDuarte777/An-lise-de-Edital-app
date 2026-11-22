@@ -80,6 +80,42 @@ export interface EditalAnalysis {
     unidade?: string;
     valorEstimado?: string;
   }[];
+  dossieExecutivo?: DossieExecutivoData;
+}
+
+export interface DossieParametroOficial {
+  parametro: string;
+  regra: string;
+}
+
+export interface DossiePontoAtencao {
+  prefixo: string;
+  titulo: string;
+  descricao: string;
+}
+
+export interface DossieChecklistCategoria {
+  categoria: string;
+  descricao: string;
+}
+
+export interface DossieExecutivoData {
+  kicker: string;
+  titulo: string;
+  subtituloOrgao: string;
+  sinteseTitulo: string;
+  sinteseTexto: string;
+  secao1Titulo: string;
+  colunaRegraTitulo: string;
+  dadosOficiais: DossieParametroOficial[];
+  secao2Titulo: string;
+  especificacaoComum?: string;
+  secao3Titulo: string;
+  pontosAtencao: DossiePontoAtencao[];
+  secao4Titulo: string;
+  checklistCategorizado: DossieChecklistCategoria[];
+  rodapeTexto: string;
+  temaCor?: "emerald" | "terracotta" | "navy";
 }
 
 export type ChatRole = "user" | "assistant";
@@ -169,6 +205,7 @@ export interface DisputaRow {
   status: DisputaStatus; // Status da Disputa
   observacoes?: string; // Anotações / Estratégia
   linkPNCP?: string; // Link direto do edital/contratação no PNCP
+  noCalendario?: boolean; // Controla se a disputa deve aparecer no Calendário (default: true quando agendada)
 }
 
 // Bloco de Notas — pastas e notas são texto do próprio usuário, sem nada

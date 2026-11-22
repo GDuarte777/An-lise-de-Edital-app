@@ -1321,7 +1321,19 @@ Aqui está a **análise executiva e completa** da **[INSERIR MODALIDADE E NÚMER
 ---
 
 Adote um tom corporativo, extremamente profissional, objetivo e scannable.
-Além disso, identifique rigorosamente quantos e quais itens, lotes ou produtos individuais estão mencionados no edital e preencha a lista "itensEdital" no JSON, além de preencher todos os demais campos estruturados do JSON solicitados.
+Além disso, preencha obrigatoriamente o objeto "dossieExecutivo" seguindo o padrão de Dossiê Executivo de Inteligência Licitatória:
+- "kicker": Linha superior em CAIXA ALTA (ex: "INTELIGÊNCIA LICITATÓRIA • LEI Nº 14.133/2021 • [CATEGORIA DO OBJETO]").
+- "titulo": "Dossiê Executivo: [Modalidade e Nº do Edital/TR]" (ex: "Dossiê Executivo: Pregão Eletrônico nº 040/2026").
+- "subtituloOrgao": "Órgão: [Nome do Órgão/UF] • Processo Adm.: [Nº] • Objeto: [Resumo curto]"
+- "sinteseTitulo": "SÍNTESE ESTRATÉGICA DA OPORTUNIDADE"
+- "sinteseTexto": Parágrafo executivo denso (4 a 6 linhas) resumindo modalidade, objeto e quantidades totais, unidade compradora, valor global e unitário estimado, plataforma, critério de julgamento/modo de disputa, prazo de entrega e exigências críticas, usando **negrito** nos termos, valores e prazos mais importantes.
+- "dadosOficiais": Lista de 6 a 8 parâmetros estruturados ({ "parametro": "...", "regra": "..." }) cobrindo: 1) Órgão Demandante / Plataforma e Acesso; 2) Cronograma da Sessão / Impugnações; 3) Modalidade, Julgamento, Disputa e Exclusividade ME/EPP; 4) Valor Global Estimado; 5) Prazo de Entrega e Substituição; 6) Local e Horário de Entrega; 7) Recebimento, Contrato e Pagamento; 8) Vigência, Garantia, Amostras e Subcontratação. Sempre cite o número do item/cláusula do Edital ou TR quando disponível e use **negrito** nas informações críticas.
+- "especificacaoComum": Resumo técnico claro do produto/serviço exigido no Termo de Referência (com **negrito** nas especificações-chave).
+- "pontosAtencao": Lista de 4 a 6 "Pegadinhas", contradições ou riscos críticos de desclassificação do edital ({ "prefixo": "PONTO DE ATENÇÃO 1", "titulo": "[Título Crítico + Item/Cláusula do Edital]", "descricao": "[Explicação detalhada do risco com **negritos** e orientação prática para não ser inabilitado/desclassificado]" }).
+- "checklistCategorizado": Lista de 4 categorias de habilitação ({ "categoria": "...", "descricao": "..." }): 1) "Proposta Comercial", 2) "Habilitação Jurídica, Fiscal e Trabalhista", 3) "Econômico-Financeira e Integridade", 4) "Qualificação Técnica", citando apenas os documentos reais exigidos no edital com **negrito** nos principais.
+- "rodapeTexto": "Dossiê Executivo • [Modalidade e Nº] — [Nome do Órgão/UF]"
+
+Identifique rigorosamente quantos e quais itens, lotes ou produtos individuais estão mencionados no edital e preencha a lista "itensEdital" no JSON, além de preencher todos os demais campos estruturados do JSON solicitados.
 RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, use "Não especificado no edital".
 `;
 
@@ -1331,22 +1343,6 @@ RELEMBRE: NUNCA deixe um campo vazio. Se a informação não está no edital, us
           : `${basePrompt}\n${itemFocusInstructions}`
       });
 
-      /**
-       * A análise é feita em DUAS chamadas paralelas, não em uma só.
-       *
-       * Numa chamada única o modelo precisava gerar, em sequência, a planilha
-       * inteira de itens E o relatório executivo — e é a geração da resposta,
-       * não a leitura do documento, que domina o tempo de espera (reduzir o
-       * texto enviado de 400k para 120k caracteres mudou de 18,9s para 17,2s,
-       * quase nada). Pior: para caber no tempo o raciocínio ficou em MINIMAL, e
-       * aí a leitura da tabela passou a falhar de forma intermitente — numa
-       * medição de três execuções, uma devolveu 1 item em vez de 12.
-       *
-       * Separando, cada chamada gera metade da saída e as duas correm ao mesmo
-       * tempo. A extração de itens fica com uma tarefa estreita, schema pequeno
-       * e raciocínio LOW (confiável na leitura de tabela); o parecer fica com
-       * MINIMAL, que já se mostrou equivalente no julgamento.
-       */
       const promptItens = `Você é um extrator de dados. Sua ÚNICA tarefa é listar os itens/lotes do edital anexado.
 
 REGRAS:
@@ -1386,8 +1382,6 @@ REGRAS:
         aiConfig,
         jsonMode: true,
         responseSchema: itensSchema,
-        // LOW: a saída é pequena, então o custo em tempo é baixo, e a leitura
-        // de tabela fica estável — em MINIMAL ela falhava de forma intermitente.
         thinkingLevel: (process.env.AI_THINKING_LEVEL_ITENS as any) || "LOW"
       }).catch((err: any) => {
         console.warn("[analyze-edital] Extração dedicada de itens falhou:", err?.message || err);
@@ -1400,15 +1394,6 @@ REGRAS:
         contents: contentParts,
         aiConfig,
         jsonMode: true,
-        // Extração estruturada guiada por schema: o raciocínio profundo custa
-        // muitos segundos de espera e quase não muda o resultado.
-        //
-        // Medido com um edital de 244 páginas e 12 itens, mesma chave e mesmo
-        // modelo: HIGH 56s, LOW 30s, MINIMAL 19s — os três com os 12 itens
-        // corretos, descrições distintas e o valor total certo. No julgamento,
-        // MINIMAL manteve o mesmo veredito, o mesmo grau de risco e apontou a
-        // mesma cláusula de multa abusiva; HIGH só acrescentou um ou dois
-        // alertas secundários. Não compensa triplicar a espera do usuário.
         thinkingLevel: (process.env.AI_THINKING_LEVEL as any) || "MINIMAL",
         responseSchema: {
             type: Type.OBJECT,
@@ -1500,6 +1485,63 @@ REGRAS:
                 },
                 required: ["veredito", "grauRisco", "estrategiaLances"]
               },
+              dossieExecutivo: {
+                type: Type.OBJECT,
+                properties: {
+                  kicker: { type: Type.STRING, description: "Linha superior em CAIXA ALTA: INTELIGÊNCIA LICITATÓRIA • LEI Nº 14.133/2021 • [CATEGORIA DO OBJETO]" },
+                  titulo: { type: Type.STRING, description: "Dossiê Executivo: [Modalidade e Nº do Edital/TR]" },
+                  subtituloOrgao: { type: Type.STRING, description: "Órgão: [Nome/UF] • Processo Adm.: [Nº] • Objeto: [Resumo]" },
+                  sinteseTitulo: { type: Type.STRING, description: "SÍNTESE ESTRATÉGICA DA OPORTUNIDADE" },
+                  sinteseTexto: { type: Type.STRING, description: "Parágrafo executivo denso com **negritos** resumindo objeto, quantidades, valor global/unitário, plataforma, modo de disputa, prazo de entrega e exigências críticas." },
+                  secao1Titulo: { type: Type.STRING, description: "1. Dados Oficiais, Valores, Prazo e Local de Entrega" },
+                  colunaRegraTitulo: { type: Type.STRING, description: "Regra Oficial do Edital e Termo de Referência" },
+                  dadosOficiais: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        parametro: { type: Type.STRING },
+                        regra: { type: Type.STRING }
+                      },
+                      required: ["parametro", "regra"]
+                    }
+                  },
+                  secao2Titulo: { type: Type.STRING, description: "2. Planilha de Itens, Quantitativos e Valores Máximos" },
+                  especificacaoComum: { type: Type.STRING, description: "Resumo técnico comum/geral do produto ou serviço solicitado" },
+                  secao3Titulo: { type: Type.STRING, description: "3. Pontos de Atenção (\"Pegadinhas\") e Riscos Críticos do Edital" },
+                  pontosAtencao: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        prefixo: { type: Type.STRING, description: "Ex: PONTO DE ATENÇÃO 1 ou PEGADINHA 1" },
+                        titulo: { type: Type.STRING, description: "Título curto do risco crítico citando o item/cláusula do edital" },
+                        descricao: { type: Type.STRING, description: "Explicação detalhada do risco com **negritos** e ação recomendada" }
+                      },
+                      required: ["prefixo", "titulo", "descricao"]
+                    }
+                  },
+                  secao4Titulo: { type: Type.STRING, description: "4. Checklist Rápido de Habilitação e Proposta" },
+                  checklistCategorizado: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        categoria: { type: Type.STRING, description: "Ex: Proposta Comercial (Item 10), Jurídica e Fiscal (Item 13.11), Econômico-Financeira e Integridade, Qualificação Técnica" },
+                        descricao: { type: Type.STRING, description: "Lista de documentos exigidos nesta categoria com **negritos**" }
+                      },
+                      required: ["categoria", "descricao"]
+                    }
+                  },
+                  rodapeTexto: { type: Type.STRING, description: "Dossiê Executivo • [Modalidade e Nº] — [Nome do Órgão/UF]" }
+                },
+                required: [
+                  "kicker", "titulo", "subtituloOrgao", "sinteseTitulo", "sinteseTexto",
+                  "secao1Titulo", "colunaRegraTitulo", "dadosOficiais",
+                  "secao2Titulo", "secao3Titulo", "pontosAtencao",
+                  "secao4Titulo", "checklistCategorizado", "rodapeTexto"
+                ]
+              },
               reportMarkdown: {
                 type: Type.STRING,
                 description: "Relatório executivo completo em markdown super scannable utilizando tabelas bem feitas, tópicos fortes e dividindo rigorosamente as seções de 1 a 6."
@@ -1508,7 +1550,7 @@ REGRAS:
             required: [
               "pontosPositivos", "pontosAlerta", "prazoEntrega", "prazoPagamento", "descricaoProduto", "documentosExigidos",
               "identificacaoCertame", "especificacoesTecnicas", "burocraciaBarreiras", "logisticaCronograma", "viabilidadeFinanceira", "parecerFinal",
-              "reportMarkdown"
+              "dossieExecutivo", "reportMarkdown"
             ]
           }
       });

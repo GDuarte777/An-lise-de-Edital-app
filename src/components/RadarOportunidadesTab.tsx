@@ -162,7 +162,7 @@ export default function RadarOportunidadesTab({
   const [periodDays, setPeriodDays] = useState<number>(90);
 
   // UI & Data States
-  const [viewMode, setViewMode] = useState<"list" | "card">("list");
+  const [viewMode, setViewMode] = useState<"list" | "card">("card");
   const [page, setPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(15);
   const [loading, setLoading] = useState<boolean>(false);

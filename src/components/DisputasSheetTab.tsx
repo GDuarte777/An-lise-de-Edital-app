@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { normalizarCodigoUasg, extrairCodigoUasg, extrairNumeroEdital } from "../utils/identificacaoEdital";
 import {
   Table, Plus, Download, Copy, Trash2, Edit2, Search, Filter, Sparkles,
-  CheckCircle, Calendar, FileSpreadsheet, ArrowUpDown,
+  CheckCircle, Calendar, CalendarCheck, CalendarX, FileSpreadsheet, ArrowUpDown,
   Upload, History, LayoutGrid, Layers, FileText, Check, AlertCircle, RefreshCw, X, ExternalLink, Database,
   Kanban, Palette, GripVertical, Pencil, MoreHorizontal, MessageSquarePlus
 } from "lucide-react";
@@ -24,7 +24,9 @@ import {
   getSupabaseFullSchemaSQL,
   fetchStatusDisputasFromSupabase,
   saveStatusDisputaToSupabase,
-  deleteStatusDisputaFromSupabase
+  deleteStatusDisputaFromSupabase,
+  definirDisputaNoCalendarioLocal,
+  lerDisputasForaDoCalendario
 } from "../utils/supabaseClient";
 import confetti from "canvas-confetti";
 import { Button } from "./ui/button";
@@ -313,7 +315,12 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
         console.error(e);
       }
     }
-    return [];
+    const seeded: DisputaStatusType[] = DEFAULT_STATUS_TYPES.map((s, idx) => ({
+      ...s,
+      id: `status-default-${idx}`
+    }));
+    localStorage.setItem("aip_disputas_status_types", JSON.stringify(seeded));
+    return seeded;
   });
   const statusTypesSeededRef = useRef(false);
 
@@ -321,11 +328,17 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
   // localStorage is used only as offline cache/fallback display until Supabase loads
   const [disputas, setDisputas] = useState<DisputaRow[]>(() => {
     const saved = localStorage.getItem("aip_disputas_sheet");
+    const foraDoCalendario = lerDisputasForaDoCalendario();
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.filter((r: any) => r.id !== "disp-101");
+          return parsed
+            .filter((r: any) => r.id !== "disp-101")
+            .map((r: any) => ({
+              ...r,
+              noCalendario: typeof r.noCalendario === "boolean" ? r.noCalendario : !foraDoCalendario.has(r.id)
+            }));
         }
       } catch (e) {
         console.error(e);
@@ -1058,18 +1071,52 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
   // Change Status Quick Handler
   const handleStatusChange = (id: string, newStatus: DisputaStatus) => {
-    setDisputas(prev => prev.map(r => {
-      if (r.id === id) {
-        const updated = { ...r, status: newStatus };
-        saveDisputaToSupabase(updated).catch(e => console.warn("Erro ao atualizar status no Supabase:", e));
-        return updated;
-      }
-      return r;
-    }));
+    setDisputas(prev => {
+      const next = prev.map(r => {
+        if (r.id === id) {
+          const updated = { ...r, status: newStatus };
+          saveDisputaToSupabase(updated).catch(e => console.warn("Erro ao atualizar status no Supabase:", e));
+          return updated;
+        }
+        return r;
+      });
+      localStorage.setItem("aip_disputas_sheet", JSON.stringify(next));
+      return next;
+    });
+    window.dispatchEvent(new Event("aip_sync_disputas"));
     if (newStatus === "Vencida" || newStatus === "Homologada") {
       confetti({ particleCount: 50, spread: 60 });
     }
     showToast(`Status alterado para "${newStatus}".`);
+  };
+
+  // Toggle whether a dispute appears in the Calendar
+  const handleToggleCalendario = (id: string) => {
+    let novoValor = true;
+    let orgaoNome = "";
+    setDisputas(prev => {
+      const next = prev.map(r => {
+        if (r.id === id) {
+          const atual = r.noCalendario !== false;
+          novoValor = !atual;
+          orgaoNome = r.orgao || r.numeroLicitacao || "Disputa";
+          definirDisputaNoCalendarioLocal(id, novoValor);
+          const updated = { ...r, noCalendario: novoValor };
+          saveDisputaToSupabase(updated).catch(e => console.warn("Erro ao atualizar calendário no Supabase:", e));
+          return updated;
+        }
+        return r;
+      });
+      localStorage.setItem("aip_disputas_sheet", JSON.stringify(next));
+      return next;
+    });
+    window.dispatchEvent(new Event("aip_sync_disputas"));
+    showToast(
+      novoValor
+        ? `"${orgaoNome}" inserida no Calendário de Disputas.`
+        : `"${orgaoNome}" removida do Calendário (mantida na Planilha).`,
+      novoValor ? "success" : "info"
+    );
   };
 
   // Import all analyzed edital items directly into the spreadsheet and sync with Supabase
@@ -1487,15 +1534,47 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                     value={row.status}
                     onChange={(e) => handleStatusChange(row.id, e.target.value as DisputaStatus)}
                     style={getStatusBadgeStyle(row.status)}
-                    title="Alterar status com 1 clique"
+                    title="Alterar status da disputa"
                     className="ml-auto cursor-pointer rounded-lg border px-2 py-1 text-[11px] font-bold focus:outline-none sm:ml-0"
                   >
+                    {!sortedStatusTypes.some(s => s.label === row.status) && row.status && (
+                      <option value={row.status} className="bg-popover text-popover-foreground">
+                        {row.status}
+                      </option>
+                    )}
                     {sortedStatusTypes.map(s => (
                       <option key={s.id} value={s.label} className="bg-popover text-popover-foreground">
                         {s.label}
                       </option>
                     ))}
                   </select>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleCalendario(row.id)}
+                    title={
+                      row.noCalendario !== false
+                        ? "No Calendário — clique para remover do Calendário"
+                        : "Fora do Calendário — clique para inserir no Calendário"
+                    }
+                    className={cn(
+                      "inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition",
+                      row.noCalendario !== false
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
+                        : "border-border bg-muted/60 text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                    )}
+                  >
+                    {row.noCalendario !== false ? (
+                      <>
+                        <CalendarCheck className="h-3.5 w-3.5 shrink-0" />
+                        <span>No Calendário</span>
+                      </>
+                    ) : (
+                      <>
+                        <CalendarX className="h-3.5 w-3.5 shrink-0" />
+                        <span>Inserir no Calendário</span>
+                      </>
+                    )}
+                  </button>
                   <div className="flex shrink-0 items-center gap-0.5">
                     <Button
                       type="button"
@@ -1760,13 +1839,36 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                           <span className="font-mono text-[10px] font-bold" title={valorDoCartao(row).titulo}>
                             {valorDoCartao(row).texto}
                           </span>
-                          {row.dataHoraDisputa && (
-                            <span className="flex items-center gap-1 text-[10px]">
-                              <Calendar className="h-3 w-3 text-success" />
-                              <span className="text-success">{row.dataHoraDisputa}</span>
-                              <DisputaDateTag value={row.dataHoraDisputa} className="px-1.5 py-0 text-[9px]" />
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {row.dataHoraDisputa && (
+                              <span className="flex items-center gap-1 text-[10px]">
+                                <Calendar className="h-3 w-3 text-success" />
+                                <span className="text-success">{row.dataHoraDisputa}</span>
+                                <DisputaDateTag value={row.dataHoraDisputa} className="px-1.5 py-0 text-[9px]" />
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleToggleCalendario(row.id); }}
+                              title={
+                                row.noCalendario !== false
+                                  ? "No Calendário — clique para remover do Calendário"
+                                  : "Fora do Calendário — clique para inserir no Calendário"
+                              }
+                              className={cn(
+                                "inline-flex cursor-pointer items-center gap-1 rounded border px-1.5 py-0.5 text-[9.5px] font-semibold transition",
+                                row.noCalendario !== false
+                                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                  : "border-border bg-muted text-muted-foreground hover:text-foreground"
+                              )}
+                            >
+                              {row.noCalendario !== false ? (
+                                <CalendarCheck className="h-2.5 w-2.5" />
+                              ) : (
+                                <CalendarX className="h-2.5 w-2.5" />
+                              )}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ))
@@ -1798,7 +1900,15 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
 
       ) : (
         /* ─────────── MODO 3: CALENDÁRIO INTEGRADO ─────────── */
-        <CalendarTab onNavigateToDisputas={() => setViewMode("spreadsheet")} />
+        <CalendarTab
+          onNavigateToDisputas={() => setViewMode("spreadsheet")}
+          externalDisputas={disputas}
+          externalStatusTypes={sortedStatusTypes}
+          externalStatusFilter={statusFilter}
+          onExternalStatusFilterChange={setStatusFilter}
+          onExternalStatusChange={handleStatusChange}
+          onExternalToggleCalendario={handleToggleCalendario}
+        />
       )}
 
       {/* ─────────── Gerenciador de Status (disponível em todos os modos) ─────────── */}

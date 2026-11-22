@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Filter, Landmark, AlertCircle, CalendarPlus,
-  Plus, Pencil, Trash2, Link2, MessageSquarePlus
+  Plus, Pencil, Trash2, Link2, MessageSquarePlus, CalendarX, Sparkles
 } from "lucide-react";
-import { DisputaRow, DisputaStatus, DisputaStatusType } from "../types";
+import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import {
   fetchDisputasComStatus,
   fetchStatusDisputasFromSupabase,
   subscribeToSupabaseTable,
   saveDisputaToSupabase,
   deleteDisputaFromSupabase,
-  generateUUID
+  generateUUID,
+  definirDisputaNoCalendarioLocal,
+  lerDisputasForaDoCalendario
 } from "../utils/supabaseClient";
 import { abrirChatDaDisputa } from "../utils/chatDisputa";
 import {
@@ -18,12 +20,15 @@ import {
   criarDisputaManual,
   aplicarEdicaoManual,
   dadosDeDisputa,
+  separarDataHora,
   ehLinkPncpOficial,
   DadosDisputaManual,
   ErrosDisputaManual
 } from "../utils/disputaManual";
 import { parseDisputaDate, getContrastTextColor } from "../utils/disputaDates";
 import { baixarIcsDeDisputas, contarDisputasExportaveis } from "../utils/icsExport";
+import { useEditalHistory } from "../utils/editalHistory";
+import { extrairNumeroEdital } from "../utils/identificacaoEdital";
 import DisputaDateTag from "./DisputaDateTag";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
@@ -42,7 +47,23 @@ import { Textarea } from "./ui/textarea";
 
 interface CalendarTabProps {
   onNavigateToDisputas?: () => void;
+  externalDisputas?: DisputaRow[];
+  externalStatusTypes?: DisputaStatusType[];
+  externalStatusFilter?: string;
+  onExternalStatusFilterChange?: (newFilter: string) => void;
+  onExternalStatusChange?: (id: string, newStatus: DisputaStatus) => void;
+  onExternalToggleCalendario?: (id: string) => void;
 }
+
+const DEFAULT_CALENDAR_STATUS_TYPES: DisputaStatusType[] = [
+  { id: "status-default-0", label: "Agendada", color: "#64748b", position: 0 },
+  { id: "status-default-1", label: "Em Disputa", color: "#f59e0b", position: 1 },
+  { id: "status-default-2", label: "Vencida", color: "#22c55e", position: 2 },
+  { id: "status-default-3", label: "Em Recurso", color: "#8b5cf6", position: 3 },
+  { id: "status-default-4", label: "Homologada", color: "#10b981", position: 4 },
+  { id: "status-default-5", label: "Perdida", color: "#ef4444", position: 5 },
+  { id: "status-default-6", label: "Cancelada", color: "#71717a", position: 6 }
+];
 
 const WEEKDAY_LABELS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 
@@ -81,26 +102,40 @@ function getCalendarCells(monthDate: Date): { date: Date; inMonth: boolean }[] {
   return cells;
 }
 
-export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) {
-  const [statusTypes, setStatusTypes] = useState<DisputaStatusType[]>(() => {
+export default function CalendarTab({
+  onNavigateToDisputas,
+  externalDisputas,
+  externalStatusTypes,
+  externalStatusFilter,
+  onExternalStatusFilterChange,
+  onExternalStatusChange,
+  onExternalToggleCalendario
+}: CalendarTabProps) {
+  const [internalStatusTypes, setStatusTypes] = useState<DisputaStatusType[]>(() => {
     const saved = localStorage.getItem("aip_disputas_status_types");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       } catch (e) {
         console.error(e);
       }
     }
-    return [];
+    return DEFAULT_CALENDAR_STATUS_TYPES;
   });
 
-  const [disputas, setDisputas] = useState<DisputaRow[]>(() => {
+  const [internalDisputas, setDisputas] = useState<DisputaRow[]>(() => {
     const saved = localStorage.getItem("aip_disputas_sheet");
+    const foraDoCalendario = lerDisputasForaDoCalendario();
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.map((r: any) => ({
+            ...r,
+            noCalendario: typeof r.noCalendario === "boolean" ? r.noCalendario : !foraDoCalendario.has(r.id)
+          }));
+        }
       } catch (e) {
         console.error(e);
       }
@@ -108,12 +143,22 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
     return [];
   });
 
-  const [statusFilter, setStatusFilter] = useState<string>("Todas");
+  const [internalStatusFilter, setInternalStatusFilter] = useState<string>("Todas");
+  const statusTypes = externalStatusTypes && externalStatusTypes.length > 0 ? externalStatusTypes : internalStatusTypes;
+  const disputas = externalDisputas || internalDisputas;
+  const statusFilter = externalStatusFilter !== undefined ? externalStatusFilter : internalStatusFilter;
+  const setStatusFilter = (val: string) => {
+    setInternalStatusFilter(val);
+    onExternalStatusFilterChange?.(val);
+  };
   const [currentMonth, setCurrentMonth] = useState<Date>(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+
+  const editalHistory = useEditalHistory();
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string>("");
 
   // ── Marcação manual ──────────────────────────────────────────────────
   // Uma disputa só existia como subproduto: ou a IA extraía a data da análise
@@ -209,10 +254,64 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
     [statusTypes]
   );
 
-  const filteredDisputas = useMemo(
-    () => statusFilter === "Todas" ? disputas : disputas.filter(r => r.status === statusFilter),
-    [disputas, statusFilter]
+  // Disputas marcadas como "noCalendario !== false" entram na grade do calendário
+  const disputasNoCalendario = useMemo(
+    () => disputas.filter(r => r.noCalendario !== false),
+    [disputas]
   );
+
+  const disputasForaDoCalendarioCount = useMemo(
+    () => disputas.filter(r => r.noCalendario === false).length,
+    [disputas]
+  );
+
+  const filteredDisputas = useMemo(
+    () => statusFilter === "Todas"
+      ? disputasNoCalendario
+      : disputasNoCalendario.filter(r => r.status === statusFilter),
+    [disputasNoCalendario, statusFilter]
+  );
+
+  const handleAlterarStatusInterno = (id: string, novoStatus: DisputaStatus) => {
+    if (onExternalStatusChange) {
+      onExternalStatusChange(id, novoStatus);
+      return;
+    }
+    setDisputas(prev => {
+      const next = prev.map(r => {
+        if (r.id === id) {
+          const updated = { ...r, status: novoStatus };
+          saveDisputaToSupabase(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      });
+      localStorage.setItem("aip_disputas_sheet", JSON.stringify(next));
+      return next;
+    });
+    window.dispatchEvent(new Event("aip_sync_disputas"));
+  };
+
+  const handleRemoverDoCalendario = (id: string) => {
+    if (onExternalToggleCalendario) {
+      onExternalToggleCalendario(id);
+      return;
+    }
+    definirDisputaNoCalendarioLocal(id, false);
+    setDisputas(prev => {
+      const next = prev.map(r => {
+        if (r.id === id) {
+          const updated = { ...r, noCalendario: false };
+          saveDisputaToSupabase(updated).catch(() => {});
+          return updated;
+        }
+        return r;
+      });
+      localStorage.setItem("aip_disputas_sheet", JSON.stringify(next));
+      return next;
+    });
+    window.dispatchEvent(new Event("aip_sync_disputas"));
+  };
 
   // O botão de exportar mostra quantos eventos sairiam de fato: disputa sem
   // data legível não vira evento, e anunciar um número maior que o exportado
@@ -266,6 +365,7 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
 
   const abrirNovaDisputa = (dia?: Date) => {
     setEditando(null);
+    setSelectedHistoryId("");
     setErrosForm({});
     setAvisoSalvamento(null);
     setFormDados({
@@ -280,6 +380,7 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
 
   const abrirEdicao = (row: DisputaRow) => {
     setEditando(row);
+    setSelectedHistoryId("");
     setErrosForm({});
     setAvisoSalvamento(null);
     setFormDados(dadosDeDisputa(row));
@@ -290,10 +391,85 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
   const fecharForm = () => {
     setFormAberto(false);
     setEditando(null);
+    setSelectedHistoryId("");
     setFormDados(FORM_VAZIO);
     setErrosForm({});
     setAvisoSalvamento(null);
     setSalvando(false);
+  };
+
+  const handleSelecionarEditalAnalisado = (historyId: string) => {
+    setSelectedHistoryId(historyId);
+    if (!historyId) return;
+
+    const item = editalHistory.find(h => h.id === historyId);
+    if (!item || !item.analysis) return;
+
+    const editalObj: EditalAnalysis = item.analysis;
+    const iden: any = editalObj.identificacaoCertame || {};
+    const fin: any = editalObj.viabilidadeFinanceira || {};
+    const editalAny: any = editalObj;
+
+    const orgao = iden.orgaoComprador || editalAny.orgao || item.title || "";
+    const numeroLicitacao =
+      iden.numeroEdital ||
+      iden.numeroLicitacao ||
+      iden.identificacaoNumerica ||
+      extrairNumeroEdital([editalObj.rawText, editalObj.reportMarkdown].filter(Boolean).join(" ")) ||
+      "";
+    const portal = iden.portalEletronico || iden.portal || "Compras.gov.br";
+    const firstItem = editalObj.itensEdital?.[0] || editalAny.itens?.[0];
+    const produtoItem = firstItem?.descricao || editalObj.descricaoProduto || editalAny.objeto || "";
+    const linkPNCP =
+      iden.linkPNCP ||
+      editalObj.linkPNCP ||
+      editalAny.linkPNCP ||
+      (iden.idContratacaoPNCP
+        ? `https://pncp.gov.br/app/editais/${iden.idContratacaoPNCP}`
+        : editalAny.idContratacaoPNCP
+          ? `https://pncp.gov.br/app/editais/${editalAny.idContratacaoPNCP}`
+          : "");
+    const veredito = editalObj.parecerFinal?.veredito || (editalObj.parecerFinal as any)?.recomendacao || "";
+    const observacoes =
+      (editalObj as any).resumoExecutivo ||
+      (veredito ? `Extraído do edital analisado. Veredito: ${veredito}` : `Importado do edital analisado (${item.title}).`);
+
+    const rawDataHora = iden.dataHoraSessao || iden.dataAbertura || iden.dataSessao || "";
+    const parsedSeparado = separarDataHora(rawDataHora);
+    let dataExtraida = parsedSeparado.data;
+    let horaExtraida = parsedSeparado.hora;
+
+    if (!dataExtraida && rawDataHora) {
+      const dt = parseDisputaDate(rawDataHora);
+      if (dt) {
+        dataExtraida = dayKey(dt);
+        const hh = String(dt.getHours()).padStart(2, "0");
+        const mm = String(dt.getMinutes()).padStart(2, "0");
+        if (hh !== "00" || mm !== "00") {
+          horaExtraida = `${hh}:${mm}`;
+        }
+      }
+    }
+
+    const rawValStr = String(fin.valorEstimado || fin.valorEstimadoTotal || firstItem?.valorEstimado || "");
+    const valMatch = rawValStr.match(/([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/);
+    const valorEstimadoNum = valMatch ? parseFloat(valMatch[1].replace(/\./g, "").replace(",", ".")) : 0;
+
+    setFormDados(prev => ({
+      ...prev,
+      orgao: orgao || prev.orgao,
+      data: dataExtraida || prev.data || dayKey(new Date()),
+      hora: horaExtraida || prev.hora,
+      numeroLicitacao: numeroLicitacao || prev.numeroLicitacao,
+      portal: portal || prev.portal,
+      produtoItem: produtoItem || prev.produtoItem,
+      observacoes: observacoes || prev.observacoes,
+      linkPNCP: linkPNCP || prev.linkPNCP,
+      status: prev.status || sortedStatusTypes[0]?.label || "Agendada",
+      valorEstimadoItem: valorEstimadoNum || prev.valorEstimadoItem,
+      nossoValorAlvo: valorEstimadoNum > 0 ? Number((valorEstimadoNum * 0.9).toFixed(2)) : prev.nossoValorAlvo
+    }));
+    setErrosForm({});
   };
 
   /** Grava no estado, no cache local e no banco — nessa ordem. */
@@ -444,15 +620,33 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          {sortedStatusTypes.map(s => (
+          {sortedStatusTypes.map(s => {
+            const active = statusFilter === s.label;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setStatusFilter(active ? "Todas" : s.label)}
+                title={active ? "Clique para mostrar todos os status" : `Filtrar por "${s.label}"`}
+                className={`flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition ${
+                  active
+                    ? "border-primary bg-primary/15 text-foreground ring-1 ring-primary/40"
+                    : "border-border hover:border-primary/40"
+                }`}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
+                {s.label}
+              </button>
+            );
+          })}
+          {disputasForaDoCalendarioCount > 0 && (
             <span
-              key={s.id}
-              className="flex items-center gap-1.5 rounded-full border border-border px-2 py-1 text-[10px] font-semibold"
+              className="ml-1 rounded-full border border-dashed border-border bg-muted/60 px-2.5 py-1 text-[10px] font-medium text-muted-foreground"
+              title="Disputas mantidas na Planilha, mas ocultadas do Calendário"
             >
-              <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
-              {s.label}
+              {disputasForaDoCalendarioCount} fora do calendário
             </span>
-          ))}
+          )}
         </div>
       </Card>
 
@@ -571,9 +765,9 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
 
       {/* ─────────── Diálogo com as disputas do dia selecionado ─────────── */}
       <Dialog open={!!selectedDay} onOpenChange={(open) => { if (!open) setSelectedDay(null); }}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
+        <DialogContent className="max-h-[88vh] w-full max-w-[calc(100vw-1.5rem)] overflow-y-auto overflow-x-hidden p-4 sm:max-w-xl sm:p-6">
+          <DialogHeader className="min-w-0 pr-6">
+            <DialogTitle className="break-words text-base sm:text-lg">
               {selectedDay?.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long", year: "numeric" })}
             </DialogTitle>
             <DialogDescription className="text-xs">
@@ -581,49 +775,83 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-2">
+          <div className="min-w-0 space-y-3">
             {selectedDayEvents.map(row => (
-              <div key={row.id} className="space-y-1.5 rounded-lg border border-border p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="min-w-0 truncate text-sm font-semibold" title={row.orgao}>{row.orgao || "Órgão não informado"}</p>
-                  <Badge
-                    className="shrink-0 border-0 font-bold"
-                    style={{ backgroundColor: getStatusColor(row.status), color: getContrastTextColor(getStatusColor(row.status)) }}
+              <div
+                key={row.id}
+                className="min-w-0 max-w-full space-y-2 overflow-hidden rounded-xl border border-border bg-card/60 p-3 sm:p-3.5"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <p className="min-w-0 flex-1 break-words text-sm font-semibold leading-snug text-foreground">
+                    {row.orgao || "Órgão não informado"}
+                  </p>
+                  <select
+                    value={row.status}
+                    onChange={(e) => handleAlterarStatusInterno(row.id, e.target.value as DisputaStatus)}
+                    style={{
+                      backgroundColor: getStatusColor(row.status),
+                      color: getContrastTextColor(getStatusColor(row.status)),
+                      borderColor: getStatusColor(row.status)
+                    }}
+                    title="Alterar status desta disputa"
+                    className="shrink-0 cursor-pointer rounded-lg border px-2.5 py-1 text-[11px] font-bold focus:outline-none"
                   >
-                    {row.status}
-                  </Badge>
+                    {!sortedStatusTypes.some(s => s.label === row.status) && row.status && (
+                      <option value={row.status} className="bg-popover text-popover-foreground">
+                        {row.status}
+                      </option>
+                    )}
+                    {sortedStatusTypes.map(s => (
+                      <option key={s.id} value={s.label} className="bg-popover text-popover-foreground">
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <p className="truncate font-mono text-xs font-bold text-primary">{row.numeroLicitacao}</p>
-                {row.produtoItem && <p className="line-clamp-2 text-xs text-muted-foreground">{row.produtoItem}</p>}
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-1.5">
-                  <span className="flex items-center gap-1.5 text-xs text-success">
-                    <Landmark className="h-3.5 w-3.5" />
-                    {row.dataHoraDisputa}
+
+                {row.numeroLicitacao && (
+                  <p className="break-words font-mono text-xs font-bold text-primary">
+                    {row.numeroLicitacao}
+                  </p>
+                )}
+
+                {row.produtoItem && (
+                  <p className="break-words text-xs leading-relaxed text-muted-foreground">
+                    {row.produtoItem}
+                  </p>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+                  <span className="flex min-w-0 items-center gap-1.5 text-xs text-success">
+                    <Landmark className="h-3.5 w-3.5 shrink-0" />
+                    <span className="break-words">{row.dataHoraDisputa}</span>
                   </span>
-                  {row.nossoValorAlvo > 0 && (
-                    <span className="font-mono text-xs font-bold">{formatBRL(row.nossoValorAlvo)}</span>
+                  {(row.nossoValorAlvo > 0 || row.valorEstimadoItem > 0) && (
+                    <span className="shrink-0 font-mono text-xs font-bold text-foreground">
+                      {formatBRL(row.nossoValorAlvo > 0 ? row.nossoValorAlvo : row.valorEstimadoItem)}
+                    </span>
                   )}
                 </div>
+
                 {row.observacoes && (
-                  <p className="whitespace-pre-wrap border-t border-border pt-1.5 text-xs text-muted-foreground">
+                  <p className="break-words whitespace-pre-wrap border-t border-border pt-2 text-xs text-muted-foreground">
                     {row.observacoes}
                   </p>
                 )}
+
                 {row.linkPNCP && (
                   <a
                     href={row.linkPNCP.startsWith("http") ? row.linkPNCP : `https://${row.linkPNCP}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-xs text-primary hover:underline"
+                    className="inline-flex max-w-full items-center gap-1 break-all text-xs font-medium text-primary hover:underline"
                   >
-                    {ehLinkPncpOficial(row.linkPNCP) ? "Abrir edital no PNCP" : "Abrir link da disputa"}
-                    <ExternalLink className="h-3 w-3" />
+                    <span>{ehLinkPncpOficial(row.linkPNCP) ? "Abrir edital no PNCP" : "Abrir link da disputa"}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
                   </a>
                 )}
 
-                <div className="flex flex-wrap items-center justify-end gap-1 border-t border-border pt-1.5">
-                  {/* Os dados da disputa já estão nesta linha; sem isto, falar
-                      dela com a IA exigia redigitar órgão, pregão, data e valores. */}
+                <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border pt-2">
                   <Button
                     type="button"
                     variant="ghost"
@@ -632,8 +860,8 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
                     onClick={() => { setSelectedDay(null); abrirChatDaDisputa(row); }}
                     title="Abrir um chat da IA já com os dados desta disputa"
                   >
-                    <MessageSquarePlus className="h-3 w-3" />
-                    Falar com a IA
+                    <MessageSquarePlus className="h-3 w-3 shrink-0" />
+                    <span>Falar com a IA</span>
                   </Button>
                   <Button
                     type="button"
@@ -642,8 +870,19 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
                     className="h-7 gap-1 px-2 text-[11px]"
                     onClick={() => abrirEdicao(row)}
                   >
-                    <Pencil className="h-3 w-3" />
-                    Editar
+                    <Pencil className="h-3 w-3 shrink-0" />
+                    <span>Editar</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => handleRemoverDoCalendario(row.id)}
+                    title="Retirar apenas do Calendário (mantém na Planilha de Disputas)"
+                  >
+                    <CalendarX className="h-3 w-3 shrink-0" />
+                    <span>Tirar do Calendário</span>
                   </Button>
                   <Button
                     type="button"
@@ -652,25 +891,26 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
                     className="h-7 gap-1 px-2 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive"
                     onClick={() => excluirDisputa(row)}
                   >
-                    <Trash2 className="h-3 w-3" />
-                    Remover
+                    <Trash2 className="h-3 w-3 shrink-0" />
+                    <span>Excluir</span>
                   </Button>
                 </div>
               </div>
             ))}
           </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="flex-wrap gap-2 pt-2">
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() => { const dia = selectedDay; setSelectedDay(null); abrirNovaDisputa(dia || undefined); }}
             >
               <Plus className="h-3.5 w-3.5" />
               Marcar outra neste dia
             </Button>
             {onNavigateToDisputas && (
-              <Button type="button" variant="outline" onClick={() => { setSelectedDay(null); onNavigateToDisputas(); }}>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setSelectedDay(null); onNavigateToDisputas(); }}>
                 Ver na Planilha de Disputas
               </Button>
             )}
@@ -680,20 +920,56 @@ export default function CalendarTab({ onNavigateToDisputas }: CalendarTabProps) 
 
       {/* ─────────── Marcar / editar disputa à mão ─────────── */}
       <Dialog open={formAberto} onOpenChange={(aberto) => { if (!aberto) fecharForm(); }}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="max-h-[90vh] w-full max-w-[calc(100vw-1.5rem)] overflow-y-auto overflow-x-hidden p-4 sm:max-w-2xl sm:p-6">
+          <DialogHeader className="min-w-0 pr-6">
             <DialogTitle className="flex items-center gap-2">
-              <CalendarDays className="h-4.5 w-4.5 text-primary" />
-              {editando ? "Editar disputa" : "Marcar disputa no calendário"}
+              <CalendarDays className="h-4.5 w-4.5 shrink-0 text-primary" />
+              <span>{editando ? "Editar disputa" : "Marcar disputa no calendário"}</span>
             </DialogTitle>
             <DialogDescription className="text-xs">
               {editando
-                ? "A disputa é a mesma da Planilha: o que você alterar aqui vale nos dois lugares."
-                : "Para quando você já sabe da sessão e não precisa passar pela análise do edital. A disputa entra também na Planilha."}
+                ? "A disputa é a mesma da Planilha: você pode editar os campos ou carregar dados de um edital já analisado."
+                : "Preencha manualmente ou escolha abaixo uma disputa/edital que já foi analisado para importar todos os dados automaticamente."}
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={salvarDisputa} className="space-y-4 text-xs">
+          <form onSubmit={salvarDisputa} className="min-w-0 space-y-4 text-xs">
+            {/* Seletor de Editais já analisados */}
+            <div className="rounded-xl border border-primary/25 bg-primary/5 p-3">
+              <Label className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-primary">
+                <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                <span>Escolher uma disputa já analisada (Histórico de Editais)</span>
+              </Label>
+              {editalHistory.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Nenhum edital analisado encontrado no histórico ainda. Ao analisar um edital na aba Análise de Edital, ele aparecerá aqui para seleção rápida.
+                </p>
+              ) : (
+                <>
+                  <select
+                    value={selectedHistoryId}
+                    onChange={(e) => handleSelecionarEditalAnalisado(e.target.value)}
+                    className="h-9 w-full cursor-pointer rounded-lg border border-input bg-background px-2.5 text-xs font-medium text-foreground focus:border-primary focus:outline-none"
+                  >
+                    <option value="">-- Selecione um edital analisado para preencher automaticamente --</option>
+                    {editalHistory.map((item, idx) => {
+                      const iden = item.analysis?.identificacaoCertame;
+                      const orgao = iden?.orgaoComprador || item.title || `Edital #${idx + 1}`;
+                      const num = iden?.identificacaoNumerica || iden?.modalidade || "";
+                      const dataSessao = iden?.dataHoraSessao ? ` • Sessão: ${iden.dataHoraSessao}` : "";
+                      return (
+                        <option key={item.id} value={item.id}>
+                          {orgao}{num ? ` (${num})` : ""}{dataSessao} — Analisado em {item.date}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Ao selecionar uma disputa analisada, os campos de órgão, data/hora, nº do processo, portal, link PNCP e objeto são preenchidos automaticamente.
+                  </p>
+                </>
+              )}
+            </div>
             <div>
               <Label className="mb-1 block text-xs font-medium text-muted-foreground">
                 Órgão ou título da disputa <span className="text-destructive">*</span>

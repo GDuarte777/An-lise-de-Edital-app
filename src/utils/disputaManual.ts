@@ -59,15 +59,17 @@ export function combinarDataHora(data: string, hora?: string): string {
 export function separarDataHora(dataHoraDisputa: string): { data: string; hora: string } {
   const texto = String(dataHoraDisputa || "").trim();
 
-  let m = texto.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+  let m = texto.match(/(\d{4})-(\d{2})-(\d{2})(?:[^0-9]+(\d{2}):(\d{2}))?/);
   if (m) {
     return { data: `${m[1]}-${m[2]}-${m[3]}`, hora: m[4] ? `${m[4]}:${m[5]}` : "" };
   }
 
-  // Formato brasileiro, que também circula no campo por digitação manual.
-  m = texto.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:[, ]+(\d{2}):(\d{2}))?/);
+  // Formato brasileiro (ex: "05/11/2026", "05/11/2026 14:00", "05/11/2026 às 10:00h").
+  m = texto.match(/(\d{2})\/(\d{2})\/(\d{4})(?:[^0-9]+(\d{1,2})[:h](\d{2}))?/i);
   if (m) {
-    return { data: `${m[3]}-${m[2]}-${m[1]}`, hora: m[4] ? `${m[4]}:${m[5]}` : "" };
+    const hh = m[4] ? m[4].padStart(2, "0") : "";
+    const mm = m[5] || "00";
+    return { data: `${m[3]}-${m[2]}-${m[1]}`, hora: hh ? `${hh}:${mm}` : "" };
   }
 
   return { data: "", hora: "" };

@@ -114,8 +114,8 @@ function sameList(a: EditalHistoryItem[], b: EditalHistoryItem[]): boolean {
 
 // Só troca a referência quando o conteúdo muda de verdade — useSyncExternalStore
 // entra em laço infinito se getSnapshot devolver um array novo a cada chamada.
-function commit(items: EditalHistoryItem[], { persist = true } = {}) {
-  if (sameList(snapshot, items)) return;
+function commit(items: EditalHistoryItem[], { persist = true, force = false } = {}) {
+  if (!force && sameList(snapshot, items)) return;
   snapshot = items;
   if (persist) writeCache(items);
   listeners.forEach(l => l());
@@ -177,10 +177,25 @@ export async function addEditalToHistory(analysis: EditalAnalysis, title?: strin
     analysis
   };
 
-  commit([item, ...snapshot.filter(h => h.id !== item.id)]);
+  commit([item, ...snapshot.filter(h => h.id !== item.id)], { force: true });
   saveEditalToSupabase(item).catch(() => {});
   window.dispatchEvent(new CustomEvent("aip_edital_analyzed", { detail: item }));
   return item;
+}
+
+export async function updateEditalInHistory(id: string, analysis: EditalAnalysis, title?: string): Promise<EditalHistoryItem | null> {
+  const existing = snapshot.find(h => h.id === id);
+  if (!existing) {
+    return addEditalToHistory(analysis, title);
+  }
+  const updated: EditalHistoryItem = {
+    ...existing,
+    title: title || existing.title,
+    analysis,
+  };
+  commit(snapshot.map(h => (h.id === id ? updated : h)), { force: true });
+  saveEditalToSupabase(updated).catch(() => {});
+  return updated;
 }
 
 export async function removeEditalFromHistory(id: string): Promise<void> {

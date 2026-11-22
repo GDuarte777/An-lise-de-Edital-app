@@ -3,13 +3,13 @@ import { normalizarCodigoUasg, extrairCodigoUasg } from "../utils/identificacaoE
 import { parseNumeroControlePNCP, PNCP_MODALIDADES } from "../utils/pncpQuery";
 import { buscarPacoteOficialPncp, type PacoteOficialPncp } from "../utils/pncpClient";
 import { resolverCapagPorOrgaoOuLocal, obterEstiloNotaCapag } from "../utils/capagData";
-import { EditalAnalysis, CompanyData, SyncItem, Certificate } from "../types";
+import { EditalAnalysis, CompanyData, SyncItem, Certificate, DisputaRow, DisputaStatus, DisputaStatusType } from "../types";
 import { 
   FileUp, FileText, CheckCircle2, AlertTriangle, Clock, ArrowRight, Loader2, Play, 
   Sparkles, RefreshCw, ChevronRight, FileCode, CheckSquare, Edit3, Settings, ClipboardPaste, 
   Coins, HelpCircle, HardDriveDownload, MonitorCheck, Save, Send, Database, FileSpreadsheet, Eye,
   Trash2, ShieldCheck, ShieldAlert, Award, TrendingUp, Landmark, MapPin, Gauge, Plus, X,
-  LayoutGrid, List, Search, Check, Calendar, ExternalLink, Globe, Building2, MessageSquare, Calculator
+  LayoutGrid, List, Search, Check, Calendar, CalendarCheck, CalendarX, ExternalLink, Globe, Building2, MessageSquare, Calculator
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -30,14 +30,21 @@ import {
 import { addSyncedItem, syncAnalysisToGoogleSheets } from "../utils/googleSync";
 import {
   saveDisputaToSupabase,
+  fetchDisputasFromSupabase,
+  fetchStatusDisputasFromSupabase,
+  definirDisputaNoCalendarioLocal,
+  lerDisputasForaDoCalendario,
   generateUUID
 } from "../utils/supabaseClient";
+import { getContrastTextColor } from "../utils/disputaDates";
 import {
   useEditalHistory,
   addEditalToHistory,
+  updateEditalInHistory,
   removeEditalFromHistory,
   clearEditalHistory
 } from "../utils/editalHistory";
+import DossieExecutivoView from "./DossieExecutivoView";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError, readJsonResponse, readJsonResponseSafe } from "../utils/aiClientHelper";
 
@@ -380,6 +387,209 @@ export default function EditalAnalyzerTab({
 
   // Certificate Management Intelligence state
   const [userCertificates, setUserCertificates] = useState<Certificate[]>([]);
+
+  // Calendar & Disputa Status control for the currently analyzed edital
+  const DEFAULT_EDITAL_STATUS_TYPES: DisputaStatusType[] = [
+    { id: "status-default-0", label: "Agendada", color: "#64748b", position: 0 },
+    { id: "status-default-1", label: "Em Disputa", color: "#f59e0b", position: 1 },
+    { id: "status-default-2", label: "Vencida", color: "#22c55e", position: 2 },
+    { id: "status-default-3", label: "Em Recurso", color: "#8b5cf6", position: 3 },
+    { id: "status-default-4", label: "Homologada", color: "#10b981", position: 4 },
+    { id: "status-default-5", label: "Perdida", color: "#ef4444", position: 5 },
+    { id: "status-default-6", label: "Cancelada", color: "#71717a", position: 6 }
+  ];
+
+  const [statusTypes, setStatusTypes] = useState<DisputaStatusType[]>(() => {
+    const saved = localStorage.getItem("aip_disputas_status_types");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {
+        // fallback
+      }
+    }
+    return DEFAULT_EDITAL_STATUS_TYPES;
+  });
+
+  const [editalDisputaId, setEditalDisputaId] = useState<string | null>(null);
+  const [editalDisputaStatus, setEditalDisputaStatus] = useState<DisputaStatus>("Agendada");
+  const [editalNoCalendario, setEditalNoCalendario] = useState<boolean>(false);
+  const [calendarFeedback, setCalendarFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchStatusDisputasFromSupabase()
+      .then((dbTypes) => {
+        if (Array.isArray(dbTypes) && dbTypes.length > 0) {
+          setStatusTypes(dbTypes);
+          localStorage.setItem("aip_disputas_status_types", JSON.stringify(dbTypes));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Build a DisputaRow payload from an EditalAnalysis
+  const montarDisputaDoEdital = (
+    editalObj: EditalAnalysis,
+    customId?: string,
+    customStatus?: DisputaStatus,
+    customNoCalendario?: boolean
+  ): DisputaRow => {
+    const iden: any = editalObj.identificacaoCertame || {};
+    const fin: any = editalObj.viabilidadeFinanceira || {};
+    const rawValStr = String(fin.valorEstimado || fin.valorEstimadoTotal || "");
+
+    const dinheiroRegex = /([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/;
+    const paraNumero = (t: string) => parseFloat(t.replace(/\./g, "").replace(",", "."));
+    const ruido = /(multa|penalidade|san[çc][ãa]o|garantia|cau[çc][ãa]o|faturamento|patrim[ôo]nio|capital social)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/gi;
+    const valoresRuido = new Set<number>();
+    for (const m of rawValStr.matchAll(ruido)) valoresRuido.add(paraNumero(m[2]));
+
+    const qualificadoRegex = /(valor\s+(?:total|global|estimado\s+total)|total\s+estimado|valor\s+estimado\s+da\s+contrata[çc][ãa]o)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/i;
+    const qualificado = rawValStr.match(qualificadoRegex);
+
+    const todosValores = (rawValStr.match(new RegExp(dinheiroRegex, "g")) || [])
+      .map(paraNumero)
+      .filter(v => !isNaN(v) && v > 0 && !valoresRuido.has(v));
+
+    const numVal = qualificado
+      ? paraNumero(qualificado[2])
+      : todosValores.length > 0
+        ? Math.max(...todosValores)
+        : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
+
+    return {
+      id: customId || editalDisputaId || generateUUID(),
+      orgao: iden.orgaoComprador || (editalObj.descricaoProduto ? editalObj.descricaoProduto.slice(0, 50) : "Órgão do Edital"),
+      uasgUndCompradora: normalizarCodigoUasg(iden.codigoUASG) || normalizarCodigoUasg(iden.uasg),
+      numeroLicitacao: iden.numeroLicitacao || iden.identificacaoNumerica || "",
+      portal: iden.portalEletronico || "Compras.gov.br",
+      produtoItem: editalObj.descricaoProduto || "Objeto da Licitação",
+      quantidade: editalObj.itensEdital?.[0]?.quantidade || 1,
+      unidadeMedida: editalObj.itensEdital?.[0]?.unidade || "Unidade",
+      valorEstimadoItem: numVal,
+      nossoValorAlvo: numVal > 0 ? Number((numVal * 0.90).toFixed(2)) : 0,
+      valorMinimoPiso: numVal > 0 ? Number((numVal * 0.82).toFixed(2)) : 0,
+      dataHoraDisputa: iden.dataHoraSessao || "",
+      status: customStatus || editalDisputaStatus || "Agendada",
+      observacoes: "Extraído da análise do edital.",
+      linkPNCP: iden.linkPNCP || editalObj.linkPNCP || "",
+      noCalendario: customNoCalendario ?? editalNoCalendario
+    };
+  };
+
+  // Detect whether activeEdital already matches a row in planilhas_disputas
+  useEffect(() => {
+    if (!activeEdital) {
+      setEditalDisputaId(null);
+      setEditalNoCalendario(false);
+      return;
+    }
+
+    const sincronizarComDisputasSalvas = (lista: DisputaRow[]) => {
+      const iden: any = activeEdital.identificacaoCertame || {};
+      const numEdital = (iden.numeroLicitacao || iden.identificacaoNumerica || "").trim().toLowerCase();
+      const orgaoEdital = (iden.orgaoComprador || "").trim().toLowerCase();
+      const linkEdital = (iden.linkPNCP || activeEdital.linkPNCP || "").trim().toLowerCase();
+      const foraDoCalendario = lerDisputasForaDoCalendario();
+
+      const existente = lista.find((r) => {
+        if (linkEdital && r.linkPNCP && r.linkPNCP.trim().toLowerCase() === linkEdital) return true;
+        if (numEdital && orgaoEdital) {
+          return (
+            (r.numeroLicitacao || "").trim().toLowerCase() === numEdital &&
+            (r.orgao || "").trim().toLowerCase() === orgaoEdital
+          );
+        }
+        if (orgaoEdital && (r.orgao || "").trim().toLowerCase() === orgaoEdital) return true;
+        return false;
+      });
+
+      if (existente) {
+        const estaNoCal = typeof existente.noCalendario === "boolean"
+          ? existente.noCalendario
+          : !foraDoCalendario.has(existente.id);
+        setEditalDisputaId(existente.id);
+        setEditalDisputaStatus(existente.status || "Agendada");
+        setEditalNoCalendario(estaNoCal);
+      } else {
+        setEditalDisputaId(null);
+        setEditalDisputaStatus("Agendada");
+        setEditalNoCalendario(false);
+      }
+    };
+
+    try {
+      const saved = localStorage.getItem("aip_disputas_sheet");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          sincronizarComDisputasSalvas(parsed);
+        }
+      } else {
+        fetchDisputasFromSupabase().then((rows) => {
+          if (Array.isArray(rows)) sincronizarComDisputasSalvas(rows);
+        }).catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+  }, [activeEdital]);
+
+  const persistirDisputaDoEdital = (novoStatus: DisputaStatus, inserirNoCalendario: boolean) => {
+    if (!activeEdital) return;
+    const row = montarDisputaDoEdital(activeEdital, editalDisputaId || undefined, novoStatus, inserirNoCalendario);
+    setEditalDisputaId(row.id);
+    setEditalDisputaStatus(novoStatus);
+    setEditalNoCalendario(inserirNoCalendario);
+    definirDisputaNoCalendarioLocal(row.id, inserirNoCalendario);
+
+    try {
+      const saved = localStorage.getItem("aip_disputas_sheet");
+      const lista: DisputaRow[] = saved ? JSON.parse(saved) : [];
+      const jaExiste = Array.isArray(lista) && lista.some(r => r.id === row.id);
+      const novaLista = jaExiste
+        ? lista.map(r => r.id === row.id ? row : r)
+        : [row, ...(Array.isArray(lista) ? lista : [])];
+      localStorage.setItem("aip_disputas_sheet", JSON.stringify(novaLista));
+    } catch {
+      // ignore
+    }
+
+    saveDisputaToSupabase(row)
+      .then(() => {
+        window.dispatchEvent(new Event("aip_sync_disputas"));
+      })
+      .catch(() => {
+        window.dispatchEvent(new Event("aip_sync_disputas"));
+      });
+  };
+
+  const handleEditalStatusSelectChange = (novoStatus: DisputaStatus) => {
+    setEditalDisputaStatus(novoStatus);
+    // Se já está cadastrada na planilha ou no calendário, atualiza imediatamente o status
+    if (editalDisputaId || editalNoCalendario) {
+      persistirDisputaDoEdital(novoStatus, editalNoCalendario);
+      setCalendarFeedback(`Status atualizado para "${novoStatus}".`);
+      setTimeout(() => setCalendarFeedback(null), 3500);
+    }
+  };
+
+  const handleToggleEditalNoCalendario = () => {
+    const proximoValor = !editalNoCalendario;
+    persistirDisputaDoEdital(editalDisputaStatus, proximoValor);
+    if (proximoValor) {
+      confetti({ particleCount: 45, spread: 55 });
+      setCalendarFeedback(`Disputa inserida no Calendário com status "${editalDisputaStatus}"!`);
+    } else {
+      setCalendarFeedback("Disputa removida do Calendário.");
+    }
+    setTimeout(() => setCalendarFeedback(null), 4000);
+  };
+
+  const getEditalStatusColor = (status: DisputaStatus): string => {
+    return statusTypes.find(s => s.label === status)?.color || "#64748b";
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem("aip_certificates");
@@ -1159,67 +1369,11 @@ export default function EditalAnalyzerTab({
 
         addEditalToHistory(analysisResult, historyTitle).catch((e) => console.warn("Erro ao salvar edital no histórico:", e));
 
-        // Auto-save to planilhas_disputas in Supabase in real-time
-        try {
-          const iden: any = analysisResult.identificacaoCertame || {};
-          const fin: any = analysisResult.viabilidadeFinanceira || {};
-          const rawValStr = String(fin.valorEstimado || fin.valorEstimadoTotal || "");
-          
-          /**
-           * Valor global estimado do certame.
-           *
-           * Antes o código pegava o MAIOR número monetário que aparecesse no
-           * texto. Isso acerta por sorte quando só há unitário e total, e erra
-           * feio quando o texto menciona multa, garantia contratual ou
-           * faturamento mínimo — a planilha de disputa era salva com o valor da
-           * multa. Agora a busca é ancorada na expressão que qualifica o número
-           * como total/global, e só cai para o maior valor se nada estiver
-           * qualificado.
-           */
-          const dinheiroRegex = /([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/;
-          const paraNumero = (t: string) => parseFloat(t.replace(/\./g, "").replace(",", "."));
-
-          // Números precedidos por termos que NÃO são o valor estimado.
-          const ruido = /(multa|penalidade|san[çc][ãa]o|garantia|cau[çc][ãa]o|faturamento|patrim[ôo]nio|capital social)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/gi;
-          const valoresRuido = new Set<number>();
-          for (const m of rawValStr.matchAll(ruido)) valoresRuido.add(paraNumero(m[2]));
-
-          const qualificadoRegex = /(valor\s+(?:total|global|estimado\s+total)|total\s+estimado|valor\s+estimado\s+da\s+contrata[çc][ãa]o)[^0-9]{0,40}([0-9]{1,3}(?:\.[0-9]{3})*(?:,[0-9]{2}))/i;
-          const qualificado = rawValStr.match(qualificadoRegex);
-
-          const todosValores = (rawValStr.match(new RegExp(dinheiroRegex, "g")) || [])
-            .map(paraNumero)
-            .filter(v => !isNaN(v) && v > 0 && !valoresRuido.has(v));
-
-          const numVal = qualificado
-            ? paraNumero(qualificado[2])
-            : todosValores.length > 0
-              ? Math.max(...todosValores)
-              : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
-
-          const disputaRow = {
-            id: generateUUID(),
-            orgao: iden.orgaoComprador || (analysisResult.descricaoProduto ? analysisResult.descricaoProduto.slice(0, 50) : "Órgão do Edital"),
-            uasgUndCompradora: normalizarCodigoUasg(iden.codigoUASG) || normalizarCodigoUasg(iden.uasg),
-            numeroLicitacao: iden.numeroLicitacao || iden.identificacaoNumerica || "",
-            portal: iden.portalEletronico || "Compras.gov.br",
-            produtoItem: analysisResult.descricaoProduto || "Objeto da Licitação",
-            quantidade: analysisResult.itensEdital?.[0]?.quantidade || 1,
-            unidadeMedida: analysisResult.itensEdital?.[0]?.unidade || "Unidade",
-            valorEstimadoItem: numVal,
-            nossoValorAlvo: numVal > 0 ? Number((numVal * 0.90).toFixed(2)) : 0,
-            valorMinimoPiso: numVal > 0 ? Number((numVal * 0.82).toFixed(2)) : 0,
-            dataHoraDisputa: iden.dataHoraSessao || new Date().toLocaleDateString("pt-BR") + " 09:00",
-            status: "Agendada" as const,
-            observacoes: `Gerado automaticamente da análise do edital.`,
-            linkPNCP: iden.linkPNCP || analysisResult.linkPNCP || ""
-          };
-          saveDisputaToSupabase(disputaRow).then(() => {
-            window.dispatchEvent(new Event("aip_sync_disputas"));
-          }).catch(() => {});
-        } catch (e) {
-          console.warn("Could not auto-add disputa row:", e);
-        }
+        // O usuário agora escolhe explicitamente no topo do edital analisado
+        // se deseja inserir a disputa no Calendário e qual será o status dela.
+        setEditalDisputaId(null);
+        setEditalDisputaStatus("Agendada");
+        setEditalNoCalendario(false);
 
         // Auto-sync log results dynamically to Google Sheets/Drive simulation!
         syncAnalysisToGoogleSheets(`Análise Edital - ${(analysisResult.descricaoProduto || "").slice(0, 30)}`, analysisResult);
@@ -1764,20 +1918,83 @@ export default function EditalAnalyzerTab({
         return (
         <div className="space-y-6 animate-fade-in" id="analysis-results-section">
 
-          {/* Barra de Fluxo Rápido (Ações em 1 Clique) */}
-          <Card className="p-3.5 border-primary/30 bg-accent/40 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="p-2 rounded-lg bg-primary text-primary-foreground shrink-0">
-                <Sparkles className="w-4 h-4" />
+          {/* Barra de Fluxo Rápido e Agendamento no Calendário */}
+          <Card className="p-3.5 border-primary/30 bg-accent/40 flex flex-col gap-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-2 rounded-lg bg-primary text-primary-foreground shrink-0">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">Fluxo Rápido &amp; Calendário da Disputa</h4>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    Escolha o status da disputa e decida se ela deve ser inserida no Calendário de Disputas.
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0">
-                <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">Fluxo Rápido do Edital</h4>
-                <p className="text-[11px] text-muted-foreground truncate">
-                  Prossiga com este edital sem precisar copiar ou redigitar dados entre abas.
-                </p>
+
+              {/* Controle de Status + Botão de Agendar/Remover do Calendário */}
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card/90 px-3 py-2 shadow-2xs">
+                <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Status da Disputa:
+                </span>
+                <select
+                  value={editalDisputaStatus}
+                  onChange={(e) => handleEditalStatusSelectChange(e.target.value as DisputaStatus)}
+                  style={{
+                    backgroundColor: getEditalStatusColor(editalDisputaStatus),
+                    color: getContrastTextColor(getEditalStatusColor(editalDisputaStatus)),
+                    borderColor: getEditalStatusColor(editalDisputaStatus)
+                  }}
+                  title="Escolher o status desta disputa"
+                  className="cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-bold focus:outline-none"
+                >
+                  {[...statusTypes]
+                    .sort((a, b) => a.position - b.position)
+                    .map((s) => (
+                      <option key={s.id} value={s.label} className="bg-popover text-popover-foreground">
+                        {s.label}
+                      </option>
+                    ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={handleToggleEditalNoCalendario}
+                  title={
+                    editalNoCalendario
+                      ? "Esta disputa está no Calendário — clique para remover do Calendário"
+                      : "Clique para inserir esta disputa analisada no Calendário com o status escolhido"
+                  }
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-bold transition ${
+                    editalNoCalendario
+                      ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-300"
+                      : "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+                  }`}
+                >
+                  {editalNoCalendario ? (
+                    <>
+                      <CalendarCheck className="w-3.5 h-3.5 shrink-0" />
+                      <span>No Calendário (Remover)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Calendar className="w-3.5 h-3.5 shrink-0" />
+                      <span>Inserir no Calendário</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+
+            {calendarFeedback && (
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                <span>{calendarFeedback}</span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-2.5">
               {onNavigateToDisputas && (
                 <Button
                   type="button"
@@ -1787,7 +2004,7 @@ export default function EditalAnalyzerTab({
                   className="text-xs font-semibold cursor-pointer gap-1.5"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5 text-primary" />
-                  Ver na Planilha
+                  Ver Disputas &amp; Calendário
                 </Button>
               )}
               {onNavigateToHabilitacao && (
@@ -2196,12 +2413,12 @@ export default function EditalAnalyzerTab({
             </Card>
           )}
 
-          {/* Tab Selector Menu for Sub-Information Panels (Apenas Dossiê e Checklist) */}
+          {/* Tab Selector Menu for Sub-Information Panels (Apenas Dossiê Executivo e Checklist) */}
           <Tabs value={analysisActiveTab} onValueChange={(v) => setAnalysisActiveTab(v as "struc" | "checklist")}>
             <TabsList className="w-full sm:w-auto overflow-x-auto">
               <TabsTrigger value="struc" className="gap-1.5 whitespace-nowrap font-bold">
-                <Gauge className="w-4 h-4 text-success" />
-                Dossiê Completo do Edital
+                <FileText className="w-4 h-4 text-success" />
+                Dossiê Executivo do Edital (PDF)
               </TabsTrigger>
               <TabsTrigger value="checklist" className="gap-1.5 whitespace-nowrap font-bold">
                 <CheckSquare className="w-4 h-4 text-primary" />
@@ -2210,659 +2427,44 @@ export default function EditalAnalyzerTab({
             </TabsList>
           </Tabs>
 
-          {/* TAB 1: DOSSIÊ COMPLETO DO EDITAL (TODOS OS PONTOS IMPORTANTES CONSOLIDADOS) */}
+          {/* TAB 1: DOSSIÊ EXECUTIVO DO EDITAL (MODELO INTELIGÊNCIA LICITATÓRIA + EDITOR + PDF A4) */}
           {analysisActiveTab === "struc" && (
-            <div className="space-y-6 animate-fade-in text-foreground">
-              {/* 1. Barra Rápida: Data e Hora da Disputa, UASG, ID PNCP & Link Direto */}
-              <div className="bg-accent border border-primary/30 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 shadow-2xs">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1">
-                  {/* Data e Hora da Disputa */}
-                  <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
-                    <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
-                      <Calendar className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
-                        Data e Hora da Disputa
-                      </span>
-                      <span className="text-xs font-extrabold text-foreground flex items-center gap-1 truncate">
-                        <Clock className="w-3 h-3 text-primary shrink-0" />
-                        <span className="truncate">{getDataHoraDisputa(activeEdital)}</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* UASG / Unidade Compradora */}
-                  <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
-                    <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
-                      <Building2 className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
-                        UASG / Unidade Compradora
-                      </span>
-                      <span className="text-xs font-extrabold text-foreground block truncate" title={getUasg(activeEdital)}>
-                        {getUasg(activeEdital)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Id Contratação PNCP */}
-                  <div className="flex items-center gap-2.5 bg-card/80 p-2.5 rounded-lg border border-border">
-                    <div className="p-2 bg-primary text-primary-foreground rounded-md shrink-0">
-                      <FileText className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground font-bold block truncate">
-                        Id Contratação PNCP
-                      </span>
-                      <span className="text-xs font-mono font-extrabold text-primary block truncate" title={getIdContratacaoPNCP(activeEdital)}>
-                        {getIdContratacaoPNCP(activeEdital)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {getPncpDirectUrl(activeEdital) && (
-                  <a
-                    href={getPncpDirectUrl(activeEdital)!}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-bold rounded-xl transition-all shadow-2xs hover:shadow-xs shrink-0 cursor-pointer w-full xl:w-auto"
-                  >
-                    <Globe className="w-4 h-4" />
-                    <span>Acessar Licitação no Portal PNCP</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                )}
-              </div>
-
-              {/* Aviso de campos não localizados no documento */}
+            <div className="space-y-4 animate-fade-in text-foreground">
               {Array.isArray((activeEdital as any).camposNaoIdentificados) && (activeEdital as any).camposNaoIdentificados.length > 0 && (
                 <div className="p-3 rounded-xl border border-warning/40 bg-warning/10 text-foreground text-[11px] leading-relaxed flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
                   <span>
                     <strong>Campos não localizados nos documentos enviados:</strong>{" "}
-                    {(activeEdital as any).camposNaoIdentificados.join(", ")}. Esses campos ficaram em branco
-                    de propósito, sem suposições — confira direto no edital antes da disputa.
+                    {(activeEdital as any).camposNaoIdentificados.join(", ")}. Esses campos podem ser completados clicando em <strong>Editar Textos e Pontos de Atenção</strong> antes de baixar o PDF.
                   </span>
                 </div>
               )}
 
-              {/* 2. Veredito Estratégico, Grau de Risco & Estratégia de Lances (Topo do Dossiê) */}
-              <div className="bg-accent border border-primary/30 rounded-xl p-5 space-y-3 shadow-xs">
-                <div className="flex items-center justify-between border-b border-primary/30 pb-2">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-primary shrink-0" />
-                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
-                      Veredito Estratégico, Risco &amp; Estratégia Recomendada de Lances
-                    </h4>
-                  </div>
-                  <Badge variant="outline" className="text-[10px] font-mono bg-card border-primary/30 text-primary">
-                    Resumo Decisório
-                  </Badge>
-                </div>
-                {activeEdital.parecerFinal ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs leading-normal">
-                    <div className="bg-card/80 p-3 rounded-lg border border-border">
-                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">
-                        Veredito Final da Disputa
-                      </span>
-                      <span className="text-foreground font-extrabold text-sm inline-block mt-1">
-                        {activeEdital.parecerFinal.veredito}
-                      </span>
-                    </div>
-                    <div className="bg-card/80 p-3 rounded-lg border border-border">
-                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">
-                        Grau de Risco Global
-                      </span>
-                      <span
-                        className={`px-2.5 py-1 rounded font-bold uppercase inline-block border mt-1 ${
-                          activeEdital.parecerFinal.grauRisco.toLowerCase().includes("alto")
-                            ? "bg-destructive/10 text-destructive border-destructive/30"
-                            : activeEdital.parecerFinal.grauRisco.toLowerCase().includes("médio")
-                            ? "bg-warning/15 text-warning border-warning/40"
-                            : "bg-success/10 text-success border-success/30"
-                        }`}
-                      >
-                        {activeEdital.parecerFinal.grauRisco}
-                      </span>
-                    </div>
-                    <div className="bg-card/80 p-3 rounded-lg border border-border">
-                      <span className="text-primary block font-mono text-[9px] uppercase tracking-wider font-bold">
-                        Estratégia Recomendada de Lances
-                      </span>
-                      <span className="text-foreground block font-semibold mt-1 leading-snug">
-                        {activeEdital.parecerFinal.estrategiaLances}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground text-xs py-2">
-                    Verifique os tópicos estruturados abaixo para definir sua margem e estratégia de lances.
-                  </p>
-                )}
-              </div>
-
-              {/* 3. Visão Rápida: Pontos Fortes / Oportunidades vs. Alertas Críticos & Riscos */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-card border border-success/30 rounded-xl p-5 space-y-3 shadow-xs">
-                  <div className="flex items-center justify-between border-b border-border pb-2">
-                    <h4 className="font-bold text-foreground flex items-center gap-2 text-xs uppercase tracking-wide">
-                      <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
-                      Pontos Fortes &amp; Vantagens Competitivas do Edital
-                    </h4>
-                    <Badge variant="outline" className="text-[10px] font-mono text-success border-success/30">
-                      {getFilteredArray(activeEdital.pontosPositivos).length} pontos
-                    </Badge>
-                  </div>
-                  {getFilteredArray(activeEdital.pontosPositivos).length > 0 ? (
-                    <ul className="space-y-2.5 text-xs text-foreground">
-                      {getFilteredArray(activeEdital.pontosPositivos).map((item, idx) => (
-                        <li key={idx} className="flex gap-2.5 items-start">
-                          <span className="bg-success/10 border border-success/30 text-success h-5 w-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold mt-0.5">
-                            {idx + 1}
-                          </span>
-                          <span className="leading-relaxed">{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-muted-foreground text-xs">Nenhum ponto positivo específico destacado.</p>
-                  )}
-                </div>
-
-                <div className="bg-card border border-warning/40 rounded-xl p-5 space-y-3 shadow-xs">
-                  <div className="flex items-center justify-between border-b border-border pb-2">
-                    <h4 className="font-bold text-foreground flex items-center gap-2 text-xs uppercase tracking-wide">
-                      <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
-                      Alertas Críticos, Exigências &amp; Riscos de Desclassificação
-                    </h4>
-                    <Badge variant="outline" className="text-[10px] font-mono text-warning border-warning/40">
-                      {getFilteredArray(activeEdital.pontosAlerta).length} alertas
-                    </Badge>
-                  </div>
-                  {getFilteredArray(activeEdital.pontosAlerta).length > 0 ? (
-                    <ul className="space-y-2.5 text-xs text-foreground">
-                      {getFilteredArray(activeEdital.pontosAlerta).map((item, idx) => (
-                        <li key={idx} className="flex gap-2.5 items-start">
-                          <span className="bg-warning/15 border border-warning/40 text-warning h-5 w-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold mt-0.5">
-                            {idx + 1}
-                          </span>
-                          <span className="leading-relaxed">{item}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-muted-foreground text-xs">Nenhum alerta crítico identificado.</p>
-                  )}
-                </div>
-              </div>
-
-              {/* 4. Os 5 Pilares Estruturados do Edital (Identificação, Preços, Especificações Técnicas, Burocracia e Logística) */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Pillar 1: IDENTIFICATION */}
-                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                  <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
-                    <div className="flex items-center gap-2">
-                      <Landmark className="w-4 h-4 text-primary shrink-0" />
-                      <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
-                        1. Identificação do Certame &amp; Órgão Comprador
-                      </h4>
-                    </div>
-                    {(() => {
-                      const pncpMeta = (activeEdital as any).dadosOficiaisPNCP || {};
-                      const capagEnte = resolverCapagPorOrgaoOuLocal({
-                        uf: pncpMeta.uf,
-                        municipio: pncpMeta.municipio,
-                        orgao:
-                          activeEdital.identificacaoCertame?.orgaoComprador ||
-                          pncpMeta.orgao ||
-                          activeEdital.rawText,
-                      });
-                      const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
-                      return (
-                        <span
-                          className={`text-[10px] font-mono font-extrabold px-2 py-0.5 rounded border ${capagEstilo.badgeBg} ${capagEstilo.badgeText} ${capagEstilo.badgeBorder}`}
-                        >
-                          {capagEstilo.labelCurto}
-                        </span>
-                      );
-                    })()}
-                  </div>
-                  {activeEdital.identificacaoCertame ? (
-                    <div className="text-xs space-y-3 leading-normal">
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Órgão Comprador / Unidade Gestora
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.identificacaoCertame.orgaoComprador || "Não informado"}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                            Modalidade do Processo
-                          </span>
-                          <span className="text-foreground font-semibold">
-                            {activeEdital.identificacaoCertame.modalidade || "Não informada"}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                            UASG / Código da Unidade
-                          </span>
-                          <span className="text-foreground font-semibold">{getUasg(activeEdital)}</span>
-                        </div>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Identificação Numérica / Nº do Edital ou Processo
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.identificacaoCertame.identificacaoNumerica || "Não informado"}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Sessão Pública (Data e Hora da Disputa)
-                        </span>
-                        <span className="text-foreground font-extrabold flex items-center gap-1.5 mt-0.5 text-primary">
-                          <Calendar className="w-3.5 h-3.5" />
-                          {getDataHoraDisputa(activeEdital)}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Link Direto no Portal PNCP
-                        </span>
-                        {getPncpLink(activeEdital) ? (
-                          <a
-                            href={getPncpLink(activeEdital)!}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary font-bold hover:text-primary/80 hover:underline flex items-center gap-1 mt-0.5"
-                          >
-                            <Globe className="w-3.5 h-3.5 shrink-0" />
-                            <span>Acessar Licitação no PNCP</span>
-                            <ExternalLink className="w-3 h-3 shrink-0" />
-                          </a>
-                        ) : (
-                          <span className="text-muted-foreground">Não informado</span>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-muted-foreground text-xs py-4 text-center">
-                      Indisponível para esta análise antiga do histórico.
-                    </p>
-                  )}
-                </div>
-
-                {/* Pillar 2: FINANCIAL VIABILITY, CAPAG & PRICES */}
-                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                  <div className="flex items-center gap-2 border-b border-border pb-2">
-                    <Coins className="w-4 h-4 text-success shrink-0" />
-                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
-                      2. Preços da Disputa, CAPAG (Risco Pagador) &amp; Pagamento
-                    </h4>
-                  </div>
-                  {activeEdital.viabilidadeFinanceira ? (
-                    <div className="text-xs space-y-3 leading-normal">
-                      {activeEdital.itensEdital && activeEdital.itensEdital.length > 0 && (
-                        <div className="bg-success/10 border border-success/30 p-3 rounded-lg">
-                          <span className="text-success block font-mono text-[9px] uppercase tracking-wider font-bold">
-                            Valor Estimado (Itens Selecionados para Disputa)
-                          </span>
-                          <span className="text-success font-mono font-extrabold text-sm block mt-0.5">
-                            {selectedStats.formattedValorEstimado}
-                          </span>
-                          <span className="text-[10px] text-muted-foreground block mt-0.5">
-                            Referente a {selectedStats.count} de {selectedStats.totalEditalCount} itens ({selectedStats.totalQuantity} un)
-                          </span>
-                        </div>
-                      )}
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Valor Estimado Global (Edital Completo)
-                        </span>
-                        <span className="text-foreground font-bold">
-                          {activeEdital.viabilidadeFinanceira.valorEstimado || selectedStats.formattedValorEstimado}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Prazo e Condição de Pagamento
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.viabilidadeFinanceira.prazoPagamento || activeEdital.prazoPagamento}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Análise de Preço &amp; Margem vs. Mercado Privado
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.viabilidadeFinanceira.distorcoesPreco || "Consulte os valores unitários dos itens selecionados."}
-                        </span>
-                      </div>
-
-                      {/* Diagnóstico Automático CAPAG do Comprador */}
-                      {(() => {
-                        const pncpMeta = (activeEdital as any).dadosOficiaisPNCP || {};
-                        const capagEnte = resolverCapagPorOrgaoOuLocal({
-                          uf: pncpMeta.uf,
-                          municipio: pncpMeta.municipio,
-                          orgao:
-                            activeEdital.identificacaoCertame?.orgaoComprador ||
-                            pncpMeta.orgao ||
-                            activeEdital.rawText,
-                        });
-                        const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
-                        return (
-                          <div
-                            className={`p-3 rounded-xl border ${capagEstilo.badgeBg} ${capagEstilo.badgeBorder} space-y-2`}
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <span className="text-[9px] font-mono uppercase tracking-wider font-bold text-muted-foreground block">
-                                  Capacidade de Pagamento (CAPAG / Tesouro Nacional)
-                                </span>
-                                <span className={`font-extrabold text-xs ${capagEstilo.badgeText}`}>
-                                  Nota {capagEnte.notaCapag} — {capagEnte.veredito.statusPagador} ({capagEnte.nome})
-                                </span>
-                              </div>
-                              {onNavigateToCapag && (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    onNavigateToCapag({
-                                      uf: capagEnte.uf,
-                                      municipio: capagEnte.esfera === "Município" ? capagEnte.nome : undefined,
-                                      orgao: activeEdital.identificacaoCertame?.orgaoComprador,
-                                    })
-                                  }
-                                  className="h-6 px-2 text-[10px] font-bold bg-card"
-                                >
-                                  Abrir no CAPAG
-                                </Button>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-foreground leading-snug">
-                              {capagEnte.veredito.resumoDividaCaixa}
-                            </p>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] pt-0.5">
-                              <div className="bg-card/80 p-2 rounded border border-border">
-                                <span className="text-[8px] font-mono uppercase text-muted-foreground block">
-                                  Prazo Médio Estimado
-                                </span>
-                                <span className="font-bold text-foreground">
-                                  {capagEnte.veredito.prazoMedioRecebimento}
-                                </span>
-                              </div>
-                              <div className="bg-card/80 p-2 rounded border border-border">
-                                <span className="text-[8px] font-mono uppercase text-muted-foreground block">
-                                  Margem de Segurança Recomendada
-                                </span>
-                                <span className="font-bold text-primary">
-                                  {capagEnte.veredito.margemFinanceiraRecomendada}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  ) : (
-                    <p className="text-muted-foreground text-xs py-4 text-center">
-                      Indisponível para esta análise antiga do histórico.
-                    </p>
-                  )}
-                </div>
-
-                {/* Pillar 3: TECHNICAL SPECIFICATIONS & SNARES */}
-                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                  <div className="flex items-center gap-2 border-b border-border pb-2">
-                    <Gauge className="w-4 h-4 text-warning shrink-0" />
-                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
-                      3. Especificações Técnicas do Objeto &amp; Pegadinhas Ocultas
-                    </h4>
-                  </div>
-                  <div className="text-xs space-y-4 pb-1">
-                    <div>
-                      <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider mb-1">
-                        Síntese do Objeto / Produto Solicitado
-                      </span>
-                      <p className="text-foreground font-semibold leading-relaxed whitespace-pre-line">
-                        {getDynamicDescricaoProduto()}
-                      </p>
-                    </div>
-                    {activeEdital.especificacoesTecnicas && (
-                      <>
-                        <div>
-                          <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider mb-1.5">
-                            Exigências Físicas e Técnicas Mandatórias
-                          </span>
-                          <ul className="list-disc pl-4 space-y-1 text-foreground">
-                            {getFilteredArray(activeEdital.especificacoesTecnicas.exigenciasFisicas).map((item, idx) => (
-                              <li key={idx} className="leading-snug">{item}</li>
-                            ))}
-                          </ul>
-                        </div>
-                        <div>
-                          <span className="text-warning block font-mono text-[9px] uppercase tracking-wider mb-1.5 font-bold">
-                            Pegadinhas Técnicas Ocultas / Risco de Desclassificação
-                          </span>
-                          <ul className="list-disc pl-4 space-y-1 text-foreground">
-                            {getFilteredArray(activeEdital.especificacoesTecnicas.pegadinhasOcultas).map((item, idx) => (
-                              <li key={idx} className="leading-snug">{item}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Pillar 4: BUREAUCRACY & ENTRY BARRIERS */}
-                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs">
-                  <div className="flex items-center gap-2 border-b border-border pb-2">
-                    <ShieldAlert className="w-4 h-4 text-destructive shrink-0" />
-                    <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
-                      4. Burocracia, Garantias, Amostras &amp; Barreiras de Entrada
-                    </h4>
-                  </div>
-                  {activeEdital.burocraciaBarreiras ? (
-                    <div className="text-xs space-y-3 leading-normal">
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Amostra ou Prova de Conceito Exigida?
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.burocraciaBarreiras.exigeAmostra}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Carta de Solidariedade / Exclusividade do Fabricante?
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.burocraciaBarreiras.exigeCartaSolidariedade}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Garantia de Proposta ou Garantia Contratual?
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.burocraciaBarreiras.exigenciaGarantia}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Consórcios, Subcontratação ou Vistoria Técnica?
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.burocraciaBarreiras.consorcioSubcontratacao}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-muted-foreground text-xs py-4 text-center">
-                      Indisponível para esta análise antiga do histórico.
-                    </p>
-                  )}
-                </div>
-
-                {/* Pillar 5: LOGISTICS, DELIVERY & WARRANTY (Full width) */}
-                <div className="bg-card border border-border rounded-xl p-5 space-y-3 shadow-xs lg:col-span-2">
-                  <div className="flex items-center justify-between border-b border-border pb-2">
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-success shrink-0" />
-                      <h4 className="font-bold text-foreground text-xs uppercase tracking-wide">
-                        5. Logística, Prazo de Entrega, Local &amp; Garantia Exigida
-                      </h4>
-                    </div>
-                    {activeEdital.logisticaCronograma?.classificacaoPrazo && (
-                      <span
-                        className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
-                          activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("crít") ||
-                          activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("relâ")
-                            ? "bg-destructive/10 text-destructive border border-destructive/30"
-                            : activeEdital.logisticaCronograma.classificacaoPrazo.toLowerCase().includes("aceit")
-                            ? "bg-warning/15 text-warning border border-warning/40"
-                            : "bg-success/10 text-success border border-success/30"
-                        }`}
-                      >
-                        {activeEdital.logisticaCronograma.classificacaoPrazo}
-                      </span>
-                    )}
-                  </div>
-                  {activeEdital.logisticaCronograma ? (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs leading-normal">
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Prazo Real de Entrega / Execução
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.logisticaCronograma.prazoEntregaReal || activeEdital.prazoEntrega}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Endereço Exato de Entrega &amp; Almoxarifado
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.logisticaCronograma.enderecoEntrega}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block font-mono text-[9px] uppercase tracking-wider">
-                          Prazo de Garantia / Assistência Técnica Requerido
-                        </span>
-                        <span className="text-foreground font-semibold">
-                          {activeEdital.logisticaCronograma.prazoGarantia}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-muted-foreground text-xs py-2">
-                      Prazo de Entrega: <strong>{activeEdital.prazoEntrega}</strong>
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* 5. Síntese Executiva Detalhada do Edital (Relatório Completo e Tabelas da IA) */}
-              {activeEdital.reportMarkdown && (
-                <Card className="p-5 md:p-6 space-y-4 relative overflow-hidden">
-                  <div className="flex items-center justify-between border-b border-border pb-3">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-primary" />
-                      <h3 className="text-xs md:text-sm font-bold text-foreground uppercase tracking-wide">
-                        6. Síntese Executiva Detalhada &amp; Cláusulas Relevantes do Edital
-                      </h3>
-                    </div>
-                    <Badge variant="secondary" className="font-mono text-[9px]">
-                      Leitura Completa da IA
-                    </Badge>
-                  </div>
-                  <div className="prose max-w-none text-foreground text-xs md:text-sm leading-relaxed">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        h1: ({ node, ...props }) => (
-                          <h1
-                            className="text-sm md:text-base font-bold text-foreground border-b border-border pb-2 mt-5 mb-3 flex items-center gap-2 uppercase tracking-wide text-primary"
-                            {...props}
-                          />
-                        ),
-                        h2: ({ node, ...props }) => (
-                          <h2
-                            className="text-xs md:text-sm font-bold text-foreground mt-4 mb-2 border-b border-border pb-1 flex items-center gap-2"
-                            {...props}
-                          />
-                        ),
-                        h3: ({ node, ...props }) => (
-                          <h3 className="text-xs md:text-sm font-bold text-primary mt-3 mb-1.5" {...props} />
-                        ),
-                        p: ({ node, ...props }) => (
-                          <p
-                            className="mb-3 text-foreground leading-relaxed font-sans text-xs md:text-sm font-medium"
-                            {...props}
-                          />
-                        ),
-                        ul: ({ node, ...props }) => (
-                          <ul
-                            className="list-disc pl-5 mb-3 space-y-1.5 text-foreground font-sans text-xs md:text-sm font-medium"
-                            {...props}
-                          />
-                        ),
-                        ol: ({ node, ...props }) => (
-                          <ol
-                            className="list-decimal pl-5 mb-3 space-y-1.5 text-foreground font-sans text-xs md:text-sm font-medium"
-                            {...props}
-                          />
-                        ),
-                        li: ({ node, ...props }) => <li className="leading-relaxed text-foreground" {...props} />,
-                        hr: ({ node, ...props }) => <hr className="border-t border-border my-4" {...props} />,
-                        blockquote: ({ node, ...props }) => (
-                          <blockquote
-                            className="border-l-4 border-primary pl-4 py-2 my-3 bg-accent rounded-r-lg text-xs md:text-sm text-foreground italic font-medium"
-                            {...props}
-                          />
-                        ),
-                        table: ({ node, ...props }) => (
-                          <div className="overflow-x-auto my-3 rounded-xl border border-border bg-card">
-                            <table className="w-full text-left border-collapse text-[11px] md:text-xs" {...props} />
-                          </div>
-                        ),
-                        thead: ({ node, ...props }) => (
-                          <thead className="bg-muted border-b border-border text-foreground font-bold" {...props} />
-                        ),
-                        th: ({ node, ...props }) => (
-                          <th
-                            className="p-2.5 font-bold text-[10px] uppercase tracking-wider text-foreground"
-                            {...props}
-                          />
-                        ),
-                        tbody: ({ node, ...props }) => <tbody className="divide-y divide-border" {...props} />,
-                        td: ({ node, ...props }) => (
-                          <td className="p-2.5 text-foreground font-sans leading-normal" {...props} />
-                        ),
-                        strong: ({ node, ...props }) => (
-                          <strong className="font-extrabold text-foreground" {...props} />
-                        ),
-                      }}
-                    >
-                      {cleanMarkdownText(activeEdital.reportMarkdown)}
-                    </ReactMarkdown>
-                  </div>
-                </Card>
-              )}
+              <DossieExecutivoView
+                edital={activeEdital}
+                selectedItemNumbers={selectedItemNumbers}
+                pncpUrl={getPncpDirectUrl(activeEdital) || getPncpLink(activeEdital)}
+                idContratacaoPncp={getIdContratacaoPNCP(activeEdital)}
+                uasg={getUasg(activeEdital)}
+                dataHoraDisputa={getDataHoraDisputa(activeEdital)}
+                onNavigateToCapag={onNavigateToCapag}
+                onSaveEditalDossie={(updatedEdital) => {
+                  setActiveEdital(updatedEdital);
+                  const matchedHistory = history.find(
+                    h =>
+                      h.analysis === activeEdital ||
+                      (h.analysis.identificacaoCertame?.identificacaoNumerica &&
+                        h.analysis.identificacaoCertame?.identificacaoNumerica ===
+                          activeEdital.identificacaoCertame?.identificacaoNumerica &&
+                        h.analysis.identificacaoCertame?.orgaoComprador ===
+                          activeEdital.identificacaoCertame?.orgaoComprador) ||
+                      h.analysis.descricaoProduto === activeEdital.descricaoProduto
+                  );
+                  if (matchedHistory) {
+                    updateEditalInHistory(matchedHistory.id, updatedEdital, matchedHistory.title).catch(() => {});
+                  }
+                }}
+              />
             </div>
           )}
 

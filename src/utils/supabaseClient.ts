@@ -954,9 +954,46 @@ export async function fetchDisputasFromSupabase(): Promise<any[]> {
   return rows;
 }
 
+const CALENDARIO_EXCLUIDOS_STORAGE_KEY = "aip_disputas_fora_calendario";
+
+export function lerDisputasForaDoCalendario(): Set<string> {
+  try {
+    const raw = localStorage.getItem(CALENDARIO_EXCLUIDOS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function definirDisputaNoCalendarioLocal(id: string, noCalendario: boolean): void {
+  try {
+    const set = lerDisputasForaDoCalendario();
+    if (noCalendario) {
+      set.delete(id);
+    } else {
+      set.add(id);
+    }
+    localStorage.setItem(CALENDARIO_EXCLUIDOS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export function mapDisputaFromDb(item: any) {
+  const foraDoCalendario = lerDisputasForaDoCalendario();
+  const id = item.id;
+  const dbNoCalendario =
+    typeof item.no_calendario === "boolean"
+      ? item.no_calendario
+      : typeof item.noCalendario === "boolean"
+        ? item.noCalendario
+        : undefined;
+  const noCalendario = dbNoCalendario !== undefined ? dbNoCalendario : !foraDoCalendario.has(id);
+
   return {
-    id: item.id,
+    id,
     orgao: item.orgao || item.orgao_comprador || "",
     uasgUndCompradora: item.uasg_und_compradora || item.uasg || "",
     numeroLicitacao: item.numero_licitacao || item.numero || "",
@@ -970,11 +1007,16 @@ export function mapDisputaFromDb(item: any) {
     dataHoraDisputa: item.data_hora_disputa || item.data_disputa || "",
     status: item.status || "Agendada",
     observacoes: item.observacoes || "",
-    linkPNCP: item.link_pncp || item.linkPNCP || ""
+    linkPNCP: item.link_pncp || item.linkPNCP || "",
+    noCalendario
   };
 }
 
 export async function saveDisputaToSupabase(item: any): Promise<{ success: boolean; message: string }> {
+  // Always persist the user's calendar inclusion preference locally immediately
+  if (item?.id) {
+    definirDisputaNoCalendarioLocal(item.id, item.noCalendario !== false);
+  }
   const client = getSupabaseClient();
   if (!client) return { success: false, message: "Supabase não configurado." };
   if (isTableMissing("planilhas_disputas")) {
@@ -990,6 +1032,7 @@ export async function saveDisputaToSupabase(item: any): Promise<{ success: boole
     const recordId = ensureValidUuid(item.id);
     if (item.id !== recordId) {
       item.id = recordId;
+      definirDisputaNoCalendarioLocal(recordId, item.noCalendario !== false);
     }
 
     const parseNum = (val: any) => {
