@@ -221,6 +221,22 @@ export default function App() {
     };
   }, []);
 
+  const normalizeClientGeminiModel = (m?: string | null) => {
+    const clean = (m || "").trim();
+    if (
+      !clean ||
+      clean === "gemini-3.8-flash" ||
+      clean === "gemini-3.7-flash" ||
+      clean === "gemini-3.6-flash" ||
+      clean === "gemini-3.5-flash" ||
+      clean === "gemini-3.1-flash-lite" ||
+      clean === "gemini-3.5-flash-lite"
+    ) {
+      return "gemini-flash-latest";
+    }
+    return clean;
+  };
+
   const handleGlobalProviderChange = async (newProvider: string) => {
     setActiveProvider(newProvider);
     localStorage.setItem("ai_active_provider", newProvider);
@@ -234,13 +250,13 @@ export default function App() {
 
         await saveUserConfigToSupabase({
           activeProvider: newProvider,
-          geminiKey: currentConfig?.gemini_key || localStorage.getItem("ai_gemini_key") || "",
-          geminiModel: currentConfig?.gemini_model || localStorage.getItem("ai_gemini_model") || "gemini-3.8-flash",
-          openaiKey: currentConfig?.openai_key || localStorage.getItem("ai_openai_key") || "",
+          geminiKey: localStorage.getItem("ai_gemini_key") || currentConfig?.gemini_key || "",
+          geminiModel: normalizeClientGeminiModel(localStorage.getItem("ai_gemini_model") || currentConfig?.gemini_model),
+          openaiKey: localStorage.getItem("ai_openai_key") || currentConfig?.openai_key || "",
           openaiModel: currentConfig?.openai_model || localStorage.getItem("ai_openai_model") || "gpt-4o",
-          anthropicKey: currentConfig?.anthropic_key || localStorage.getItem("ai_anthropic_key") || "",
+          anthropicKey: localStorage.getItem("ai_anthropic_key") || currentConfig?.anthropic_key || "",
           anthropicModel: currentConfig?.anthropic_model || localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5",
-          deepseekKey: currentConfig?.deepseek_key || localStorage.getItem("ai_deepseek_key") || "",
+          deepseekKey: localStorage.getItem("ai_deepseek_key") || currentConfig?.deepseek_key || "",
           deepseekModel: currentConfig?.deepseek_model || localStorage.getItem("ai_deepseek_model") || "deepseek-chat"
         });
       } catch (err) {
@@ -285,28 +301,36 @@ export default function App() {
 
       // 2. Fetch User AI Config / Keys
       const dbConfig = await fetchUserConfigFromSupabase();
+      const sincronizarChaveDoBanco = (storageKey: string, dbVal?: string | null) => {
+        const banco = (dbVal || "").trim();
+        if (banco.length <= 5) return;
+        const localAtual = (localStorage.getItem(storageKey) || "").trim();
+        const localEhTextoPuroValido = localAtual.length > 10 && !localAtual.startsWith("enc:v1:");
+        const bancoEhCifrado = banco.startsWith("enc:v1:");
+        // Preserva a chave em texto puro já salva neste navegador para que a execução
+        // direta e a exibição de status funcionem sem depender de descriptografia remota.
+        if (localEhTextoPuroValido && bancoEhCifrado) {
+          return;
+        }
+        localStorage.setItem(storageKey, banco);
+      };
+
       if (dbConfig) {
         if (dbConfig.active_provider) localStorage.setItem("ai_active_provider", dbConfig.active_provider);
 
-        if (dbConfig.gemini_key && dbConfig.gemini_key.trim().length > 5) {
-          localStorage.setItem("ai_gemini_key", dbConfig.gemini_key);
-        }
-        if (dbConfig.gemini_model) localStorage.setItem("ai_gemini_model", dbConfig.gemini_model);
+        sincronizarChaveDoBanco("ai_gemini_key", dbConfig.gemini_key);
+        localStorage.setItem("ai_gemini_model", normalizeClientGeminiModel(dbConfig.gemini_model || localStorage.getItem("ai_gemini_model")));
 
-        if (dbConfig.openai_key && dbConfig.openai_key.trim().length > 5) {
-          localStorage.setItem("ai_openai_key", dbConfig.openai_key);
-        }
+        sincronizarChaveDoBanco("ai_openai_key", dbConfig.openai_key);
         if (dbConfig.openai_model) localStorage.setItem("ai_openai_model", dbConfig.openai_model);
 
-        if (dbConfig.anthropic_key && dbConfig.anthropic_key.trim().length > 5) {
-          localStorage.setItem("ai_anthropic_key", dbConfig.anthropic_key);
-        }
+        sincronizarChaveDoBanco("ai_anthropic_key", dbConfig.anthropic_key);
         if (dbConfig.anthropic_model) localStorage.setItem("ai_anthropic_model", dbConfig.anthropic_model);
 
-        if (dbConfig.deepseek_key && dbConfig.deepseek_key.trim().length > 5) {
-          localStorage.setItem("ai_deepseek_key", dbConfig.deepseek_key);
-        }
+        sincronizarChaveDoBanco("ai_deepseek_key", dbConfig.deepseek_key);
         if (dbConfig.deepseek_model) localStorage.setItem("ai_deepseek_model", dbConfig.deepseek_model);
+      } else {
+        localStorage.setItem("ai_gemini_model", normalizeClientGeminiModel(localStorage.getItem("ai_gemini_model")));
       }
       window.dispatchEvent(new Event("user-config-loaded"));
     } catch (e: any) {

@@ -28,6 +28,38 @@ function cleanMarkdownText(text: string | undefined): string {
   return cleaned;
 }
 
+function parseModalBodyAndSignature(content: string): {
+  hasSig: boolean;
+  bodyText: string;
+  sigName: string;
+  sigRole: string;
+  sigDocs: string;
+} {
+  const sigMatch = content.match(/\n\s*_{10,}\s*\n([\s\S]*)$/);
+  if (!sigMatch) {
+    return {
+      hasSig: false,
+      bodyText: content.trim(),
+      sigName: "",
+      sigRole: "",
+      sigDocs: "",
+    };
+  }
+  const bodyText = content.slice(0, sigMatch.index).trim();
+  const afterLines = sigMatch[1]
+    .split("\n")
+    .map((l) => l.replace(/\*\*/g, "").trim())
+    .filter(Boolean);
+
+  return {
+    hasSig: true,
+    bodyText,
+    sigName: afterLines[0] || "[NOME DO REPRESENTANTE LEGAL]",
+    sigRole: afterLines[1] || "Representante Legal / Titular",
+    sigDocs: afterLines[2] || "CPF: [CPF DO REPRESENTANTE] | CNPJ: [CNPJ DA EMPRESA]",
+  };
+}
+
 interface DocPreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -524,9 +556,9 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
         </div>
 
         {/* Content Viewer pane */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6 md:p-8 bg-muted">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 bg-muted">
           <div
-            className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-4 sm:p-8 md:p-14 shadow-xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
+            className="official-a4-paper bg-white text-slate-900 border border-slate-200 rounded-sm p-4 sm:p-6 md:px-10 md:py-7 shadow-xl max-w-3xl mx-auto h-auto min-h-full font-sans leading-relaxed text-xs"
             style={{ backgroundColor: "#ffffff", color: "#0f172a" }}
           >
             {isEditing ? (
@@ -538,9 +570,30 @@ export default function DocPreviewModal({ isOpen, onClose, title, initialMarkdow
                 placeholder="Escreva aqui seu modelo estruturado..."
               />
             ) : (
-              <div className="markdown-body text-slate-900">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdownText}</ReactMarkdown>
-              </div>
+              (() => {
+                const parsed = parseModalBodyAndSignature(markdownText);
+                return (
+                  <div className="markdown-body text-slate-900 flex flex-col justify-between min-h-[460px]">
+                    <div className="[&_h1]:text-[13px] [&_h1]:font-extrabold [&_h1]:text-center [&_h1]:uppercase [&_h1]:tracking-wide [&_h1]:text-slate-900 [&_h1]:my-3 [&_h1]:pb-1.5 [&_h1]:border-b [&_h1]:border-slate-200 [&_h2]:text-[11px] [&_h2]:font-bold [&_h2]:uppercase [&_h2]:text-slate-800 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_p]:text-[11.5px] [&_p]:leading-[1.52] [&_p]:mb-2 [&_p]:text-justify [&_ul]:my-1.5 [&_ul]:pl-5 [&_li]:text-[11.5px] [&_li]:mb-0.5 [&_table]:w-full [&_table]:my-2.5 [&_table]:border-collapse [&_th]:bg-slate-100 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2 [&_th]:py-1 [&_th]:text-[10.5px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2 [&_td]:py-1 [&_td]:text-[10.5px]">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{parsed.bodyText}</ReactMarkdown>
+                    </div>
+                    {parsed.hasSig && (
+                      <div style={{ marginTop: "24px", paddingTop: "10px", textAlign: "center", pageBreakInside: "avoid" }}>
+                        <div style={{ width: "290px", borderBottom: "1.5px solid #1e293b", margin: "0 auto 7px auto" }} />
+                        <div style={{ fontSize: "12px", fontWeight: 700, color: "#0f172a", textTransform: "uppercase", letterSpacing: "0.02em", lineHeight: 1.35 }}>
+                          {parsed.sigName}
+                        </div>
+                        <div style={{ fontSize: "11px", fontWeight: 500, color: "#64748b", marginTop: "2px", lineHeight: 1.35 }}>
+                          {parsed.sigRole}
+                        </div>
+                        <div style={{ fontSize: "10.5px", fontWeight: 400, color: "#64748b", marginTop: "1px", lineHeight: 1.35 }}>
+                          {parsed.sigDocs}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
             )}
           </div>
         </div>

@@ -89,7 +89,23 @@ export async function descobrirModelos(apiKey: string): Promise<string[] | null>
 /** Ordena do mais barato/liberado para o mais caro, dentro do que existe. */
 function pontuar(nome: string): number {
   const n = nome.toLowerCase();
-  if (n.includes("embedding") || n.includes("aqa") || n.includes("imagen") || n.includes("veo")) return -1;
+  if (
+    n.includes("embedding") ||
+    n.includes("aqa") ||
+    n.includes("imagen") ||
+    n.includes("veo") ||
+    n.includes("tts") ||
+    n.includes("image") ||
+    n.includes("audio") ||
+    n.includes("robotics") ||
+    n.includes("computer-use") ||
+    n.includes("gemma") ||
+    n.startsWith("gemini-1.") ||
+    n.startsWith("gemini-2.0") ||
+    n.includes("-001")
+  ) {
+    return -1;
+  }
   // Flash Lite primeiro: no plano gratuito ele tem o triplo do limite por
   // minuto do Flash, e é o que mantém o chat respondendo sob pressão.
   if (n.includes("flash-lite")) return 100;
@@ -113,8 +129,8 @@ export function escolherCadeia(
   if (preferido && existe(preferido)) cadeia.push(preferido);
 
   const candidatos = disponiveis
-    .filter((m) => pontuar(m) > 0 && !m.includes("-preview") && !m.includes("exp"))
-    .sort((a, b) => pontuar(b) - pontuar(a) || a.localeCompare(b));
+    .filter((m) => pontuar(m) > 0 && !m.includes("exp"))
+    .sort((a, b) => pontuar(b) - pontuar(a) || b.localeCompare(a));
 
   for (const m of candidatos) {
     if (cadeia.length >= maximo) break;

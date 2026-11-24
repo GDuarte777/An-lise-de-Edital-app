@@ -12,12 +12,12 @@ describe("opcoesDeModelo", () => {
   });
 
   it("cai na lista padrão quando o diagnóstico não respondeu", () => {
-    const opcoes = opcoesDeModelo(null, "gemini-3.8-flash");
+    const opcoes = opcoesDeModelo(null, "gemini-flash-latest");
     expect(opcoes.map((o) => o.valor)).toEqual(MODELOS_PADRAO);
   });
 
   it("trata lista vazia como ausência de informação, não como 'nenhum modelo'", () => {
-    expect(opcoesDeModelo([], "gemini-3.8-flash").map((o) => o.valor)).toEqual(MODELOS_PADRAO);
+    expect(opcoesDeModelo([], "gemini-flash-latest").map((o) => o.valor)).toEqual(MODELOS_PADRAO);
   });
 
   it("mantém o modelo gravado mesmo fora da lista, avisando que a chave não o serve", () => {

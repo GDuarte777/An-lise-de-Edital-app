@@ -1,5 +1,13 @@
 import { getSupabaseClient } from "./supabaseClient";
 import { urlDaApi, cabecalhosDaApi } from "./apiBase";
+import {
+  executeDirectClientAiRoute,
+  normalizeGeminiModelForClient,
+  normalizeModelForRemoteEdge,
+  buildEditalAnalysisPrompt,
+  cleanAndParseJsonClient,
+  normalizeEditalAnalysisObject,
+} from "./clientAiExecutor";
 
 export function getActiveAiConfig() {
   const provider = localStorage.getItem("ai_active_provider") || "gemini";
@@ -26,14 +34,19 @@ export function getActiveAiConfig() {
     const deepseekKey = (localStorage.getItem("ai_deepseek_key") || localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
 
     if (geminiKey) {
-      return { provider: "gemini", apiKey: geminiKey, model: localStorage.getItem("ai_gemini_model") || "gemini-3.8-flash" };
+      return {
+        provider: "gemini",
+        apiKey: geminiKey,
+        model: normalizeGeminiModelForClient(localStorage.getItem("ai_gemini_model"))
+      };
     }
     if (openaiKey) return { provider: "openai", apiKey: openaiKey, model: localStorage.getItem("ai_openai_model") || "gpt-4o" };
     if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey, model: localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5" };
     if (deepseekKey) return { provider: "deepseek", apiKey: deepseekKey, model: localStorage.getItem("ai_deepseek_model") || "deepseek-chat" };
   }
 
-  const model = localStorage.getItem(`ai_${provider}_model`) || "";
+  const rawModel = localStorage.getItem(`ai_${provider}_model`) || "";
+  const model = provider === "gemini" ? normalizeGeminiModelForClient(rawModel) : rawModel;
   return { provider, apiKey, model };
 }
 
@@ -55,17 +68,8 @@ export function validateApiKeyFormat(apiKey: string, provider: string): string |
     return `Chave de API não configurada. Acesse "IA & Modelos" no menu de Configurações e insira sua chave de API do ${provider === "gemini" ? "Google AI Studio" : provider}.`;
   }
 
-  // Uma chave cifrada É uma chave configurada: com AI_KEYS_ENCRYPTION_KEY ligada,
-  // o banco guarda "enc:v1:..." e o navegador não tem como decifrar — a chave
-  // mestra é só do servidor, que decifra ao receber. Reprovar aqui bloquearia a
-  // análise de edital antes de sair do navegador, dizendo que a chave do usuário
-  // "parece inválida" quando ela está certa e protegida.
   if (chaveEstaCifrada(key)) return null;
 
-  // O Google emite chaves do Gemini em dois formatos:
-  //  - "AIza..."  → chave de API clássica
-  //  - "AQ.Ab8..." → nova "auth key" gerada pelo AI Studio (formato padrão desde 2026)
-  // Ambos são aceitos pelo endpoint generativelanguage.googleapis.com.
   if (provider === "gemini" && !key.startsWith("AIza") && !key.startsWith("AQ.")) {
     return `A chave do Gemini parece inválida — ela deve começar com "AIza" ou "AQ.". Verifique a chave em "IA & Modelos".`;
   }
@@ -106,20 +110,10 @@ export function formatAiError(error: any): string {
     return "⚙️ Nenhuma chave de API configurada. Acesse \"IA & Modelos\" e insira sua chave.";
   }
 
-  // Return the original message if it's already friendly (starts with ❌/⚠️/etc)
   const original = error?.message || String(error || "Erro desconhecido.");
   return original.length < 300 ? original : "Erro ao processar a solicitação. Tente novamente.";
 }
 
-/**
- * Lê o corpo da resposta como JSON.
- *
- * Quando a hospedagem devolve a própria página de erro (HTML ou texto puro, como
- * "A server error has occurred"), `response.json()` estoura com
- * "Unexpected token 'A'... is not valid JSON" — uma mensagem que não diz nada sobre
- * o que de fato aconteceu. Aqui o corpo é lido como texto primeiro, para o erro
- * carregar o status HTTP e o início da resposta real.
- */
 export async function readJsonResponse(response: Response): Promise<any> {
   const text = await response.text();
   try {
@@ -137,7 +131,6 @@ export async function readJsonResponse(response: Response): Promise<any> {
   }
 }
 
-/** Igual à anterior, mas nunca lança — para ramos que só querem extrair a mensagem de erro. */
 export async function readJsonResponseSafe(response: Response): Promise<any> {
   try {
     return await readJsonResponse(response);
@@ -158,11 +151,58 @@ export async function getSupabaseToken(): Promise<string> {
   }
 }
 
+const AI_DIRECT_ROUTES = new Set([
+  "/api/ai-status",
+  "/api/chat",
+  "/api/chat/title",
+  "/api/analyze-cert",
+  "/api/generate-cert-description",
+  "/api/generate-document",
+  "/api/compare-products",
+  "/api/analyze-competitor",
+  "/api/analyze-edital",
+]);
+
 // Authenticated fetch wrapper: automatically sends JWT + aiConfig on every AI request
-export async function apiFetch(url: string, options: { method?: string; body?: Record<string, any>; headers?: Record<string, string>; signal?: AbortSignal } = {}): Promise<Response> {
+export async function apiFetch(
+  url: string,
+  options: { method?: string; body?: Record<string, any>; headers?: Record<string, string>; signal?: AbortSignal } = {}
+): Promise<Response> {
   try {
     const token = await getSupabaseToken();
     const aiConfig = getActiveAiConfig();
+    const bodyObj = options.body || {};
+    const rawAiConfig = bodyObj.aiConfig || aiConfig;
+
+    const cleanPath = url.replace(/^https?:\/\/[^/]+(\/functions\/v1)?/, "").split("?")[0];
+    const isAiRoute = AI_DIRECT_ROUTES.has(cleanPath);
+    const hasPlaintextKey =
+      Boolean(rawAiConfig?.apiKey) &&
+      rawAiConfig.apiKey.trim().length > 10 &&
+      !chaveEstaCifrada(rawAiConfig.apiKey);
+
+    // 1. Execução direta no navegador quando o usuário tem uma chave em texto puro configurada
+    if (
+      isAiRoute &&
+      hasPlaintextKey &&
+      (rawAiConfig.provider === "gemini" || rawAiConfig.provider === "openai" || rawAiConfig.provider === "deepseek")
+    ) {
+      try {
+        const directRes = await executeDirectClientAiRoute(cleanPath, bodyObj, {
+          provider: rawAiConfig.provider || "gemini",
+          apiKey: rawAiConfig.apiKey.trim(),
+          model:
+            rawAiConfig.provider === "gemini"
+              ? normalizeGeminiModelForClient(rawAiConfig.model)
+              : rawAiConfig.model || ""
+        });
+        if (directRes) {
+          return directRes;
+        }
+      } catch (directErr: any) {
+        console.warn(`[apiFetch] Execução direta de ${cleanPath} falhou, tentando Edge Function:`, directErr?.message || directErr);
+      }
+    }
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -181,13 +221,93 @@ export async function apiFetch(url: string, options: { method?: string; body?: R
       signal: options.signal,
     };
 
+    // Normaliza o modelo enviado à Edge Function remota para "gemini-flash-latest"
+    // (ou "gemini-3.1-pro-preview"), que existe no ListModels real do Google e é aceito
+    // por VALID_GEMINI_MODELS na função remota.
+    const remoteAiConfig = rawAiConfig
+      ? {
+          ...rawAiConfig,
+          model: normalizeModelForRemoteEdge(rawAiConfig.provider || "gemini", rawAiConfig.model)
+        }
+      : aiConfig;
+
     if (method !== "GET" && method !== "HEAD") {
-      const bodyObj = options.body || {};
-      const finalAiConfig = bodyObj.aiConfig || aiConfig;
-      fetchOptions.body = JSON.stringify({ ...bodyObj, aiConfig: finalAiConfig });
+      fetchOptions.body = JSON.stringify({ ...bodyObj, aiConfig: remoteAiConfig });
     }
 
     const response = await fetch(urlDaApi(url), fetchOptions);
+
+    // 2. Recuperação automática para /api/analyze-edital com chave cifrada (enc:v1:...):
+    // Se a rota /api/analyze-edital da Edge Function remota devolver degraded: true
+    // (por conta de thinkingLevel incompatível na versão publicada), refaz a análise
+    // estruturada passando pela rota /api/chat da mesma Edge Function (que decifra a
+    // chave no servidor e não envia thinkingLevel).
+    if (cleanPath === "/api/analyze-edital" && response.ok) {
+      const cloned = response.clone();
+      const jsonData = await cloned.json().catch(() => null);
+      if (jsonData?.degraded) {
+        try {
+          const allFiles = [
+            ...(Array.isArray(bodyObj.attachments) ? bodyObj.attachments : []),
+            ...(Array.isArray(bodyObj.attachedFiles) ? bodyObj.attachedFiles : []),
+            ...(Array.isArray(bodyObj.files) ? bodyObj.files : []),
+            ...(bodyObj.fileBase64
+              ? [{ base64: bodyObj.fileBase64, name: bodyObj.fileName, type: bodyObj.fileType }]
+              : [])
+          ];
+
+          const firstFileWithB64 = allFiles.find((f: any) => f && (f.base64 || f.fileBase64 || f.data));
+          const prompt = buildEditalAnalysisPrompt(String(bodyObj.textInput || ""), bodyObj.selectedItems);
+
+          const chatMessages: any[] = [
+            {
+              role: "user",
+              content: prompt,
+              ...(firstFileWithB64
+                ? {
+                    attachment: {
+                      name: firstFileWithB64.name || firstFileWithB64.fileName || "edital.pdf",
+                      type: firstFileWithB64.type || firstFileWithB64.fileType || "application/pdf",
+                      data: firstFileWithB64.base64 || firstFileWithB64.fileBase64 || firstFileWithB64.data
+                    }
+                  }
+                : {})
+            }
+          ];
+
+          const chatResp = await fetch(urlDaApi("/api/chat"), {
+            method: "POST",
+            headers,
+            signal: options.signal,
+            body: JSON.stringify({
+              messages: chatMessages,
+              aiConfig: remoteAiConfig
+            })
+          });
+
+          if (chatResp.ok) {
+            const chatJson = await chatResp.json().catch(() => null);
+            if (chatJson?.reply && !chatJson?.degraded) {
+              const parsed = cleanAndParseJsonClient(chatJson.reply);
+              if (parsed && Object.keys(parsed).length > 2) {
+                const normalized = normalizeEditalAnalysisObject(parsed, String(bodyObj.textInput || ""));
+                // Preserva dados oficiais do PNCP caso a primeira resposta já os tenha obtido
+                if (jsonData.analysis?.dadosOficiaisPNCP) {
+                  normalized.dadosOficiaisPNCP = jsonData.analysis.dadosOficiaisPNCP;
+                }
+                return new Response(JSON.stringify({ analysis: normalized }), {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" }
+                });
+              }
+            }
+          }
+        } catch (recoverErr) {
+          console.warn("[apiFetch] Falha na recuperação de analyze-edital via /api/chat:", recoverErr);
+        }
+      }
+    }
+
     return response;
   } catch (error: any) {
     if (error?.message?.includes("Failed to fetch") || error?.message?.includes("fetch")) {

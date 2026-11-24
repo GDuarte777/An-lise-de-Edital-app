@@ -404,6 +404,15 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
   // Arquivo escolhido durante a CRIAÇÃO. Antes era preciso criar a certidão,
   // achá-la na lista e só então anexar — três passos para uma coisa só.
   const [arquivoNovaCertidao, setArquivoNovaCertidao] = useState<File | null>(null);
+  const [analisandoArquivoModal, setAnalisandoArquivoModal] = useState(false);
+  const [modalFilePayload, setModalFilePayload] = useState<{
+    base64: string;
+    fileName: string;
+    fileMimeType: string;
+    documentMatchesRow?: boolean;
+    validationFeedback?: string;
+  } | null>(null);
+  const [mensagemAnaliseModal, setMensagemAnaliseModal] = useState<string | null>(null);
   const [salvandoCertidao, setSalvandoCertidao] = useState(false);
   
   // Extra loading/feedback states for IA document analysis
@@ -899,6 +908,170 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     setRowDraggingIndex(null);
   };
 
+  /**
+   * Analisa imediatamente o documento escolhido dentro do popup ("Nova certidão"
+   * ou "Editar certidão") usando a IA, preenchendo automaticamente nome oficial,
+   * data de emissão, data de vencimento, observações e dados cadastrais da empresa.
+   */
+  const handleSelectModalFile = async (file: File | null) => {
+    setArquivoNovaCertidao(file);
+    setMensagemAnaliseModal(null);
+
+    if (!file) {
+      setModalFilePayload(null);
+      setAnalisandoArquivoModal(false);
+      return;
+    }
+
+    setAnalisandoArquivoModal(true);
+
+    const nomeArquivoSemExt = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim();
+
+    try {
+      const processedFile = await compressImageIfNeeded(file);
+      const base64String = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const res = (e.target?.result as string) || "";
+          resolve(res.includes(",") ? res.split(",")[1] : res);
+        };
+        reader.onerror = () => reject(new Error("Falha ao ler arquivo."));
+        reader.readAsDataURL(processedFile as File);
+      });
+
+      const resolvedFileType = file.type.startsWith("image/")
+        ? "image/jpeg"
+        : (file.type || "application/pdf");
+
+      // Guarda o arquivo imediatamente para que mesmo sem IA ele seja anexado ao salvar
+      setModalFilePayload({
+        base64: base64String,
+        fileName: file.name,
+        fileMimeType: resolvedFileType,
+      });
+
+      const prepared = await prepareAttachmentForServer({
+        base64: base64String,
+        name: file.name,
+        type: resolvedFileType,
+      });
+
+      const response = await apiFetch("/api/analyze-cert", {
+        method: "POST",
+        body: {
+          ...prepared,
+          fileBase64: base64String,
+          fileName: file.name,
+          fileType: resolvedFileType,
+          docName: formData.name || "",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Erro de processamento da IA no servidor.");
+      }
+
+      const data = await readJsonResponse(response);
+      const result = data?.result;
+
+      if (result) {
+        const docNameFromAi = (result.documentName || "").trim();
+        const emissionFromAi = (result.emissionDate || "").trim();
+        const expirationFromAi = (result.expirationDate || "").trim();
+        const notesFromAi = (result.suggestedNotes || result.validationFeedback || "").trim();
+
+        setFormData((prev) => ({
+          name: prev.name.trim() ? prev.name : (docNameFromAi || nomeArquivoSemExt),
+          emissionDate: emissionFromAi || prev.emissionDate,
+          expirationDate: expirationFromAi || prev.expirationDate,
+          notes: prev.notes.trim() ? prev.notes : notesFromAi,
+        }));
+
+        // Limpa erros de validação anteriores pois os campos foram preenchidos
+        setErrosForm({});
+
+        setModalFilePayload({
+          base64: base64String,
+          fileName: file.name,
+          fileMimeType: resolvedFileType,
+          documentMatchesRow: result.documentMatchesRow !== undefined ? result.documentMatchesRow : true,
+          validationFeedback: result.validationFeedback || "Documento analisado automaticamente pela IA.",
+        });
+
+        // Se a certidão também trouxer dados cadastrais da empresa, atualiza o perfil
+        if (result.extractedCompanyData) {
+          const ext = result.extractedCompanyData;
+          const updated = { ...companyData };
+          const updatedKeys: string[] = [];
+
+          if (ext.razonSocial && ext.razonSocial.trim() !== "") {
+            updated.razonSocial = ext.razonSocial;
+            updatedKeys.push("Razão Social");
+          }
+          if (ext.cnpj && ext.cnpj.trim() !== "") {
+            updated.cnpj = ext.cnpj;
+            updatedKeys.push("CNPJ");
+          }
+          if (ext.address && ext.address.trim() !== "") {
+            updated.address = ext.address;
+            updatedKeys.push("Endereço");
+          }
+          if (ext.phone && ext.phone.trim() !== "") {
+            updated.phone = ext.phone;
+            updatedKeys.push("Telefone");
+          }
+          if (ext.email && ext.email.trim() !== "") {
+            updated.email = ext.email;
+            updatedKeys.push("E-mail");
+          }
+          if (ext.representativeName && ext.representativeName.trim() !== "") {
+            updated.representativeName = ext.representativeName;
+            updatedKeys.push("Representante Legal");
+          }
+          if (ext.representativeCpf && ext.representativeCpf.trim() !== "") {
+            updated.representativeCpf = ext.representativeCpf;
+            updatedKeys.push("CPF Representante");
+          }
+
+          if (updatedKeys.length > 0) {
+            setCompanyData(updated);
+            setInfoMessage(`IA extraiu do documento e atualizou seu cadastro: ${updatedKeys.join(", ")}`);
+            setTimeout(() => setInfoMessage(null), 10000);
+          }
+        }
+
+        const camposPreenchidos: string[] = [];
+        if (docNameFromAi) camposPreenchidos.push("nome");
+        if (emissionFromAi) camposPreenchidos.push("emissão");
+        if (expirationFromAi) camposPreenchidos.push("vencimento");
+        if (notesFromAi) camposPreenchidos.push("observações");
+
+        setMensagemAnaliseModal(
+          camposPreenchidos.length > 0
+            ? `IA analisou o documento e preencheu automaticamente: ${camposPreenchidos.join(", ")}. Confira os dados antes de salvar.`
+            : "Documento analisado pela IA. Verifique ou complete as datas caso o documento não possua validade expressa."
+        );
+      } else {
+        setFormData((prev) => ({
+          ...prev,
+          name: prev.name.trim() ? prev.name : nomeArquivoSemExt,
+        }));
+        setMensagemAnaliseModal("Arquivo anexado. Preencha ou confira os campos abaixo.");
+      }
+    } catch (err) {
+      console.warn("Erro ao analisar certidão no modal com IA:", err);
+      setFormData((prev) => ({
+        ...prev,
+        name: prev.name.trim() ? prev.name : nomeArquivoSemExt,
+      }));
+      setMensagemAnaliseModal(
+        "Arquivo anexado. Não foi possível extrair todos os campos automaticamente com a IA — revise os dados abaixo."
+      );
+    } finally {
+      setAnalisandoArquivoModal(false);
+    }
+  };
+
   const handleAddOrEdit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -942,15 +1115,26 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
 
     if (editingCert) {
       // Edit
-      const updatedItem = { 
+      const updatedItem: Certificate = { 
         ...editingCert, 
         name: formData.name, 
         emissionDate: finalEmissionDate, 
         expirationDate: finalExpirationDate,
         notes: finalNotes,
         status: calculatedStatus,
-        documentMatchesRow: undefined,
-        validationFeedback: undefined
+        ...(modalFilePayload
+          ? {
+              fileUploaded: true,
+              fileName: modalFilePayload.fileName,
+              fileBase64: modalFilePayload.base64,
+              fileMimeType: modalFilePayload.fileMimeType,
+              documentMatchesRow: modalFilePayload.documentMatchesRow ?? true,
+              validationFeedback: modalFilePayload.validationFeedback || "Documento analisado.",
+            }
+          : {
+              documentMatchesRow: undefined,
+              validationFeedback: undefined,
+            }),
       };
       
       const updated = certs.map(c => 
@@ -970,16 +1154,24 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
         expirationDate: finalExpirationDate,
         notes: finalNotes,
         status: calculatedStatus,
-        fileUploaded: false
+        fileUploaded: !!modalFilePayload,
+        ...(modalFilePayload
+          ? {
+              fileName: modalFilePayload.fileName,
+              fileBase64: modalFilePayload.base64,
+              fileMimeType: modalFilePayload.fileMimeType,
+              documentMatchesRow: modalFilePayload.documentMatchesRow ?? true,
+              validationFeedback: modalFilePayload.validationFeedback || "Documento analisado.",
+            }
+          : {}),
       };
       setCerts([newCert, ...certs]);
       
       // Sync instantly
       saveCertificateToSupabase(newCert).catch(err => console.warn("Erro ao salvar nova certidão no Supabase:", err));
 
-      // Arquivo escolhido no popup: anexa em seguida, passando a certidão
-      // recém-criada porque ela ainda não está em `certs` neste instante.
-      if (arquivoNovaCertidao) {
+      // Fallback caso o arquivo tenha sido selecionado mas ainda não processado no modal
+      if (arquivoNovaCertidao && !modalFilePayload) {
         const arquivo = arquivoNovaCertidao;
         setArquivoNovaCertidao(null);
         processCertFile(newCert.id, arquivo, newCert).catch(err =>
@@ -997,6 +1189,9 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
     setErrosForm({});
     setArquivoNovaCertidao(null);
+    setModalFilePayload(null);
+    setAnalisandoArquivoModal(false);
+    setMensagemAnaliseModal(null);
     setEditingCert(null);
     setSalvandoCertidao(false);
     setShowAddForm(false);
@@ -1008,6 +1203,9 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     setFormData({ name: "", emissionDate: "", expirationDate: "", notes: "" });
     setErrosForm({});
     setArquivoNovaCertidao(null);
+    setModalFilePayload(null);
+    setAnalisandoArquivoModal(false);
+    setMensagemAnaliseModal(null);
     setShowAddForm(true);
   };
 
@@ -1021,6 +1219,9 @@ export default function CompanyDocsTab({ companyData, setCompanyData, activeEdit
     });
     setErrosForm({});
     setArquivoNovaCertidao(null);
+    setModalFilePayload(null);
+    setAnalisandoArquivoModal(false);
+    setMensagemAnaliseModal(null);
     setShowAddForm(true);
   };
 
@@ -1390,12 +1591,151 @@ Retorne exclusivamente o JSON estruturado.
                 </DialogTitle>
                 <DialogDescription>
                   {editingCert
-                    ? "Altere os dados do registro. O arquivo anexado é gerenciado na seção abaixo."
-                    : "Cadastre o documento. Você já pode anexar o arquivo aqui — a IA lê a data de vencimento sozinha."}
+                    ? "Altere os dados do registro ou envie um novo arquivo para que a IA atualize os campos automaticamente."
+                    : "Faça o upload do documento primeiro para que a IA analise e preencha automaticamente o nome, emissão, vencimento e observações."}
                 </DialogDescription>
               </DialogHeader>
 
               <form onSubmit={handleAddOrEdit} className="space-y-4 text-xs">
+                {/* ── Arquivo (no topo para preenchimento automático imediato com IA) ── */}
+                <div className="rounded-xl border border-primary/25 bg-primary/5 p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <p className="text-[11px] font-bold text-foreground uppercase tracking-wide flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-primary" />
+                      Arquivo do documento (Leitura inteligente com IA)
+                    </p>
+                    {analisandoArquivoModal && (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-primary">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Analisando documento com IA...
+                      </span>
+                    )}
+                  </div>
+
+                  {editingCert && !arquivoNovaCertidao ? (
+                    (() => {
+                      const estado = estadoArquivoCertidao(editingCert);
+                      if (estado === "baixavel") {
+                        return (
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <span className="text-[11px] text-muted-foreground break-all">
+                              {editingCert.fileName || "Arquivo enviado"}
+                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <AcoesArquivoCertidao
+                                cert={editingCert}
+                                compacto={false}
+                                onBaixar={handleDownloadFile}
+                                onReenviar={handleUploadFile}
+                              />
+                              <label className="inline-flex items-center gap-1.5 bg-primary/10 hover:bg-primary/15 border border-primary/30 text-primary font-semibold rounded-md px-2.5 py-1.5 text-[11px] cursor-pointer">
+                                <FileUp className="w-3 h-3" />
+                                <span>Substituir e reler com IA</span>
+                                <input
+                                  type="file"
+                                  className="hidden"
+                                  accept=".pdf,.png,.jpg,.jpeg,.txt"
+                                  disabled={analisandoArquivoModal}
+                                  onChange={(e) => handleSelectModalFile(e.target.files?.[0] || null)}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      }
+                      if (estado === "sem_conteudo") {
+                        return (
+                          <div className="space-y-2">
+                            <p className="text-[11px] text-warning leading-relaxed">
+                              {explicacaoArquivoIndisponivel(editingCert)}
+                            </p>
+                            <AcoesArquivoCertidao
+                              cert={editingCert}
+                              compacto={false}
+                              onBaixar={handleDownloadFile}
+                              onReenviar={handleUploadFile}
+                            />
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-2">
+                          <label className="inline-flex items-center gap-1.5 bg-primary/10 hover:bg-primary/15 border border-primary/30 text-primary font-semibold rounded-lg px-3 py-1.5 text-[11px] cursor-pointer">
+                            <FileUp className="w-3.5 h-3.5" />
+                            <span>Anexar arquivo (a IA preenche os campos)</span>
+                            <input
+                              type="file"
+                              className="hidden"
+                              accept=".pdf,.png,.jpg,.jpeg,.txt"
+                              disabled={analisandoArquivoModal}
+                              onChange={(e) => handleSelectModalFile(e.target.files?.[0] || null)}
+                            />
+                          </label>
+                          <p className="text-[11px] text-muted-foreground">
+                            Nenhum arquivo anexado. Envie o PDF ou imagem para preencher os dados automaticamente.
+                          </p>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <label
+                          className={`inline-flex items-center gap-1.5 bg-primary/10 hover:bg-primary/15 border border-primary/30 text-primary font-semibold rounded-lg px-3 py-2 text-[11px] cursor-pointer transition-colors ${
+                            analisandoArquivoModal ? "opacity-60 pointer-events-none" : ""
+                          }`}
+                        >
+                          {analisandoArquivoModal ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <FileUp className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            {arquivoNovaCertidao
+                              ? "Trocar arquivo"
+                              : "Anexar arquivo (IA preenche os campos automaticamente)"}
+                          </span>
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept=".pdf,.png,.jpg,.jpeg,.txt"
+                            disabled={analisandoArquivoModal}
+                            onChange={(e) => handleSelectModalFile(e.target.files?.[0] || null)}
+                          />
+                        </label>
+
+                        {arquivoNovaCertidao && !analisandoArquivoModal && (
+                          <span className="text-[11px] font-medium text-foreground break-all">
+                            {arquivoNovaCertidao.name}
+                          </span>
+                        )}
+                      </div>
+
+                      {analisandoArquivoModal && (
+                        <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-background/80 px-3 py-2 text-[11px] text-primary">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                          <span>
+                            A IA está lendo o documento para preencher nome, emissão, vencimento e observações...
+                          </span>
+                        </div>
+                      )}
+
+                      {!analisandoArquivoModal && mensagemAnaliseModal && (
+                        <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-[11px] text-success">
+                          <CheckCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{mensagemAnaliseModal}</span>
+                        </div>
+                      )}
+
+                      {!arquivoNovaCertidao && !analisandoArquivoModal && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Aceita PDF, PNG, JPG ou TXT. Ao selecionar o documento, os campos abaixo são preenchidos na hora.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <Label className="block text-xs font-medium text-muted-foreground mb-1 font-sans">
                     Nome oficial da certidão <span className="text-destructive">*</span>
@@ -1501,80 +1841,22 @@ Retorne exclusivamente o JSON estruturado.
                   />
                 </div>
 
-                {/* ── Arquivo ── */}
-                <div className="rounded-xl border bg-muted/30 p-3 space-y-2">
-                  <p className="text-[11px] font-bold text-foreground uppercase tracking-wide">Arquivo do documento</p>
-
-                  {editingCert ? (
-                    (() => {
-                      const estado = estadoArquivoCertidao(editingCert);
-                      if (estado === "baixavel") {
-                        return (
-                          <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <span className="text-[11px] text-muted-foreground break-all">
-                              {editingCert.fileName || "Arquivo enviado"}
-                            </span>
-                            <AcoesArquivoCertidao
-                              cert={editingCert}
-                              compacto={false}
-                              onBaixar={handleDownloadFile}
-                              onReenviar={handleUploadFile}
-                            />
-                          </div>
-                        );
-                      }
-                      if (estado === "sem_conteudo") {
-                        return (
-                          <div className="space-y-2">
-                            <p className="text-[11px] text-warning leading-relaxed">
-                              {explicacaoArquivoIndisponivel(editingCert)}
-                            </p>
-                            <AcoesArquivoCertidao
-                              cert={editingCert}
-                              compacto={false}
-                              onBaixar={handleDownloadFile}
-                              onReenviar={handleUploadFile}
-                            />
-                          </div>
-                        );
-                      }
-                      return (
-                        <p className="text-[11px] text-muted-foreground">
-                          Nenhum arquivo anexado. Use o botão de upload na lista para enviar e deixar a IA ler a validade.
-                        </p>
-                      );
-                    })()
-                  ) : (
-                    <div className="space-y-2">
-                      <label className="inline-flex items-center gap-1.5 bg-primary/10 hover:bg-primary/15 border border-primary/30 text-primary font-semibold rounded-lg px-3 py-1.5 text-[11px] cursor-pointer">
-                        <FileUp className="w-3.5 h-3.5" />
-                        <span>{arquivoNovaCertidao ? "Trocar arquivo" : "Anexar arquivo (opcional)"}</span>
-                        <input
-                          type="file"
-                          className="hidden"
-                          accept=".pdf,.png,.jpg,.jpeg,.txt"
-                          onChange={(e) => setArquivoNovaCertidao(e.target.files?.[0] || null)}
-                        />
-                      </label>
-                      {arquivoNovaCertidao && (
-                        <p className="text-[11px] text-muted-foreground break-all">
-                          {arquivoNovaCertidao.name} — a IA vai ler a data de vencimento depois de salvar.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-
                 <DialogFooter className="gap-2 pt-2 border-t">
                   <Button type="button" variant="outline" onClick={fecharPopupCertidao} className="text-xs">
                     Cancelar
                   </Button>
-                  <Button type="submit" disabled={salvandoCertidao} className="text-xs font-semibold">
-                    {salvandoCertidao
-                      ? "Salvando..."
-                      : editingCert
-                        ? "Salvar alterações"
-                        : "Adicionar certidão"}
+                  <Button
+                    type="submit"
+                    disabled={salvandoCertidao || analisandoArquivoModal}
+                    className="text-xs font-semibold"
+                  >
+                    {analisandoArquivoModal
+                      ? "Analisando arquivo..."
+                      : salvandoCertidao
+                        ? "Salvando..."
+                        : editingCert
+                          ? "Salvar alterações"
+                          : "Adicionar certidão"}
                   </Button>
                 </DialogFooter>
               </form>

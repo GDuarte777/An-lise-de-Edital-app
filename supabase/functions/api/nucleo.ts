@@ -1301,7 +1301,9 @@ export async function generateAiResponse(params: {
             if (jsonMode) reqConfig.responseMimeType = "application/json";
             if (responseSchema) reqConfig.responseSchema = responseSchema;
             if (useTools && tools) reqConfig.tools = tools;
-            if (thinkingLevel) reqConfig.thinkingConfig = { thinkingLevel };
+            if (thinkingLevel && /^gemini-3/i.test(geminiModelName)) {
+              reqConfig.thinkingConfig = { thinkingLevel };
+            }
             // Teto por requisição, amarrado ao tempo que ainda resta do orçamento.
             // Sem isso, o orçamento só era conferido ENTRE tentativas: uma única
             // chamada lenta seguia até o fim, e uma execução chegou a 269s mesmo
@@ -1367,8 +1369,6 @@ export async function generateAiResponse(params: {
               ));
 
             if (isQuotaOrRateLimit) {
-              // Model quota is exhausted. Do not retry or run schema fallback on this exhausted model;
-              // immediately rotate to the next model in uniqueModels (e.g. gemini-3.1-flash-lite, gemini-2.5-flash)
               modelsOutOfQuota++;
               console.log(`[Dynamic AI Router] Model ${geminiModelName} reached quota (429) — ${modelsOutOfQuota}/${MAX_MODELS_OUT_OF_QUOTA}. Rotating to alternative model...`);
               break;
@@ -1386,12 +1386,6 @@ export async function generateAiResponse(params: {
 
             if (isTransient) {
               modelFailedTransiently = true;
-              // Repetir o MESMO modelo que acabou de responder "sobrecarregado" foi
-              // medido e não ajuda: no log de produção a segunda tentativa no
-              // gemini-3.7-flash travou 47 s e morreu no abort, enquanto o modelo
-              // reserva — com o triplo de folga de limite — nunca chegou a ser
-              // chamado. Rotacionar na hora usa o mesmo tempo para tentar algo que
-              // pode de fato responder.
               console.log(`[Dynamic AI Router] ${geminiModelName} sobrecarregado (503). Passando para o próximo modelo em vez de repetir.`);
               break;
             }
@@ -1404,20 +1398,18 @@ export async function generateAiResponse(params: {
                 error.message.toLowerCase().includes("schema") ||
                 error.message.toLowerCase().includes("json") ||
                 error.message.toLowerCase().includes("tool") ||
+                error.message.toLowerCase().includes("thinking") ||
                 error.message.toLowerCase().includes("unsupported mime") ||
                 error.message.toLowerCase().includes("invalid argument")
               ));
 
             if (isSchemaOrToolError) {
-              // O retry sem ferramentas já aconteceu acima (flag useTools), então aqui
-              // só resta afrouxar a restrição de schema estrito.
-              if (responseSchema) {
-                console.log(`[Dynamic AI Router] Trying model ${geminiModelName} without strict schema constraint...`);
+              if (responseSchema || thinkingLevel) {
+                console.log(`[Dynamic AI Router] Trying model ${geminiModelName} without strict schema/thinking constraint...`);
                 try {
                   const reqConfigNoSchema: any = {};
                   if (systemInstruction) reqConfigNoSchema.systemInstruction = systemInstruction;
                   if (jsonMode) reqConfigNoSchema.responseMimeType = "application/json";
-                  if (thinkingLevel) reqConfigNoSchema.thinkingConfig = { thinkingLevel };
                   reqConfigNoSchema.httpOptions = { timeout: Math.max(5_000, Math.min(TIMEOUT_POR_CHAMADA_MS, remainingMs())) };
 
                   const responseNoSchema = await customClient.models.generateContent({
@@ -1452,11 +1444,7 @@ export async function generateAiResponse(params: {
       // outra chave do mesmo projeto também não.
       if (quotaExhausted) break;
     }
-    if (quotaExhausted || tetoDeChamadasAtingido) {
-      // No plano gratuito do Gemini o limite que aperta é o de REQUISIÇÕES POR
-      // MINUTO (5 no Flash, 15 no Flash Lite), não o diário. Dizer "ative o
-      // faturamento" diante de um 429 de RPM manda o usuário resolver a coisa
-      // errada — e foi exatamente o engano que levou a esta correção.
+    if (quotaExhausted || modelsOutOfQuota > 0) {
       throw new Error(
         `⚠️ O Gemini recusou por limite de taxa (429). No plano gratuito são poucas ` +
         `requisições por minuto (5 no Flash, 15 no Flash Lite) — aguarde cerca de um ` +
@@ -1797,8 +1785,14 @@ export function parseCertificateLocally(docName: string): any {
     expDate = dateObj.toISOString().split('T')[0];
   }
 
+  const cleanedName = name.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim();
+  const emissionDate = new Date().toISOString().split("T")[0];
+
   return {
+    documentName: cleanedName || "Certidão de Regularidade",
+    emissionDate,
     expirationDate: expDate,
+    suggestedNotes: `Documento comprobatório de regularidade fiscal/jurídica (${cleanedName || name}) para habilitação em licitações públicas.`,
     documentMatchesRow: true,
     validationFeedback: `Validação Local Concluída: O documento é compatível com a exigência de: "${name}".`,
     extractedCompanyData: {

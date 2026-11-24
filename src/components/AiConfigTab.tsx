@@ -33,7 +33,7 @@ export default function AiConfigTab() {
    * está gravado.
    */
   const [chavesCifradas, setChavesCifradas] = useState<Record<string, boolean>>({});
-  const [geminiModel, setGeminiModel] = useState("gemini-3.8-flash");
+  const [geminiModel, setGeminiModel] = useState("gemini-flash-latest");
 
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-4o");
@@ -60,26 +60,45 @@ export default function AiConfigTab() {
   const [syncSuccess, setSyncSuccess] = useState<boolean | null>(null);
   const [syncMessage, setSyncMessage] = useState("");
 
+  const normalizarModeloGeminiSalvo = (valor: string | null): string => {
+    const clean = (valor || "").trim();
+    if (
+      !clean ||
+      clean === "gemini-3.8-flash" ||
+      clean === "gemini-3.7-flash" ||
+      clean === "gemini-3.6-flash" ||
+      clean === "gemini-3.5-flash" ||
+      clean === "gemini-3.1-flash-lite" ||
+      clean === "gemini-3.5-flash-lite"
+    ) {
+      return "gemini-flash-latest";
+    }
+    return clean;
+  };
+
   // Load from localStorage on mount and when configurations are updated/loaded from database
   useEffect(() => {
     const paraExibicao = (valor: string | null) =>
       chaveEstaCifrada(valor) ? "" : (valor || "");
-    setChavesCifradas({
-      gemini: chaveEstaCifrada(localStorage.getItem("ai_gemini_key")),
-      openai: chaveEstaCifrada(localStorage.getItem("ai_openai_key")),
-      anthropic: chaveEstaCifrada(localStorage.getItem("ai_anthropic_key")),
-      deepseek: chaveEstaCifrada(localStorage.getItem("ai_deepseek_key")),
-    });
 
     const loadFromStorage = () => {
       const provider = localStorage.getItem("ai_active_provider") || "gemini";
       setActiveProvider(provider);
 
-      // A chave pode estar cifrada ("enc:v1:..."): mostrar o texto cifrado no
-      // campo faria o usuário achar que a chave dele foi corrompida, e qualquer
-      // "Salvar" por cima regravaria o cifrado como se fosse a chave.
+      setChavesCifradas({
+        gemini: chaveEstaCifrada(localStorage.getItem("ai_gemini_key")),
+        openai: chaveEstaCifrada(localStorage.getItem("ai_openai_key")),
+        anthropic: chaveEstaCifrada(localStorage.getItem("ai_anthropic_key")),
+        deepseek: chaveEstaCifrada(localStorage.getItem("ai_deepseek_key")),
+      });
+
+      const normGeminiModel = normalizarModeloGeminiSalvo(localStorage.getItem("ai_gemini_model"));
+      if (localStorage.getItem("ai_gemini_model") !== normGeminiModel) {
+        localStorage.setItem("ai_gemini_model", normGeminiModel);
+      }
+
       setGeminiKey(paraExibicao(localStorage.getItem("ai_gemini_key")));
-      setGeminiModel(localStorage.getItem("ai_gemini_model") || "gemini-3.8-flash");
+      setGeminiModel(normGeminiModel);
 
       setOpenaiKey(paraExibicao(localStorage.getItem("ai_openai_key")));
       setOpenaiModel(localStorage.getItem("ai_openai_model") || "gpt-4o");
@@ -99,28 +118,6 @@ export default function AiConfigTab() {
     };
   }, []);
 
-  const handleProviderChange = (newProvider: string) => {
-    setActiveProvider(newProvider);
-    try {
-      localStorage.setItem("ai_active_provider", newProvider);
-      saveUserConfigToSupabase({
-        activeProvider: newProvider,
-        geminiKey,
-        geminiModel,
-        openaiKey,
-        openaiModel,
-        anthropicKey,
-        anthropicModel,
-        deepseekKey,
-        deepseekModel
-      }).catch((err) => console.warn("Erro ao sincronizar provedor com Supabase:", err));
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 1500);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   /**
    * O que de fato gravar para um provedor.
    *
@@ -129,9 +126,34 @@ export default function AiConfigTab() {
    * não decifra; gravar "" aqui destruiria a chave dele.
    */
   const valorParaGravar = (digitado: string, provedor: string) => {
-    if (digitado && digitado.trim().length > 0) return digitado;
-    if (chavesCifradas[provedor]) return localStorage.getItem(`ai_${provedor}_key`) || "";
+    if (digitado && digitado.trim().length > 0) return digitado.trim();
+    const guardado = localStorage.getItem(`ai_${provedor}_key`) || "";
+    if (chavesCifradas[provedor] || chaveEstaCifrada(guardado) || guardado.trim().length > 10) {
+      return guardado;
+    }
     return digitado;
+  };
+
+  const handleProviderChange = (newProvider: string) => {
+    setActiveProvider(newProvider);
+    try {
+      localStorage.setItem("ai_active_provider", newProvider);
+      saveUserConfigToSupabase({
+        activeProvider: newProvider,
+        geminiKey: valorParaGravar(geminiKey, "gemini"),
+        geminiModel: normalizarModeloGeminiSalvo(geminiModel),
+        openaiKey: valorParaGravar(openaiKey, "openai"),
+        openaiModel,
+        anthropicKey: valorParaGravar(anthropicKey, "anthropic"),
+        anthropicModel,
+        deepseekKey: valorParaGravar(deepseekKey, "deepseek"),
+        deepseekModel
+      }).catch((err) => console.warn("Erro ao sincronizar provedor com Supabase:", err));
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 1500);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -143,12 +165,13 @@ export default function AiConfigTab() {
     const openaiParaGravar = valorParaGravar(openaiKey, "openai");
     const anthropicParaGravar = valorParaGravar(anthropicKey, "anthropic");
     const deepseekParaGravar = valorParaGravar(deepseekKey, "deepseek");
+    const normGeminiModel = normalizarModeloGeminiSalvo(geminiModel);
 
     try {
       localStorage.setItem("ai_active_provider", activeProvider);
 
       localStorage.setItem("ai_gemini_key", geminiParaGravar);
-      localStorage.setItem("ai_gemini_model", geminiModel);
+      localStorage.setItem("ai_gemini_model", normGeminiModel);
 
       localStorage.setItem("ai_openai_key", openaiParaGravar);
       localStorage.setItem("ai_openai_model", openaiModel);
@@ -159,6 +182,13 @@ export default function AiConfigTab() {
       localStorage.setItem("ai_deepseek_key", deepseekParaGravar);
       localStorage.setItem("ai_deepseek_model", deepseekModel);
 
+      setChavesCifradas({
+        gemini: chaveEstaCifrada(geminiParaGravar),
+        openai: chaveEstaCifrada(openaiParaGravar),
+        anthropic: chaveEstaCifrada(anthropicParaGravar),
+        deepseek: chaveEstaCifrada(deepseekParaGravar),
+      });
+
       // Force update standard env configs to support legacy route check
       localStorage.setItem("supabase_route_ai", "false"); // Use local router since it has custom keys
 
@@ -166,7 +196,7 @@ export default function AiConfigTab() {
       saveUserConfigToSupabase({
         activeProvider,
         geminiKey: geminiParaGravar,
-        geminiModel,
+        geminiModel: normGeminiModel,
         openaiKey: openaiParaGravar,
         openaiModel,
         anthropicKey: anthropicParaGravar,
@@ -174,6 +204,8 @@ export default function AiConfigTab() {
         deepseekKey: deepseekParaGravar,
         deepseekModel
       }).catch((err) => console.warn("Erro ao sincronizar chaves com Supabase:", err));
+
+      window.dispatchEvent(new Event("user-config-loaded"));
 
       setSaveSuccess(true);
       confetti({ particleCount: 60, spread: 50, origin: { y: 0.8 } });
@@ -246,8 +278,11 @@ export default function AiConfigTab() {
 
       const data = await readJsonResponse(response);
 
-      if (!response.ok) {
-        setTestResult({ ok: false, message: data?.error || "Erro desconhecido." });
+      if (!response.ok || data?.degraded) {
+        setTestResult({
+          ok: false,
+          message: data?.reason || data?.error || "A IA não respondeu (verifique sua chave de API e modelo ativo)."
+        });
       } else {
         setTestResult({ ok: true, message: `✅ IA respondeu: "${data.reply?.substring(0, 80) || "OK"}"` });
         confetti({ particleCount: 80, spread: 60, origin: { y: 0.8 } });
@@ -744,12 +779,13 @@ export default function AiConfigTab() {
 
               <div className="space-y-3">
                 {[
-                  { name: "Google Gemini", key: geminiKey, active: activeProvider === "gemini" },
-                  { name: "OpenAI ChatGPT", key: openaiKey, active: activeProvider === "openai" },
-                  { name: "Anthropic Claude", key: anthropicKey, active: activeProvider === "anthropic" },
-                  { name: "DeepSeek", key: deepseekKey, active: activeProvider === "deepseek" }
+                  { id: "gemini", name: "Google Gemini", key: geminiKey, active: activeProvider === "gemini" },
+                  { id: "openai", name: "OpenAI ChatGPT", key: openaiKey, active: activeProvider === "openai" },
+                  { id: "anthropic", name: "Anthropic Claude", key: anthropicKey, active: activeProvider === "anthropic" },
+                  { id: "deepseek", name: "DeepSeek", key: deepseekKey, active: activeProvider === "deepseek" }
                 ].map((prov) => {
-                  const hasKey = prov.key && prov.key.length > 5;
+                  const storedVal = (typeof localStorage !== "undefined" ? localStorage.getItem(`ai_${prov.id}_key`) : "") || "";
+                  const hasKey = (prov.key && prov.key.length > 5) || chavesCifradas[prov.id] || storedVal.trim().length > 10;
                   return (
                     <div key={prov.name} className="flex items-center justify-between text-xs border-b border-border pb-2 last:border-0 last:pb-0">
                       <div className="flex items-center gap-1.5">

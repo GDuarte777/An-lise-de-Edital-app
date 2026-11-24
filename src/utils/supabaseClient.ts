@@ -357,19 +357,38 @@ export function subscribeToSupabaseTable(
 // o histórico como vazio — ou manter para sempre itens já apagados.
 export async function fetchEditaisFromSupabase(): Promise<{ ok: boolean; rows: any[] }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: false, rows: [] };
+  if (!client || isTableMissing("editais_analisados")) return { ok: false, rows: [] };
   try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
     const { data, error } = await client
       .from("editais_analisados")
       .select("*")
       .order("updated_at", { ascending: false });
+
     if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("editais_analisados");
+        return { ok: false, rows: [] };
+      }
       console.warn("fetchEditaisFromSupabase error:", error.message);
       return { ok: false, rows: [] };
     }
-    return { ok: true, rows: data || [] };
+
+    const allRows = data || [];
+    // Filter rows belonging to current user, guestId, or null user_id
+    const filtered = allRows.filter((r: any) => {
+      const rowUserId = r?.user_id ? String(r.user_id) : "";
+      return !rowUserId || rowUserId === userId || rowUserId === guestId;
+    });
+
+    return { ok: true, rows: filtered };
   } catch (err: any) {
-    if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
+    if (isTableMissingError(err)) {
+      markTableMissing("editais_analisados");
+    } else if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
       console.warn("fetchEditaisFromSupabase network warning:", err?.message || err);
     } else {
       console.warn("fetchEditaisFromSupabase error:", err?.message || err);
@@ -381,6 +400,9 @@ export async function fetchEditaisFromSupabase(): Promise<{ ok: boolean; rows: a
 export async function saveEditalToSupabase(item: { id: string; title: string; date: string; analysis: any }): Promise<{ success: boolean; message: string }> {
   const client = getSupabaseClient();
   if (!client) return { success: false, message: "Supabase não configurado." };
+  if (isTableMissing("editais_analisados")) {
+    return { success: false, message: "Tabela editais_analisados ausente." };
+  }
   try {
     const user = await getActiveUser();
     if (!user) return { success: false, message: "Usuário não autenticado." };
@@ -398,7 +420,10 @@ export async function saveEditalToSupabase(item: { id: string; title: string; da
       .from("editais_analisados")
       .upsert([record], { onConflict: "id" });
 
-    if (error) throw error;
+    if (error) {
+      if (isTableMissingError(error)) markTableMissing("editais_analisados");
+      throw error;
+    }
     return { success: true, message: "Edital salvo com sucesso no Supabase!" };
   } catch (err: any) {
     if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")) {
@@ -417,21 +442,84 @@ export async function saveEditalToSupabase(item: { id: string; title: string; da
 // efetivamente removidas, que é a única confirmação confiável.
 export async function deleteEditalFromSupabase(id: string): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  if (!client || isTableMissing("editais_analisados")) return false;
   try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    // 1. Tenta remover filtrando pelo id (compatível com RLS do usuário atual)
     const { data, error } = await client
       .from("editais_analisados")
       .delete()
       .eq("id", id)
       .select("id");
 
-    if (error) {
-      console.warn("deleteEditalFromSupabase error:", error.message);
+    if (!error && Array.isArray(data) && data.length > 0) {
+      return true;
+    }
+
+    // 2. Fallback explícito com user_id/guestId caso a política exija filtro explícito
+    const { data: data2, error: error2 } = await client
+      .from("editais_analisados")
+      .delete()
+      .eq("id", id)
+      .or(`user_id.eq.${userId},user_id.eq.${guestId}`)
+      .select("id");
+
+    if (error2) {
+      console.warn("deleteEditalFromSupabase error:", error2.message);
       return false;
     }
-    return Array.isArray(data) && data.length > 0;
+    return Array.isArray(data2) && data2.length > 0;
   } catch (err: any) {
     console.warn("deleteEditalFromSupabase exception:", err?.message || err);
+    return false;
+  }
+}
+
+export async function clearAllEditaisFromSupabase(ids?: string[]): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("editais_analisados")) return false;
+  try {
+    const user = await getActiveUser();
+    const guestId = getGuestUserId();
+    const userId = user?.id || guestId;
+
+    if (Array.isArray(ids) && ids.length > 0) {
+      await client
+        .from("editais_analisados")
+        .delete()
+        .in("id", ids);
+    }
+
+    if (userId) {
+      await client
+        .from("editais_analisados")
+        .delete()
+        .eq("user_id", userId);
+    }
+
+    if (guestId && guestId !== userId) {
+      await client
+        .from("editais_analisados")
+        .delete()
+        .eq("user_id", guestId);
+    }
+
+    // Remove quaisquer linhas restantes visíveis para a sessão atual
+    const { error } = await client
+      .from("editais_analisados")
+      .delete()
+      .neq("id", "__never_match__");
+
+    if (error) {
+      console.warn("clearAllEditaisFromSupabase warning:", error.message);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn("clearAllEditaisFromSupabase exception:", err?.message || err);
     return false;
   }
 }
@@ -2130,7 +2218,7 @@ export async function saveUserConfigToSupabase(config: {
       user_id: user.id,
       active_provider: config.activeProvider,
       gemini_key: config.geminiKey || "",
-      gemini_model: config.geminiModel || "gemini-3.8-flash",
+      gemini_model: config.geminiModel || "gemini-flash-latest",
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",

@@ -146,6 +146,7 @@ export interface ParametrosBuscaIndexadaPncp {
   municipio?: string;
   ufs?: string[];
   modalidades?: string[];
+  fontes?: string[];
   status?: StatusBuscaPncp;
   pagina?: number;
   tamanhoPagina?: number;
@@ -159,7 +160,7 @@ export interface ParametrosBuscaIndexadaPncp {
  * é o mesmo motor usado pela interface web oficial `pncp.gov.br/app/editais`:
  * pesquisa em todas as modalidades simultaneamente, suporta `status=todos`
  * (abertas e encerradas), `recebendo_proposta` ou `encerradas`, aceita `q`,
- * `uf` e `modalidades` separados por `|` e responde em menos de 1 segundo.
+ * `uf`, `modalidades` e `fontes` separados por `|` e responde em menos de 1 segundo.
  */
 export function montarQueryBuscaIndexadaPncp(p: ParametrosBuscaIndexadaPncp): string {
   const pagina = Math.max(1, p.pagina ?? 1);
@@ -189,6 +190,10 @@ export function montarQueryBuscaIndexadaPncp(p: ParametrosBuscaIndexadaPncp): st
 
   if (Array.isArray(p.modalidades) && p.modalidades.length > 0) {
     query.set("modalidades", p.modalidades.map(m => String(m).trim()).filter(Boolean).join("|"));
+  }
+
+  if (Array.isArray(p.fontes) && p.fontes.length > 0) {
+    query.set("fontes", p.fontes.map(f => String(f).trim()).filter(Boolean).join("|"));
   }
 
   return query.toString();
@@ -246,12 +251,28 @@ export function normalizarItemBuscaIndexadaPncp(raw: any): any {
     raw?.unidadeOrgao?.nomeUnidade ||
     "";
 
-  const valorGlobal =
-    typeof raw?.valor_global === "number"
+  const valorEstimadoRaw =
+    typeof raw?.valor_total_estimado === "number" && raw.valor_total_estimado > 0
+      ? raw.valor_total_estimado
+      : typeof raw?.valor_global === "number" && raw.valor_global > 0
       ? raw.valor_global
-      : typeof raw?.valorTotalEstimado === "number"
+      : typeof raw?.valorTotalEstimado === "number" && raw.valorTotalEstimado > 0
       ? raw.valorTotalEstimado
-      : 0;
+      : Number(raw?.valor_total_estimado ?? raw?.valor_global ?? raw?.valorTotalEstimado) || 0;
+
+  const valorHomologadoRaw =
+    typeof raw?.valor_total_homologado === "number" && raw.valor_total_homologado > 0
+      ? raw.valor_total_homologado
+      : typeof raw?.valorTotalHomologado === "number" && raw.valorTotalHomologado > 0
+      ? raw.valorTotalHomologado
+      : Number(raw?.valor_total_homologado ?? raw?.valorTotalHomologado) || 0;
+
+  const orcamentoSigiloso = Boolean(raw?.indicador_orcamento_sigiloso ?? raw?.orcamentoSigiloso);
+
+  const fonteId = raw?.usuario_id != null ? String(raw.usuario_id) : "";
+  const fonteNome = String(raw?.usuario_nome || raw?.usuarioNome || "").trim();
+  const tituloDocumento = String(raw?.title || "").trim();
+  const objetoCompra = String(raw?.description || raw?.objetoCompra || raw?.objeto || raw?.title || "").trim();
 
   return {
     numeroControlePNCP: numeroControle,
@@ -259,15 +280,28 @@ export function normalizarItemBuscaIndexadaPncp(raw: any): any {
     cnpjOrgao: cnpj,
     anoCompra: Number(ano) || new Date().getFullYear(),
     sequencialCompra: sequencial,
-    numeroCompra: raw?.numero_compra || raw?.numeroCompra || String(sequencial),
+    numeroCompra: raw?.numero_compra || raw?.numero || raw?.numeroCompra || String(sequencial),
+    tituloDocumento,
     processo: raw?.numero_processo || raw?.processo || raw?.title || "",
-    objetoCompra: raw?.description || raw?.objetoCompra || raw?.objeto || raw?.title || "",
+    objetoCompra,
     modalidadeId: modalidadeId ? Number(modalidadeId) || modalidadeId : undefined,
     modalidadeNome,
     situacaoCompraNome: raw?.situacao_nome || raw?.situacaoCompraNome || (raw?.cancelado ? "Cancelada" : "Divulgada no PNCP"),
     dataPublicacaoPncp: raw?.data_publicacao_pncp || raw?.createdAt || raw?.dataPublicacaoPncp || "",
-    dataAberturaProposta: raw?.data_fim_vigencia || raw?.data_inicio_vigencia || raw?.dataAberturaProposta || "",
-    valorTotalEstimado: valorGlobal,
+    dataAtualizacaoPncp: raw?.data_atualizacao_pncp || raw?.dataAtualizacao || raw?.data_publicacao_pncp || "",
+    dataAberturaProposta:
+      raw?.data_fim_recebimento_propostas ||
+      raw?.data_inicio_recebimento_propostas ||
+      raw?.data_fim_vigencia ||
+      raw?.data_inicio_vigencia ||
+      raw?.dataAberturaProposta ||
+      "",
+    valorTotalEstimado: valorEstimadoRaw,
+    valorTotalHomologado: valorHomologadoRaw,
+    orcamentoSigiloso,
+    fonteId,
+    fonteNome,
+    linkSistemaOrigem: raw?.link_sistema_origem || raw?.linkSistemaOrigem || "",
     orgaoEntidade: {
       cnpj,
       razaoSocial: orgaoNome,

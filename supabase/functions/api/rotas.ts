@@ -1376,25 +1376,13 @@ REGRAS:
         required: ["itensEdital"]
       };
 
-      itensPromise = generateAiResponse({
-        model: "gemini-3.8-flash",
-        contents: [{ text: promptItens }, ...contentParts],
-        aiConfig,
-        jsonMode: true,
-        responseSchema: itensSchema,
-        thinkingLevel: (process.env.AI_THINKING_LEVEL_ITENS as any) || "LOW"
-      }).catch((err: any) => {
-        console.warn("[analyze-edital] Extração dedicada de itens falhou:", err?.message || err);
-        return null;
-      });
-
       console.log("Chamando AI Router para análise de edital...");
       const response = await generateAiResponse({
-        model: "gemini-3.8-flash",
+        model: "gemini-flash-latest",
         contents: contentParts,
         aiConfig,
         jsonMode: true,
-        thinkingLevel: (process.env.AI_THINKING_LEVEL as any) || "MINIMAL",
+        thinkingLevel: (process.env.AI_THINKING_LEVEL as any) || undefined,
         responseSchema: {
             type: Type.OBJECT,
             properties: {
@@ -1425,6 +1413,7 @@ REGRAS:
                 items: { type: Type.STRING },
                 description: "Lista completa e fidedigna de todos os documentos, certidões negativas (Federais, Estaduais, Municipais, Trabalhistas, FGTS, Falência), atestados de capacidade técnica e habilitações jurídicas efetivamente exigidos no edital."
               },
+              itensEdital: itensSchema.properties.itensEdital,
               identificacaoCertame: {
                 type: Type.OBJECT,
                 properties: {
@@ -1548,7 +1537,7 @@ REGRAS:
               },
             },
             required: [
-              "pontosPositivos", "pontosAlerta", "prazoEntrega", "prazoPagamento", "descricaoProduto", "documentosExigidos",
+              "pontosPositivos", "pontosAlerta", "prazoEntrega", "prazoPagamento", "descricaoProduto", "documentosExigidos", "itensEdital",
               "identificacaoCertame", "especificacoesTecnicas", "burocraciaBarreiras", "logisticaCronograma", "viabilidadeFinanceira", "parecerFinal",
               "dossieExecutivo", "reportMarkdown"
             ]
@@ -1557,20 +1546,6 @@ REGRAS:
 
       const rawJson = response.text || "{}";
       let parsedData = cleanAndParseJson(rawJson);
-
-      // Junta a extração dedicada de itens, que correu em paralelo.
-      const itensResposta = await itensPromise;
-      if (itensResposta?.text) {
-        try {
-          const extraidos = cleanAndParseJson(itensResposta.text);
-          if (Array.isArray(extraidos?.itensEdital) && extraidos.itensEdital.length > 0) {
-            parsedData.itensEdital = extraidos.itensEdital;
-            console.log(`[analyze-edital] Extração dedicada devolveu ${extraidos.itensEdital.length} itens.`);
-          }
-        } catch (err: any) {
-          console.warn("[analyze-edital] Não foi possível ler os itens extraídos:", err?.message || err);
-        }
-      }
 
       if (!parsedData || Object.keys(parsedData).length === 0) {
         console.warn("[analyze-edital] JSON estruturado vazio ou inválido da IA, tentando recuperação...");
@@ -2261,10 +2236,13 @@ Considere as seguintes equivalências como VÁLIDAS (documentMatchesRow = true):
 Apenas retorne "documentMatchesRow" = false se o documento enviado for bizarramente desconexo do campo de destino (ex: enviou uma certidão de FGTS no campo de Contrato Social, ou um CNPJ no campo da CNDT). Caso contrário, se for um equivalente ou se houver dúvida razoável, sempre dê preferência por aceitar (true) e use o campo "validationFeedback" para dar uma orientação ou aviso amigável.
 
 Retorne um objeto JSON contendo exatamente os seguintes campos em português brasileiro:
-1. "expirationDate": Uma string correspondente à data de validade/vencimento do documento no formato "YYYY-MM-DD". Se for permanente ou sem vencimento, retorne "".
-2. "documentMatchesRow": Um valor booleano (true ou false) conforme as regras de compatibilidade acima.
-3. "validationFeedback": Uma frase de justificativa bem esclarecedora.
-4. "extractedCompanyData": Um objeto contendo dados da empresa que você conseguir identificar ou deduzir com base no conteúdo lido do documento (como um Contrato Social, CNPJ ou CND). Deixe os campos vazios caso não localize no documento:
+1. "documentName": O nome oficial e padronizado desta certidão ou documento identificado pelo conteúdo (ex: "Certidão Negativa de Débitos Trabalhistas - CNDT", "Certificado de Regularidade do FGTS - CRF", "Certidão Negativa de Débitos Relativos aos Tributos Federais e à Dívida Ativa da União", "Certidão Negativa de Débitos Tributários Estaduais - SEFAZ", "Certidão Negativa de Débitos Municipais", "Comprovante de Inscrição e de Situação Cadastral - CNPJ", "Contrato Social Consolidado", etc.).
+2. "emissionDate": Uma string correspondente à data de emissão/expedição do documento no formato "YYYY-MM-DD". Caso não localize no documento, retorne "".
+3. "expirationDate": Uma string correspondente à data de validade/vencimento do documento no formato "YYYY-MM-DD". Se for permanente ou sem vencimento, retorne "".
+4. "suggestedNotes": Um resumo prático e direto (1 a 2 frases) explicando o que este documento comprova em processos de licitação pública.
+5. "documentMatchesRow": Um valor booleano (true ou false) conforme as regras de compatibilidade acima.
+6. "validationFeedback": Uma frase de justificativa bem esclarecedora.
+7. "extractedCompanyData": Um objeto contendo dados da empresa que você conseguir identificar ou deduzir com base no conteúdo lido do documento (como um Contrato Social, CNPJ ou CND). Deixe os campos vazios caso não localize no documento:
    - "razonSocial": Razão Social / Nome da empresa
    - "cnpj": Número do CNPJ formatado ou não
    - "address": Endereço completo
@@ -2285,9 +2263,21 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
         responseSchema: {
             type: Type.OBJECT,
             properties: {
+              documentName: {
+                type: Type.STRING,
+                description: "Nome oficial identificado da certidão ou documento"
+              },
+              emissionDate: {
+                type: Type.STRING,
+                description: "Data de emissão da certidão no formato YYYY-MM-DD (deixe em branco se não houver)"
+              },
               expirationDate: {
                 type: Type.STRING,
                 description: "Data de vencimento da certidão no formato YYYY-MM-DD (deixe em branco se não houver)"
+              },
+              suggestedNotes: {
+                type: Type.STRING,
+                description: "Resumo curto de 1 a 2 frases explicando a finalidade da certidão na licitação"
               },
               documentMatchesRow: {
                 type: Type.BOOLEAN,
@@ -2311,7 +2301,7 @@ Importante: Retorne EXCLUSIVAMENTE o JSON mapeado de forma exata de acordo com o
                 description: "Dados cadastrais da empresa identificados no documento"
               }
             },
-            required: ["expirationDate", "documentMatchesRow", "validationFeedback", "extractedCompanyData"]
+            required: ["documentName", "emissionDate", "expirationDate", "suggestedNotes", "documentMatchesRow", "validationFeedback", "extractedCompanyData"]
           }
       });
 

@@ -28,6 +28,15 @@ vi.mock("../utils/supabaseClient", () => ({
     banco.excluidas.push(id);
     return true;
   }),
+  removeDisputaFromCalendarOnly: vi.fn(async (id: string) => {
+    banco.excluidas.push(id);
+    return true;
+  }),
+  lerDisputasForaDoCalendario: vi.fn(() => new Set<string>()),
+  marcarDisputaForaDoCalendario: vi.fn(),
+  desmarcarDisputaForaDoCalendario: vi.fn(),
+  fetchAnalisesFromSupabase: vi.fn(async () => []),
+  fetchEditaisFromSupabase: vi.fn(async () => ({ ok: true, rows: [] })),
   generateUUID: vi.fn(() => "11111111-2222-3333-4444-555555555555"),
 }));
 
