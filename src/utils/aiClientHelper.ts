@@ -21,7 +21,9 @@ export function normalizeGeminiModelName(model?: string | null): string {
 
 function normalizeModelForRemoteEdge(provider: string, model?: string | null): string {
   if (provider !== "gemini") return model || "";
-  return normalizeGeminiModelName(model);
+  const clean = (model || "").trim().toLowerCase();
+  if (clean.includes("pro")) return "gemini-3.1-pro-preview";
+  return "gemini-3.1-flash-lite";
 }
 
 export function getActiveAiConfig() {
@@ -282,6 +284,7 @@ function normalizeEditalAnalysisFallback(parsedData: any, rawTextInput = ""): an
 
 const SERVER_AI_ROUTES = new Set([
   "/api/ai-status",
+  "/api/user-config",
   "/api/chat",
   "/api/chat/title",
   "/api/analyze-cert",
@@ -319,6 +322,15 @@ export async function apiFetch(
     }
 
     const method = options.method || "GET";
+    const localAiConfig = rawAiConfig
+      ? {
+          ...rawAiConfig,
+          model:
+            (rawAiConfig.provider || "gemini") === "gemini"
+              ? normalizeGeminiModelName(rawAiConfig.model)
+              : rawAiConfig.model,
+        }
+      : aiConfig;
     const remoteAiConfig = rawAiConfig
       ? {
           ...rawAiConfig,
@@ -326,20 +338,18 @@ export async function apiFetch(
         }
       : aiConfig;
 
-    const fetchOptions: RequestInit = {
-      method,
-      headers,
-      signal: options.signal,
-    };
-
-    if (method !== "GET" && method !== "HEAD") {
-      fetchOptions.body = JSON.stringify({ ...bodyObj, aiConfig: remoteAiConfig });
-    }
-
-    // 1. Call the app's own Node.js server endpoint (/api/...) first for AI routes
+    // 1. Call the app's own Node.js / Vercel server endpoint (/api/...) first for AI routes
     if (isServerAiRoute && url.startsWith("/api/")) {
       try {
-        const localResp = await fetch(url, fetchOptions);
+        const localFetchOptions: RequestInit = {
+          method,
+          headers,
+          signal: options.signal,
+        };
+        if (method !== "GET" && method !== "HEAD") {
+          localFetchOptions.body = JSON.stringify({ ...bodyObj, aiConfig: localAiConfig });
+        }
+        const localResp = await fetch(url, localFetchOptions);
         const contentType = localResp.headers.get("content-type") || "";
         // Ensure it hit the Express API route and not an HTML SPA fallback
         if (localResp.status !== 404 && contentType.includes("application/json")) {
@@ -351,6 +361,14 @@ export async function apiFetch(
     }
 
     // 2. Fallback to Supabase Edge Function URL
+    const fetchOptions: RequestInit = {
+      method,
+      headers,
+      signal: options.signal,
+    };
+    if (method !== "GET" && method !== "HEAD") {
+      fetchOptions.body = JSON.stringify({ ...bodyObj, aiConfig: remoteAiConfig });
+    }
     const response = await fetch(urlDaApi(url), fetchOptions);
 
     if (cleanPath === "/api/analyze-edital" && response.ok) {

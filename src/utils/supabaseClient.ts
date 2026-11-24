@@ -2235,12 +2235,32 @@ export async function saveUserConfigToSupabase(config: {
     const token = sessao?.session?.access_token;
 
     if (token) {
+      const reqInit: RequestInit = {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...cabecalhosDaApi() },
+        body: JSON.stringify(record)
+      };
+
+      // 1. Tenta o servidor próprio da aplicação (/api/user-config no Node/Vercel)
       try {
-        const resp = await fetch(urlDaApi("/api/user-config"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...cabecalhosDaApi() },
-          body: JSON.stringify(record)
-        });
+        const localResp = await fetch("/api/user-config", reqInit);
+        const ct = localResp.headers.get("content-type") || "";
+        if (localResp.ok && ct.includes("application/json")) {
+          const json = await localResp.json().catch(() => ({}));
+          return {
+            success: true,
+            message: json?.criptografado
+              ? "Configurações salvas e chaves criptografadas no banco."
+              : "Configurações de chaves salvas com sucesso no Supabase!"
+          };
+        }
+      } catch {
+        // Segue para a Edge Function ou gravação direta no Supabase
+      }
+
+      // 2. Fallback para a Edge Function remota
+      try {
+        const resp = await fetch(urlDaApi("/api/user-config"), reqInit);
 
         if (resp.ok) {
           const json = await resp.json().catch(() => ({}));

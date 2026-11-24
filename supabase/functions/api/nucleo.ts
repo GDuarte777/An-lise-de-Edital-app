@@ -1257,7 +1257,9 @@ export async function generateAiResponse(params: {
         console.warn(`[Dynamic AI Router] Não foi possível descobrir os modelos da chave; usando a lista padrão: ${modelosDaVez.join(" → ")}`);
       }
 
-      for (const geminiModelName of modelosDaVez) {
+      const listaModelos = [...modelosDaVez];
+      for (let idxModelo = 0; idxModelo < listaModelos.length; idxModelo++) {
+        const geminiModelName = listaModelos[idxModelo];
         if (remainingMs() <= 0) {
           budgetExhausted = true;
           console.warn(`[Dynamic AI Router] Orçamento de ${budgetMs}ms esgotado após ${elapsedMs()}ms. Interrompendo a rotação de modelos.`);
@@ -1324,8 +1326,18 @@ export async function generateAiResponse(params: {
               groundingMetadata: (response.candidates?.[0] as any)?.groundingMetadata || null
             };
           } catch (error: any) {
-            console.warn(`[Dynamic AI Router] Gemini model ${geminiModelName} failed on attempt ${attempt + 1}:`, error.message || error);
+            const errMsg = String(error?.message || error || "");
+            console.warn(`[Dynamic AI Router] Gemini model ${geminiModelName} failed on attempt ${attempt + 1}:`, errMsg);
             lastError = error;
+
+            const recommendedMatch = errMsg.match(/use models\/([a-zA-Z0-9._-]+)/i);
+            if (recommendedMatch && recommendedMatch[1]) {
+              const recommendedModel = recommendedMatch[1].trim();
+              if (!listaModelos.includes(recommendedModel)) {
+                console.log(`[Dynamic AI Router] Google sugeriu o modelo ${recommendedModel}; priorizando como próximo candidato.`);
+                listaModelos.splice(idxModelo + 1, 0, recommendedModel);
+              }
+            }
 
             // Grounding tem cota própria: um 429/400 aqui normalmente vem da busca no
             // Google, não do modelo. Refaz a MESMA chamada sem ferramentas antes de

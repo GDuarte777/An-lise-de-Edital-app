@@ -3,16 +3,24 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { GoogleGenAI } from "@google/genai";
 import { extrairCodigoUasg, normalizarCodigoUasg } from "./src/utils/identificacaoEdital";
-import { derivarChaveMestra, descriptografarSegredo, estaCriptografado } from "./src/utils/segredos";
+import {
+  CAMPOS_SECRETOS,
+  criptografarConfiguracao,
+  derivarChaveMestra,
+  descriptografarConfiguracao,
+  descriptografarSegredo,
+  estaCriptografado,
+  mascararSegredo,
+} from "./src/utils/segredos";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SUPABASE_URL_DEFAULT = process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
+const SUPABASE_URL_DEFAULT = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
 const SUPABASE_ANON_KEY_DEFAULT =
-  process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
+  process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
 
-interface ServerAiConfig {
+export interface ServerAiConfig {
   provider: string;
   apiKey: string;
   model: string;
@@ -26,6 +34,11 @@ interface CachedModels {
 const modelDiscoveryCache = new Map<string, CachedModels>();
 const MODEL_CACHE_TTL_MS = 10 * 60_000;
 
+// In-memory cache of verified keys per user and per provider so secondary accounts
+// or encrypted-key sessions on the same server never fall back to broken legacy routes.
+const userConfigCache = new Map<string, Record<string, string>>();
+const lastVerifiedProviderKey = new Map<string, string>();
+
 // In-memory store for chunked large file uploads (> 2.2MB)
 interface UploadSession {
   name: string;
@@ -35,6 +48,18 @@ interface UploadSession {
   createdAt: number;
 }
 const chunkUploads = new Map<string, UploadSession>();
+
+function getUserIdFromJwt(token: string): string | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const json = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+    const sub = JSON.parse(json)?.sub;
+    return typeof sub === "string" && sub.length > 0 ? sub : null;
+  } catch {
+    return null;
+  }
+}
 
 export function normalizeServerGeminiModel(model?: string | null): string {
   const clean = (model || "").trim().toLowerCase();
@@ -55,7 +80,10 @@ export function normalizeServerGeminiModel(model?: string | null): string {
 
 export function normalizeModelForRemoteEdge(provider: string, model?: string | null): string {
   if (provider !== "gemini") return model || "";
-  return normalizeServerGeminiModel(model);
+  const clean = (model || "").trim().toLowerCase();
+  if (clean.includes("pro")) return "gemini-3.1-pro-preview";
+  // "gemini-3.1-flash-lite" is accepted by VALID_GEMINI_MODELS in both b662dec2 and current
+  return "gemini-3.1-flash-lite";
 }
 
 function scoreGeminiModel(name: string): number {
@@ -285,12 +313,12 @@ function createServerGeminiClient(apiKey: string): GoogleGenAI {
   });
 }
 
-function resolveServerAiConfig(rawAiConfig?: any): ServerAiConfig | null {
+async function resolveServerAiConfig(rawAiConfig?: any, authHeader?: string): Promise<ServerAiConfig | null> {
   const provider = rawAiConfig?.provider || "gemini";
   let rawKey = String(rawAiConfig?.apiKey || "").trim();
+  const masterSecret = derivarChaveMestra(process.env.AI_KEYS_ENCRYPTION_KEY || "");
 
   if (estaCriptografado(rawKey)) {
-    const masterSecret = derivarChaveMestra(process.env.AI_KEYS_ENCRYPTION_KEY || "");
     if (masterSecret) {
       rawKey = descriptografarSegredo(rawKey, masterSecret).trim();
     } else {
@@ -298,17 +326,123 @@ function resolveServerAiConfig(rawAiConfig?: any): ServerAiConfig | null {
     }
   }
 
-  if (!rawKey && provider === "gemini") {
-    rawKey = (process.env.GEMINI_API_KEY || "").trim();
+  const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const userId = token ? getUserIdFromJwt(token) : null;
+
+  // 1. If we received a valid plaintext key from the client, cache it for this user & provider
+  if (rawKey && rawKey.length > 10 && !estaCriptografado(rawKey)) {
+    lastVerifiedProviderKey.set(provider, rawKey);
+    if (userId) {
+      const existing = userConfigCache.get(userId) || {};
+      existing[provider] = rawKey;
+      userConfigCache.set(userId, existing);
+    }
+    return {
+      provider,
+      apiKey: rawKey,
+      model:
+        provider === "gemini"
+          ? normalizeServerGeminiModel(rawAiConfig?.model)
+          : String(rawAiConfig?.model || ""),
+    };
   }
-  if (!rawKey && provider === "openai") {
-    rawKey = (process.env.OPENAI_API_KEY || "").trim();
+
+  // 2. Check server in-memory cache for this authenticated user
+  if (userId && userConfigCache.has(userId)) {
+    const cachedUserKeys = userConfigCache.get(userId)!;
+    const cachedKey = cachedUserKeys[provider] || cachedUserKeys["gemini"];
+    if (cachedKey && cachedKey.length > 10) {
+      const resolvedProv = cachedUserKeys[provider] ? provider : "gemini";
+      return {
+        provider: resolvedProv,
+        apiKey: cachedKey,
+        model:
+          resolvedProv === "gemini"
+            ? normalizeServerGeminiModel(rawAiConfig?.model)
+            : String(rawAiConfig?.model || ""),
+      };
+    }
   }
-  if (!rawKey && provider === "deepseek") {
-    rawKey = (process.env.DEEPSEEK_API_KEY || "").trim();
+
+  // 3. Query Supabase configuracoes_usuario for this authenticated user
+  if (token && userId) {
+    try {
+      const resp = await fetch(
+        `${SUPABASE_URL_DEFAULT.replace(/\/+$/, "")}/rest/v1/configuracoes_usuario?select=*&user_id=eq.${encodeURIComponent(userId)}&limit=1`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY_DEFAULT,
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      if (resp.ok) {
+        const rows: any[] = await resp.json();
+        if (rows && rows.length > 0) {
+          const row = descriptografarConfiguracao(rows[0], masterSecret);
+          const dbProvider = provider || row.active_provider || "gemini";
+          const keyMap: Record<string, string> = {
+            gemini: String(row.gemini_key || "").trim(),
+            openai: String(row.openai_key || "").trim(),
+            anthropic: String(row.anthropic_key || "").trim(),
+            deepseek: String(row.deepseek_key || "").trim(),
+          };
+          let dbKey = keyMap[dbProvider] || "";
+          if (!dbKey || dbKey.length < 10 || estaCriptografado(dbKey)) {
+            const altProv = Object.keys(keyMap).find(
+              (p) => keyMap[p] && keyMap[p].length > 10 && !estaCriptografado(keyMap[p])
+            );
+            if (altProv) {
+              dbKey = keyMap[altProv];
+            } else {
+              dbKey = "";
+            }
+          }
+          if (dbKey && dbKey.length > 10 && !estaCriptografado(dbKey)) {
+            lastVerifiedProviderKey.set(dbProvider, dbKey);
+            const existing = userConfigCache.get(userId) || {};
+            existing[dbProvider] = dbKey;
+            userConfigCache.set(userId, existing);
+            return {
+              provider: dbProvider,
+              apiKey: dbKey,
+              model:
+                dbProvider === "gemini"
+                  ? normalizeServerGeminiModel(rawAiConfig?.model || row.gemini_model)
+                  : String(rawAiConfig?.model || row[`${dbProvider}_model`] || ""),
+            };
+          }
+        }
+      }
+    } catch {
+      // Fall through to environment or server cache
+    }
   }
-  // If user selected another provider without key, fall back to server GEMINI_API_KEY if available
-  if (!rawKey && process.env.GEMINI_API_KEY) {
+
+  // 4. Environment variables on the server
+  if (provider === "gemini" && process.env.GEMINI_API_KEY) {
+    return {
+      provider: "gemini",
+      apiKey: process.env.GEMINI_API_KEY.trim(),
+      model: normalizeServerGeminiModel(rawAiConfig?.model),
+    };
+  }
+  if (provider === "openai" && process.env.OPENAI_API_KEY) {
+    return {
+      provider: "openai",
+      apiKey: process.env.OPENAI_API_KEY.trim(),
+      model: String(rawAiConfig?.model || "gpt-4o"),
+    };
+  }
+  if (provider === "deepseek" && process.env.DEEPSEEK_API_KEY) {
+    return {
+      provider: "deepseek",
+      apiKey: process.env.DEEPSEEK_API_KEY.trim(),
+      model: String(rawAiConfig?.model || "deepseek-chat"),
+    };
+  }
+  if (process.env.GEMINI_API_KEY) {
     return {
       provider: "gemini",
       apiKey: process.env.GEMINI_API_KEY.trim(),
@@ -316,18 +450,21 @@ function resolveServerAiConfig(rawAiConfig?: any): ServerAiConfig | null {
     };
   }
 
-  if (!rawKey || rawKey.length < 10) {
-    return null;
+  // 5. Fallback to last verified provider key on this server instance
+  const fallbackServerKey = lastVerifiedProviderKey.get(provider) || lastVerifiedProviderKey.get("gemini");
+  if (fallbackServerKey && fallbackServerKey.length > 10) {
+    const resolvedProv = lastVerifiedProviderKey.has(provider) ? provider : "gemini";
+    return {
+      provider: resolvedProv,
+      apiKey: fallbackServerKey,
+      model:
+        resolvedProv === "gemini"
+          ? normalizeServerGeminiModel(rawAiConfig?.model)
+          : String(rawAiConfig?.model || ""),
+    };
   }
 
-  return {
-    provider,
-    apiKey: rawKey,
-    model:
-      provider === "gemini"
-        ? normalizeServerGeminiModel(rawAiConfig?.model)
-        : String(rawAiConfig?.model || ""),
-  };
+  return null;
 }
 
 async function runServerLLMCall(params: {
@@ -703,7 +840,6 @@ async function forwardToSupabaseEdge(req: express.Request, res: express.Response
 
     const edgeResp = await fetch(targetUrl, fetchOpts);
 
-    // Automatic recovery if /api/analyze-edital on the remote Edge Function returns degraded: true
     if (req.path === "/api/analyze-edital" && edgeResp.ok) {
       const cloned = edgeResp.clone();
       const jsonData = await cloned.json().catch(() => null);
@@ -775,120 +911,201 @@ async function forwardToSupabaseEdge(req: express.Request, res: express.Response
   }
 }
 
-async function startServer() {
-  const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+export const app = express();
 
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-  // 0. Health & Chunked Upload endpoints
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", runtime: "node-express" });
+// 0. Health & Chunked Upload endpoints
+app.get("/api/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    runtime: "node-express",
+    chavesIaCriptografadas: Boolean(process.env.AI_KEYS_ENCRYPTION_KEY),
   });
+});
 
-  app.post("/api/upload-chunk/init", (req, res) => {
-    const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-    chunkUploads.set(uploadId, {
-      name: String(req.body?.name || "arquivo.pdf"),
-      type: String(req.body?.type || "application/pdf"),
-      chunks: new Map(),
-      totalChunks: 0,
-      createdAt: Date.now(),
+// 0b. /api/user-config — Saves user AI configuration and caches plaintext keys in server memory
+app.post("/api/user-config", async (req, res) => {
+  try {
+    const authHeader = String(req.headers.authorization || "");
+    if (!authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Faça login para salvar suas configurações de IA." });
+    }
+
+    const token = authHeader.slice(7);
+    const userId = getUserIdFromJwt(token);
+    if (!userId) {
+      return res.status(401).json({ error: "Sessão inválida. Entre novamente." });
+    }
+
+    const corpo = req.body || {};
+    const permitidos = [
+      "active_provider",
+      "gemini_key",
+      "gemini_model",
+      "openai_key",
+      "openai_model",
+      "anthropic_key",
+      "anthropic_model",
+      "deepseek_key",
+      "deepseek_model",
+    ];
+
+    const linha: Record<string, any> = { user_id: userId, updated_at: new Date().toISOString() };
+    for (const campo of permitidos) {
+      if (corpo[campo] !== undefined) linha[campo] = corpo[campo];
+    }
+
+    // Cache any valid plaintext keys on the server for immediate multi-account use
+    const userCached = userConfigCache.get(userId) || {};
+    const providerKeyMap: Array<[string, string]> = [
+      ["gemini", String(linha.gemini_key || "").trim()],
+      ["openai", String(linha.openai_key || "").trim()],
+      ["anthropic", String(linha.anthropic_key || "").trim()],
+      ["deepseek", String(linha.deepseek_key || "").trim()],
+    ];
+    for (const [prov, k] of providerKeyMap) {
+      if (k && k.length > 10 && !estaCriptografado(k)) {
+        userCached[prov] = k;
+        lastVerifiedProviderKey.set(prov, k);
+      }
+    }
+    userConfigCache.set(userId, userCached);
+
+    const chaveMestra = derivarChaveMestra(process.env.AI_KEYS_ENCRYPTION_KEY || "");
+    const cifrada = criptografarConfiguracao(linha, chaveMestra);
+
+    const resp = await fetch(`${SUPABASE_URL_DEFAULT.replace(/\/+$/, "")}/rest/v1/configuracoes_usuario`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY_DEFAULT,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=minimal",
+      },
+      body: JSON.stringify(cifrada),
     });
-    res.json({ uploadId });
+
+    if (!resp.ok) {
+      const detalhe = await resp.text().catch(() => "");
+      console.error("[server/user-config] Supabase recusou a gravação:", resp.status, detalhe.slice(0, 300));
+      return res.status(502).json({ error: `Não foi possível salvar no banco (HTTP ${resp.status}).` });
+    }
+
+    const mascaradas: Record<string, string> = {};
+    for (const campo of CAMPOS_SECRETOS) {
+      if (typeof linha[campo] === "string") mascaradas[campo] = mascararSegredo(linha[campo]);
+    }
+
+    return res.json({ success: true, criptografado: Boolean(chaveMestra), chaves: mascaradas });
+  } catch (error: any) {
+    return res.status(500).json({ error: `Erro ao salvar configuração: ${error?.message || "desconhecido"}` });
+  }
+});
+
+app.post("/api/upload-chunk/init", (req, res) => {
+  const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  chunkUploads.set(uploadId, {
+    name: String(req.body?.name || "arquivo.pdf"),
+    type: String(req.body?.type || "application/pdf"),
+    chunks: new Map(),
+    totalChunks: 0,
+    createdAt: Date.now(),
   });
+  res.json({ uploadId });
+});
 
-  app.post("/api/upload-chunk", (req, res) => {
-    const { uploadId, chunkIndex, totalChunks, chunkBase64 } = req.body || {};
-    const session = chunkUploads.get(String(uploadId || ""));
-    if (!session) {
-      return res.status(404).json({ error: "Sessão de upload não encontrada." });
-    }
-    session.chunks.set(Number(chunkIndex), String(chunkBase64 || ""));
-    session.totalChunks = Math.max(session.totalChunks, Number(totalChunks) || 0);
-    return res.json({ received: true, chunkIndex });
-  });
+app.post("/api/upload-chunk", (req, res) => {
+  const { uploadId, chunkIndex, totalChunks, chunkBase64 } = req.body || {};
+  const session = chunkUploads.get(String(uploadId || ""));
+  if (!session) {
+    return res.status(404).json({ error: "Sessão de upload não encontrada." });
+  }
+  session.chunks.set(Number(chunkIndex), String(chunkBase64 || ""));
+  session.totalChunks = Math.max(session.totalChunks, Number(totalChunks) || 0);
+  return res.json({ received: true, chunkIndex });
+});
 
-  // 1. /api/ai-status
-  const handleAiStatus = async (req: express.Request, res: express.Response) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
-    }
+// 1. /api/ai-status
+const handleAiStatus = async (req: express.Request, res: express.Response) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
+    return forwardToSupabaseEdge(req, res);
+  }
 
-    if (serverAi.provider === "gemini") {
-      const disponiveis = await discoverServerGeminiModels(serverAi.apiKey);
-      const normModel = normalizeServerGeminiModel(serverAi.model);
-      const cadeia = chooseServerGeminiChain(normModel, disponiveis);
-      const servido = disponiveis ? disponiveis.includes(normModel) : null;
-      return res.json({
-        configured: true,
-        provider: "gemini",
-        model: normModel,
-        modeloServidoPelaChave: servido,
-        modelosDisponiveis: disponiveis,
-        cadeiaQueSeraUsada: cadeia,
-      });
-    }
-
+  if (serverAi.provider === "gemini") {
+    const disponiveis = await discoverServerGeminiModels(serverAi.apiKey);
+    const normModel = normalizeServerGeminiModel(serverAi.model);
+    const cadeia = chooseServerGeminiChain(normModel, disponiveis);
+    const servido = disponiveis ? disponiveis.includes(normModel) : null;
     return res.json({
       configured: true,
-      provider: serverAi.provider,
-      model: serverAi.model,
-      modeloServidoPelaChave: true,
-      modelosDisponiveis: [serverAi.model],
-      cadeiaQueSeraUsada: [serverAi.model],
+      provider: "gemini",
+      model: normModel,
+      modeloServidoPelaChave: servido,
+      modelosDisponiveis: disponiveis,
+      cadeiaQueSeraUsada: cadeia,
     });
-  };
-  app.get("/api/ai-status", handleAiStatus);
-  app.post("/api/ai-status", handleAiStatus);
+  }
 
-  // 2. /api/chat/title
-  app.post("/api/chat/title", (req, res) => {
-    const msg = String(req.body?.message || "").trim();
-    const clean = msg.replace(/\s+/g, " ").slice(0, 38);
-    res.json({ title: clean || "Nova Conversa" });
+  return res.json({
+    configured: true,
+    provider: serverAi.provider,
+    model: serverAi.model,
+    modeloServidoPelaChave: true,
+    modelosDisponiveis: [serverAi.model],
+    cadeiaQueSeraUsada: [serverAi.model],
   });
+};
+app.get("/api/ai-status", handleAiStatus);
+app.post("/api/ai-status", handleAiStatus);
 
-  // 3. /api/chat
-  app.post("/api/chat", async (req, res) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
-    }
+// 2. /api/chat/title
+app.post("/api/chat/title", (req, res) => {
+  const msg = String(req.body?.message || "").trim();
+  const clean = msg.replace(/\s+/g, " ").slice(0, 38);
+  res.json({ title: clean || "Nova Conversa" });
+});
 
-    try {
-      const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-      const companyData = req.body?.companyData;
-      const activeEdital = req.body?.activeEditalAnalysis;
+// 3. /api/chat
+app.post("/api/chat", async (req, res) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
+    return forwardToSupabaseEdge(req, res);
+  }
 
-      const formattedHistory = messages.map((m: any) => {
-        const parts: any[] = [];
-        if (m.attachment && (m.attachment.data || m.attachment.uploadId)) {
-          const part = fileAttachmentToPart({
-            name: m.attachment.name,
-            type: m.attachment.type,
-            base64: m.attachment.data,
-            uploadId: m.attachment.uploadId,
-          });
-          if (part) parts.push(part);
-        }
-        parts.push({ text: m.content || "Analise o documento anexado." });
-        return {
-          role: m.role === "assistant" ? "model" : "user",
-          parts,
-        };
-      });
+  try {
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const companyData = req.body?.companyData;
+    const activeEdital = req.body?.activeEditalAnalysis;
 
-      const editalCompacto = activeEdital
-        ? (() => {
-            const { rawText, ...resto } = activeEdital;
-            return resto;
-          })()
-        : null;
+    const formattedHistory = messages.map((m: any) => {
+      const parts: any[] = [];
+      if (m.attachment && (m.attachment.data || m.attachment.uploadId)) {
+        const part = fileAttachmentToPart({
+          name: m.attachment.name,
+          type: m.attachment.type,
+          base64: m.attachment.data,
+          uploadId: m.attachment.uploadId,
+        });
+        if (part) parts.push(part);
+      }
+      parts.push({ text: m.content || "Analise o documento anexado." });
+      return {
+        role: m.role === "assistant" ? "model" : "user",
+        parts,
+      };
+    });
 
-      const systemInstruction = `Você é a HORASIS AI, Assessora e Consultora Inteligente de Licitações e Pregões Eletrônicos (Lei Federal nº 14.133/2021).
+    const editalCompacto = activeEdital
+      ? (() => {
+          const { rawText, ...resto } = activeEdital;
+          return resto;
+        })()
+      : null;
+
+    const systemInstruction = `Você é a HORASIS AI, Assessora e Consultora Inteligente de Licitações e Pregões Eletrônicos (Lei Federal nº 14.133/2021).
 Responda de forma clara, direta, prática e bem estruturada em português do Brasil. Não use fórmulas em LaTeX ($$ ou \\text).
 ${
   companyData
@@ -897,43 +1114,43 @@ ${
 }
 ${editalCompacto ? `\nEdital Selecionado nesta Conversa:\n${JSON.stringify(editalCompacto, null, 2)}` : ""}`;
 
-      const reply = await runServerLLMCall({
-        aiConfig: serverAi,
-        contents: formattedHistory,
-        systemInstruction,
-      });
+    const reply = await runServerLLMCall({
+      aiConfig: serverAi,
+      contents: formattedHistory,
+      systemInstruction,
+    });
 
-      return res.json({ reply });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Erro ao processar o chat na IA." });
-    }
-  });
+    return res.json({ reply });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Erro ao processar o chat na IA." });
+  }
+});
 
-  // 4. /api/analyze-cert
-  app.post("/api/analyze-cert", async (req, res) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
-    }
+// 4. /api/analyze-cert
+app.post("/api/analyze-cert", async (req, res) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
+    return forwardToSupabaseEdge(req, res);
+  }
 
-    try {
-      const bodyObj = req.body || {};
-      const fileBase64 = bodyObj.fileBase64 || bodyObj.base64 || bodyObj.data;
-      const fileName = bodyObj.fileName || bodyObj.name || "documento.pdf";
-      const fileType = bodyObj.fileType || bodyObj.type || "application/pdf";
-      const docName = bodyObj.docName || bodyObj.name || fileName;
+  try {
+    const bodyObj = req.body || {};
+    const fileBase64 = bodyObj.fileBase64 || bodyObj.base64 || bodyObj.data;
+    const fileName = bodyObj.fileName || bodyObj.name || "documento.pdf";
+    const fileType = bodyObj.fileType || bodyObj.type || "application/pdf";
+    const docName = bodyObj.docName || bodyObj.name || fileName;
 
-      const parts: any[] = [];
-      const filePart = fileAttachmentToPart({
-        base64: fileBase64,
-        name: fileName,
-        type: fileType,
-        uploadId: bodyObj.uploadId,
-      });
-      if (filePart) parts.push(filePart);
+    const parts: any[] = [];
+    const filePart = fileAttachmentToPart({
+      base64: fileBase64,
+      name: fileName,
+      type: fileType,
+      uploadId: bodyObj.uploadId,
+    });
+    if (filePart) parts.push(filePart);
 
-      parts.push({
-        text: `Analise esta certidão/documento empresarial ("${docName}", arquivo "${fileName}") e retorne EXCLUSIVAMENTE um JSON válido com os campos:
+    parts.push({
+      text: `Analise esta certidão/documento empresarial ("${docName}", arquivo "${fileName}") e retorne EXCLUSIVAMENTE um JSON válido com os campos:
 {
   "documentName": "Nome oficial padronizado da certidão/documento identificado no conteúdo",
   "emissionDate": "YYYY-MM-DD ou vazio se não constar",
@@ -951,65 +1168,65 @@ ${editalCompacto ? `\nEdital Selecionado nesta Conversa:\n${JSON.stringify(edita
     "representativeCpf": ""
   }
 }`,
-      });
+    });
 
-      const rawText = await runServerLLMCall({
-        aiConfig: serverAi,
-        contents: parts,
-        jsonMode: true,
-      });
+    const rawText = await runServerLLMCall({
+      aiConfig: serverAi,
+      contents: parts,
+      jsonMode: true,
+    });
 
-      const parsed = cleanAndParseJsonServer(rawText);
-      return res.json({ result: parsed });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Erro ao analisar certidão na IA." });
-    }
-  });
+    const parsed = cleanAndParseJsonServer(rawText);
+    return res.json({ result: parsed });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Erro ao analisar certidão na IA." });
+  }
+});
 
-  // 5. /api/generate-cert-description
-  app.post("/api/generate-cert-description", async (req, res) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
-    }
+// 5. /api/generate-cert-description
+app.post("/api/generate-cert-description", async (req, res) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
+    return forwardToSupabaseEdge(req, res);
+  }
 
-    try {
-      const name = String(req.body?.name || "Certidão").trim();
-      const reply = await runServerLLMCall({
-        aiConfig: serverAi,
-        contents: [
-          {
-            text: `Explique em 1 frase curta (máximo 140 caracteres), direta e técnica para que serve o documento/certidão "${name}" em licitações públicas no Brasil.`,
-          },
-        ],
-      });
-      return res.json({ description: reply.trim() });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Erro ao gerar descrição da certidão." });
-    }
-  });
+  try {
+    const name = String(req.body?.name || "Certidão").trim();
+    const reply = await runServerLLMCall({
+      aiConfig: serverAi,
+      contents: [
+        {
+          text: `Explique em 1 frase curta (máximo 140 caracteres), direta e técnica para que serve o documento/certidão "${name}" em licitações públicas no Brasil.`,
+        },
+      ],
+    });
+    return res.json({ description: reply.trim() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Erro ao gerar descrição da certidão." });
+  }
+});
 
-  // 6. /api/generate-document
-  app.post("/api/generate-document", async (req, res) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
-    }
+// 6. /api/generate-document
+app.post("/api/generate-document", async (req, res) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
+    return forwardToSupabaseEdge(req, res);
+  }
 
-    try {
-      const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText, proposalDetails } =
-        req.body || {};
-      let prompt = "";
-      if (docType === "proposal") {
-        const details = proposalDetails || {};
-        const items = details.proposalItems || [];
-        const itemsListText = items
-          .map(
-            (it: any, idx: number) =>
-              `| ${idx + 1} | ${it.description} | ${it.quantity} | ${it.brandModel} | R$ ${it.unitValue} | R$ ${it.totalValue} |`
-          )
-          .join("\n");
-        prompt = `Gere uma PROPOSTA COMERCIAL formal para licitação pública em Markdown profissional, cabendo em 1 folha A4:
+  try {
+    const { docType, analysisData, companyData, extraInstructions, uploadedTemplateText, proposalDetails } =
+      req.body || {};
+    let prompt = "";
+    if (docType === "proposal") {
+      const details = proposalDetails || {};
+      const items = details.proposalItems || [];
+      const itemsListText = items
+        .map(
+          (it: any, idx: number) =>
+            `| ${idx + 1} | ${it.description} | ${it.quantity} | ${it.brandModel} | R$ ${it.unitValue} | R$ ${it.totalValue} |`
+        )
+        .join("\n");
+      prompt = `Gere uma PROPOSTA COMERCIAL formal para licitação pública em Markdown profissional, cabendo em 1 folha A4:
 - Empresa: ${companyData?.razonSocial || "[RAZÃO SOCIAL DA EMPRESA]"} | CNPJ: ${companyData?.cnpj || "[CNPJ DA EMPRESA]"}
 - Endereço: ${companyData?.address || "[ENDEREÇO]"} | Tel: ${companyData?.phone || "[TELEFONE]"} | E-mail: ${companyData?.email || "[E-MAIL]"}
 - Representante Legal: ${companyData?.representativeName || "[REPRESENTANTE LEGAL]"} | CPF: ${companyData?.representativeCpf || "[CPF]"}
@@ -1021,44 +1238,44 @@ ${editalCompacto ? `\nEdital Selecionado nesta Conversa:\n${JSON.stringify(edita
 - Validade: ${details.valPrazo || "60 dias"} | Pagamento: ${details.valPgto || "30 dias"} | Entrega: ${details.valEntrega || "Conforme edital"} | Local: ${details.valLocal || "Conforme edital"}
 - Instruções adicionais: ${extraInstructions || "Nenhuma"}
 Finalize com o bloco de assinatura centralizado de 3 linhas (Linha, Nome em negrito, Representante Legal / Titular, CPF | CNPJ). Retorne apenas o Markdown do documento.`;
-      } else {
-        prompt = `Redija o documento licitatório "${
-          docType === "joint_declaration"
-            ? "DECLARAÇÃO CONJUNTA DE HABILITAÇÃO (LEI 14.133/2021)"
-            : uploadedTemplateText || "DECLARAÇÃO DE REGULARIDADE"
-        }" em Markdown formal para 1 página A4.
+    } else {
+      prompt = `Redija o documento licitatório "${
+        docType === "joint_declaration"
+          ? "DECLARAÇÃO CONJUNTA DE HABILITAÇÃO (LEI 14.133/2021)"
+          : uploadedTemplateText || "DECLARAÇÃO DE REGULARIDADE"
+      }" em Markdown formal para 1 página A4.
 Empresa: ${companyData?.razonSocial || "[RAZÃO SOCIAL DA EMPRESA]"}, CNPJ ${companyData?.cnpj || "[CNPJ DA EMPRESA]"}, Representante ${companyData?.representativeName || "[REPRESENTANTE LEGAL]"}, CPF ${companyData?.representativeCpf || "[CPF]"}.
 Instruções extras: ${extraInstructions || "Nenhuma"}.
 Finalize com assinatura formal de 3 linhas. Retorne apenas o documento em Markdown.`;
-      }
-
-      const markdown = await runServerLLMCall({
-        aiConfig: serverAi,
-        contents: [{ text: prompt }],
-      });
-
-      return res.json({
-        markdown: markdown.replace(/^```markdown\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim(),
-        title: docType === "proposal" ? proposalDetails?.proposalFileTitle || "Proposta Comercial.md" : undefined,
-      });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Erro ao gerar documento na IA." });
-    }
-  });
-
-  // 7. /api/compare-products
-  app.post("/api/compare-products", async (req, res) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
     }
 
-    try {
-      const { requiredSpecs, candidateProducts } = req.body || {};
-      const list = Array.isArray(candidateProducts) ? candidateProducts : [];
-      const results = await Promise.all(
-        list.map(async (productModel: string) => {
-          const prompt = `Compare rigorosamente o produto candidato "${productModel}" com as especificações exigidas no edital:
+    const markdown = await runServerLLMCall({
+      aiConfig: serverAi,
+      contents: [{ text: prompt }],
+    });
+
+    return res.json({
+      markdown: markdown.replace(/^```markdown\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim(),
+      title: docType === "proposal" ? proposalDetails?.proposalFileTitle || "Proposta Comercial.md" : undefined,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Erro ao gerar documento na IA." });
+  }
+});
+
+// 7. /api/compare-products
+app.post("/api/compare-products", async (req, res) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
+    return forwardToSupabaseEdge(req, res);
+  }
+
+  try {
+    const { requiredSpecs, candidateProducts } = req.body || {};
+    const list = Array.isArray(candidateProducts) ? candidateProducts : [];
+    const results = await Promise.all(
+      list.map(async (productModel: string) => {
+        const prompt = `Compare rigorosamente o produto candidato "${productModel}" com as especificações exigidas no edital:
 "${requiredSpecs}"
 Retorne EXCLUSIVAMENTE um JSON válido no formato:
 {
@@ -1072,46 +1289,46 @@ Retorne EXCLUSIVAMENTE um JSON válido no formato:
   "cons": ["..."],
   "conclusion": "..."
 }`;
-          const raw = await runServerLLMCall({
-            aiConfig: serverAi,
-            contents: [{ text: prompt }],
-            jsonMode: true,
-          });
-          return {
-            originalName: productModel,
-            success: true,
-            data: cleanAndParseJsonServer(raw),
-            sources: [],
-          };
-        })
-      );
-      return res.json({ results });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Erro ao comparar produtos na IA." });
-    }
-  });
+        const raw = await runServerLLMCall({
+          aiConfig: serverAi,
+          contents: [{ text: prompt }],
+          jsonMode: true,
+        });
+        return {
+          originalName: productModel,
+          success: true,
+          data: cleanAndParseJsonServer(raw),
+          sources: [],
+        };
+      })
+    );
+    return res.json({ results });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Erro ao comparar produtos na IA." });
+  }
+});
 
-  // 8. /api/analyze-competitor
-  app.post("/api/analyze-competitor", async (req, res) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
-    }
+// 8. /api/analyze-competitor
+app.post("/api/analyze-competitor", async (req, res) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
+    return forwardToSupabaseEdge(req, res);
+  }
 
-    try {
-      const { competitorName, competitorDocumentText, fileBase64, fileType, files, editalText, focusItems } =
-        req.body || {};
-      const rawFiles = [
-        ...(Array.isArray(files) ? files : []),
-        ...(fileBase64 ? [{ base64: fileBase64, type: fileType }] : []),
-      ];
-      const parts: any[] = [];
-      for (const f of rawFiles) {
-        const p = fileAttachmentToPart(f);
-        if (p) parts.push(p);
-      }
-      parts.push({
-        text: `Você é um Advogado Especialista em Licitações Públicas (Lei 14.133/2021). Audite a proposta/documentação do concorrente "${competitorName || "Concorrente"}" contra o Edital (${editalText || "regras gerais da Lei 14.133/2021"}). Foco: ${focusItems || "Análise Completa"}.
+  try {
+    const { competitorName, competitorDocumentText, fileBase64, fileType, files, editalText, focusItems } =
+      req.body || {};
+    const rawFiles = [
+      ...(Array.isArray(files) ? files : []),
+      ...(fileBase64 ? [{ base64: fileBase64, type: fileType }] : []),
+    ];
+    const parts: any[] = [];
+    for (const f of rawFiles) {
+      const p = fileAttachmentToPart(f);
+      if (p) parts.push(p);
+    }
+    parts.push({
+      text: `Você é um Advogado Especialista em Licitações Públicas (Lei 14.133/2021). Audite a proposta/documentação do concorrente "${competitorName || "Concorrente"}" contra o Edital (${editalText || "regras gerais da Lei 14.133/2021"}). Foco: ${focusItems || "Análise Completa"}.
 ${competitorDocumentText ? `\nTexto do Concorrente:\n${competitorDocumentText}` : ""}
 Retorne EXCLUSIVAMENTE um JSON válido com:
 {
@@ -1124,66 +1341,68 @@ Retorne EXCLUSIVAMENTE um JSON válido com:
   "modeloRecurso": "Peça completa de Recurso Administrativo em Markdown...",
   "analiseEstiloMarkdown": "Relatório completo da auditoria em Markdown..."
 }`,
-      });
+    });
 
-      const raw = await runServerLLMCall({
-        aiConfig: serverAi,
-        contents: parts,
-        jsonMode: true,
-      });
-      return res.json({ analysis: cleanAndParseJsonServer(raw) });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Erro ao analisar concorrente na IA." });
-    }
-  });
+    const raw = await runServerLLMCall({
+      aiConfig: serverAi,
+      contents: parts,
+      jsonMode: true,
+    });
+    return res.json({ analysis: cleanAndParseJsonServer(raw) });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Erro ao analisar concorrente na IA." });
+  }
+});
 
-  // 9. /api/analyze-edital
-  app.post("/api/analyze-edital", async (req, res) => {
-    const serverAi = resolveServerAiConfig(req.body?.aiConfig);
-    if (!serverAi) {
-      return forwardToSupabaseEdge(req, res);
-    }
-
-    try {
-      const { textInput, fileBase64, fileName, fileType, attachments, attachedFiles, files, selectedItems } =
-        req.body || {};
-      const allFiles = [
-        ...(Array.isArray(attachments) ? attachments : []),
-        ...(Array.isArray(attachedFiles) ? attachedFiles : []),
-        ...(Array.isArray(files) ? files : []),
-        ...(fileBase64 ? [{ base64: fileBase64, name: fileName, type: fileType }] : []),
-      ];
-
-      const parts: any[] = [];
-      for (const f of allFiles) {
-        const p = fileAttachmentToPart(f);
-        if (p) parts.push(p);
-      }
-
-      parts.push({
-        text: buildEditalAnalysisPrompt(String(textInput || ""), selectedItems),
-      });
-
-      const rawJson = await runServerLLMCall({
-        aiConfig: serverAi,
-        contents: parts,
-        jsonMode: true,
-      });
-
-      const parsed = cleanAndParseJsonServer(rawJson);
-      const normalized = normalizeEditalAnalysisObject(parsed, String(textInput || ""));
-      return res.json({ analysis: normalized });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Erro ao analisar o edital na IA." });
-    }
-  });
-
-  // 10. Forward any remaining /api/* routes (e.g., /api/pncp/*, /api/user-config, /api/robos/*) to Supabase Edge Function
-  app.all("/api/*splat", (req, res) => {
+// 9. /api/analyze-edital
+app.post("/api/analyze-edital", async (req, res) => {
+  const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
+  if (!serverAi) {
     return forwardToSupabaseEdge(req, res);
-  });
+  }
 
-  // Vite middleware for development or static serving for production
+  try {
+    const { textInput, fileBase64, fileName, fileType, attachments, attachedFiles, files, selectedItems } =
+      req.body || {};
+    const allFiles = [
+      ...(Array.isArray(attachments) ? attachments : []),
+      ...(Array.isArray(attachedFiles) ? attachedFiles : []),
+      ...(Array.isArray(files) ? files : []),
+      ...(fileBase64 ? [{ base64: fileBase64, name: fileName, type: fileType }] : []),
+    ];
+
+    const parts: any[] = [];
+    for (const f of allFiles) {
+      const p = fileAttachmentToPart(f);
+      if (p) parts.push(p);
+    }
+
+    parts.push({
+      text: buildEditalAnalysisPrompt(String(textInput || ""), selectedItems),
+    });
+
+    const rawJson = await runServerLLMCall({
+      aiConfig: serverAi,
+      contents: parts,
+      jsonMode: true,
+    });
+
+    const parsed = cleanAndParseJsonServer(rawJson);
+    const normalized = normalizeEditalAnalysisObject(parsed, String(textInput || ""));
+    return res.json({ analysis: normalized });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "Erro ao analisar o edital na IA." });
+  }
+});
+
+// 10. Forward any remaining /api/* routes (e.g., /api/pncp/*, /api/robos/*) to Supabase Edge Function
+app.all("/api/*splat", (req, res) => {
+  return forwardToSupabaseEdge(req, res);
+});
+
+async function startServer() {
+  const PORT = Number(process.env.PORT) || 3000;
+
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -1204,4 +1423,8 @@ Retorne EXCLUSIVAMENTE um JSON válido com:
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
