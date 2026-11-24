@@ -222,17 +222,18 @@ export default function App() {
   }, []);
 
   const normalizeClientGeminiModel = (m?: string | null) => {
-    const clean = (m || "").trim();
+    const clean = (m || "").trim().toLowerCase();
     if (
       !clean ||
-      clean === "gemini-3.8-flash" ||
-      clean === "gemini-3.7-flash" ||
-      clean === "gemini-3.6-flash" ||
-      clean === "gemini-3.5-flash" ||
-      clean === "gemini-3.1-flash-lite" ||
-      clean === "gemini-3.5-flash-lite"
+      clean.startsWith("gemini-1.") ||
+      clean.startsWith("gemini-2.0") ||
+      clean.startsWith("gemini-2.5") ||
+      clean === "gemini-flash-latest" ||
+      clean === "gemini-flash-lite-latest" ||
+      clean === "gemini-pro" ||
+      clean === "gemini-pro-latest"
     ) {
-      return "gemini-flash-latest";
+      return "gemini-3.5-flash-lite";
     }
     return clean;
   };

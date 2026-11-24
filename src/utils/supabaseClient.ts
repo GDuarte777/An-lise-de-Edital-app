@@ -2218,7 +2218,7 @@ export async function saveUserConfigToSupabase(config: {
       user_id: user.id,
       active_provider: config.activeProvider,
       gemini_key: config.geminiKey || "",
-      gemini_model: config.geminiModel || "gemini-flash-latest",
+      gemini_model: config.geminiModel || "gemini-3.5-flash-lite",
       openai_key: config.openaiKey || "",
       openai_model: config.openaiModel || "gpt-4o",
       anthropic_key: config.anthropicKey || "",

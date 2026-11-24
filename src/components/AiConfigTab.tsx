@@ -33,7 +33,7 @@ export default function AiConfigTab() {
    * está gravado.
    */
   const [chavesCifradas, setChavesCifradas] = useState<Record<string, boolean>>({});
-  const [geminiModel, setGeminiModel] = useState("gemini-flash-latest");
+  const [geminiModel, setGeminiModel] = useState("gemini-3.5-flash-lite");
 
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("gpt-4o");
@@ -61,17 +61,18 @@ export default function AiConfigTab() {
   const [syncMessage, setSyncMessage] = useState("");
 
   const normalizarModeloGeminiSalvo = (valor: string | null): string => {
-    const clean = (valor || "").trim();
+    const clean = (valor || "").trim().toLowerCase();
     if (
       !clean ||
-      clean === "gemini-3.8-flash" ||
-      clean === "gemini-3.7-flash" ||
-      clean === "gemini-3.6-flash" ||
-      clean === "gemini-3.5-flash" ||
-      clean === "gemini-3.1-flash-lite" ||
-      clean === "gemini-3.5-flash-lite"
+      clean.startsWith("gemini-1.") ||
+      clean.startsWith("gemini-2.0") ||
+      clean.startsWith("gemini-2.5") ||
+      clean === "gemini-flash-latest" ||
+      clean === "gemini-flash-lite-latest" ||
+      clean === "gemini-pro" ||
+      clean === "gemini-pro-latest"
     ) {
-      return "gemini-flash-latest";
+      return "gemini-3.5-flash-lite";
     }
     return clean;
   };

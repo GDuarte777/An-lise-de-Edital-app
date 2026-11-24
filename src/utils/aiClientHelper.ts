@@ -1,13 +1,28 @@
 import { getSupabaseClient } from "./supabaseClient";
 import { urlDaApi, cabecalhosDaApi } from "./apiBase";
-import {
-  executeDirectClientAiRoute,
-  normalizeGeminiModelForClient,
-  normalizeModelForRemoteEdge,
-  buildEditalAnalysisPrompt,
-  cleanAndParseJsonClient,
-  normalizeEditalAnalysisObject,
-} from "./clientAiExecutor";
+import { extrairCodigoUasg, normalizarCodigoUasg } from "./identificacaoEdital";
+
+export function normalizeGeminiModelName(model?: string | null): string {
+  const clean = (model || "").trim().toLowerCase();
+  if (
+    !clean ||
+    clean.startsWith("gemini-1.") ||
+    clean.startsWith("gemini-2.0") ||
+    clean.startsWith("gemini-2.5") ||
+    clean === "gemini-flash-latest" ||
+    clean === "gemini-flash-lite-latest" ||
+    clean === "gemini-pro" ||
+    clean === "gemini-pro-latest"
+  ) {
+    return "gemini-3.5-flash-lite";
+  }
+  return clean;
+}
+
+function normalizeModelForRemoteEdge(provider: string, model?: string | null): string {
+  if (provider !== "gemini") return model || "";
+  return normalizeGeminiModelName(model);
+}
 
 export function getActiveAiConfig() {
   const provider = localStorage.getItem("ai_active_provider") || "gemini";
@@ -28,32 +43,66 @@ export function getActiveAiConfig() {
 
   // If still no key for chosen provider, check if ANY provider has a key in localStorage
   if (!apiKey) {
-    const geminiKey = (localStorage.getItem("ai_gemini_key") || localStorage.getItem("gemini_api_key") || localStorage.getItem("GEMINI_API_KEY") || "").trim();
-    const openaiKey = (localStorage.getItem("ai_openai_key") || localStorage.getItem("openai_api_key") || localStorage.getItem("OPENAI_API_KEY") || "").trim();
-    const anthropicKey = (localStorage.getItem("ai_anthropic_key") || localStorage.getItem("anthropic_api_key") || localStorage.getItem("ANTHROPIC_API_KEY") || "").trim();
-    const deepseekKey = (localStorage.getItem("ai_deepseek_key") || localStorage.getItem("deepseek_api_key") || localStorage.getItem("DEEPSEEK_API_KEY") || "").trim();
+    const geminiKey = (
+      localStorage.getItem("ai_gemini_key") ||
+      localStorage.getItem("gemini_api_key") ||
+      localStorage.getItem("GEMINI_API_KEY") ||
+      ""
+    ).trim();
+    const openaiKey = (
+      localStorage.getItem("ai_openai_key") ||
+      localStorage.getItem("openai_api_key") ||
+      localStorage.getItem("OPENAI_API_KEY") ||
+      ""
+    ).trim();
+    const anthropicKey = (
+      localStorage.getItem("ai_anthropic_key") ||
+      localStorage.getItem("anthropic_api_key") ||
+      localStorage.getItem("ANTHROPIC_API_KEY") ||
+      ""
+    ).trim();
+    const deepseekKey = (
+      localStorage.getItem("ai_deepseek_key") ||
+      localStorage.getItem("deepseek_api_key") ||
+      localStorage.getItem("DEEPSEEK_API_KEY") ||
+      ""
+    ).trim();
 
     if (geminiKey) {
       return {
         provider: "gemini",
         apiKey: geminiKey,
-        model: normalizeGeminiModelForClient(localStorage.getItem("ai_gemini_model"))
+        model: normalizeGeminiModelName(localStorage.getItem("ai_gemini_model")),
       };
     }
-    if (openaiKey) return { provider: "openai", apiKey: openaiKey, model: localStorage.getItem("ai_openai_model") || "gpt-4o" };
-    if (anthropicKey) return { provider: "anthropic", apiKey: anthropicKey, model: localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5" };
-    if (deepseekKey) return { provider: "deepseek", apiKey: deepseekKey, model: localStorage.getItem("ai_deepseek_model") || "deepseek-chat" };
+    if (openaiKey) {
+      return {
+        provider: "openai",
+        apiKey: openaiKey,
+        model: localStorage.getItem("ai_openai_model") || "gpt-4o",
+      };
+    }
+    if (anthropicKey) {
+      return {
+        provider: "anthropic",
+        apiKey: anthropicKey,
+        model: localStorage.getItem("ai_anthropic_model") || "claude-sonnet-5",
+      };
+    }
+    if (deepseekKey) {
+      return {
+        provider: "deepseek",
+        apiKey: deepseekKey,
+        model: localStorage.getItem("ai_deepseek_model") || "deepseek-chat",
+      };
+    }
   }
 
   const rawModel = localStorage.getItem(`ai_${provider}_model`) || "";
-  const model = provider === "gemini" ? normalizeGeminiModelForClient(rawModel) : rawModel;
+  const model = provider === "gemini" ? normalizeGeminiModelName(rawModel) : rawModel;
   return { provider, apiKey, model };
 }
 
-/**
- * Validates if an API key has the correct format for the given provider.
- * Returns null if valid, or an error message string if invalid.
- */
 /** Prefixo das chaves cifradas em repouso (ver src/utils/segredos.ts). */
 export const PREFIXO_CHAVE_CIFRADA = "enc:v1:";
 
@@ -62,6 +111,10 @@ export function chaveEstaCifrada(valor: string | undefined | null): boolean {
   return String(valor || "").startsWith(PREFIXO_CHAVE_CIFRADA);
 }
 
+/**
+ * Validates if a user-supplied API key has the correct format for the given provider.
+ * When empty, returns null so the server can use its own GEMINI_API_KEY or encrypted user key.
+ */
 export function validateApiKeyFormat(apiKey: string, provider: string): string | null {
   const key = (apiKey || "").trim();
   if (!key || key.length < 10) {
@@ -80,7 +133,7 @@ export function validateApiKeyFormat(apiKey: string, provider: string): string |
     return `A chave do Anthropic (Claude) parece inválida — ela deve começar com "sk-ant-". Verifique a chave em "IA & Modelos".`;
   }
 
-  return null; // key looks valid
+  return null;
 }
 
 /**
@@ -89,25 +142,46 @@ export function validateApiKeyFormat(apiKey: string, provider: string): string |
 export function formatAiError(error: any): string {
   const msg = (error?.message || String(error || "")).toLowerCase();
 
-  if (msg.includes("401") || msg.includes("403") || msg.includes("api_key_invalid") ||
-      msg.includes("permission_denied") || msg.includes("unauthenticated") ||
-      msg.includes("invalid api key") || msg.includes("api key not valid")) {
-    return "❌ Chave de API inválida ou sem permissão. Acesse \"IA & Modelos\" e verifique/atualize sua chave.";
+  if (
+    msg.includes("401") ||
+    msg.includes("403") ||
+    msg.includes("api_key_invalid") ||
+    msg.includes("permission_denied") ||
+    msg.includes("unauthenticated") ||
+    msg.includes("invalid api key") ||
+    msg.includes("api key not valid")
+  ) {
+    return '❌ Chave de API inválida ou sem permissão. Acesse "IA & Modelos" e verifique/atualize sua chave.';
   }
-  if (msg.includes("429") || msg.includes("quota") || msg.includes("resource_exhausted") ||
-      msg.includes("rate limit") || msg.includes("insufficient balance")) {
-    return "⚠️ Limite de requisições atingido (cota excedida). Aguarde alguns instantes e tente novamente, ou troque o modelo em \"IA & Modelos\".";
+  if (
+    msg.includes("429") ||
+    msg.includes("quota") ||
+    msg.includes("resource_exhausted") ||
+    msg.includes("rate limit") ||
+    msg.includes("insufficient balance")
+  ) {
+    return '⚠️ Limite de requisições atingido (cota excedida). Aguarde alguns instantes e tente novamente, ou troque o modelo em "IA & Modelos".';
   }
-  if (msg.includes("503") || msg.includes("unavailable") || msg.includes("overloaded") ||
-      msg.includes("high demand")) {
+  if (
+    msg.includes("503") ||
+    msg.includes("unavailable") ||
+    msg.includes("overloaded") ||
+    msg.includes("high demand")
+  ) {
     return "⚠️ O serviço de IA está sobrecarregado no momento. Aguarde alguns segundos e tente novamente.";
   }
-  if (msg.includes("network") || msg.includes("failed to fetch") || msg.includes("econnrefused") ||
-      msg.includes("enotfound") || msg.includes("timeout") || msg.includes("aborted")) {
+  if (
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("econnrefused") ||
+    msg.includes("enotfound") ||
+    msg.includes("timeout") ||
+    msg.includes("aborted")
+  ) {
     return "🌐 Sem conexão com o servidor. Verifique sua internet e se o servidor está online.";
   }
   if (msg.includes("nenhuma chave") || msg.includes("não configurada") || msg.includes("not configured")) {
-    return "⚙️ Nenhuma chave de API configurada. Acesse \"IA & Modelos\" e insira sua chave.";
+    return '⚙️ Nenhuma chave de API configurada. Acesse "IA & Modelos" e insira sua chave.';
   }
 
   const original = error?.message || String(error || "Erro desconhecido.");
@@ -126,7 +200,7 @@ export async function readJsonResponse(response: Response): Promise<any> {
       .slice(0, 160);
     throw new Error(
       `O servidor respondeu HTTP ${response.status} sem JSON — a rota /api falhou antes de chegar na IA.` +
-      (snippet ? ` Resposta do servidor: "${snippet}"` : "")
+        (snippet ? ` Resposta do servidor: "${snippet}"` : "")
     );
   }
 }
@@ -151,7 +225,62 @@ export async function getSupabaseToken(): Promise<string> {
   }
 }
 
-const AI_DIRECT_ROUTES = new Set([
+function cleanAndParseJsonFallback(text: string): any {
+  if (!text) return {};
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, "").replace(/\n?```$/, "").trim();
+  const firstBrace = cleaned.search(/[\{\[]/);
+  const lastBrace = Math.max(cleaned.lastIndexOf("}"), cleaned.lastIndexOf("]"));
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return {};
+  }
+}
+
+function normalizeEditalAnalysisFallback(parsedData: any, rawTextInput = ""): any {
+  const NAO_IDENTIFICADO = "Não identificado no edital";
+  const textoOuNulo = (valor: any): string => {
+    const t = String(valor ?? "").trim();
+    if (!t) return "";
+    const baixo = t.toLowerCase();
+    if (baixo === "null" || baixo === "undefined" || baixo === "n/a" || baixo === "na") return "";
+    return t;
+  };
+  const ehPlaceholder = (valor: string): boolean =>
+    /^n[ãa]o\s+(especificad|identificad|informad|localizad|consta|h[áa]\b)/i.test(valor.trim());
+  const listaDeTextos = (valor: any): string[] =>
+    Array.isArray(valor) ? valor.map(textoOuNulo).filter((t) => Boolean(t) && !ehPlaceholder(t)) : [];
+
+  const result: any = { ...(parsedData || {}) };
+  result.pontosPositivos = listaDeTextos(result.pontosPositivos);
+  result.pontosAlerta = listaDeTextos(result.pontosAlerta);
+  result.documentosExigidos = listaDeTextos(result.documentosExigidos);
+  result.itensEdital = Array.isArray(result.itensEdital) ? result.itensEdital : [];
+
+  const objetoOuNulo = (valor: any) => (valor && typeof valor === "object" ? valor : {});
+  const ic = objetoOuNulo(result.identificacaoCertame);
+  result.identificacaoCertame = {
+    ...ic,
+    orgaoComprador: textoOuNulo(ic.orgaoComprador) || NAO_IDENTIFICADO,
+    modalidade: textoOuNulo(ic.modalidade) || NAO_IDENTIFICADO,
+    identificacaoNumerica: textoOuNulo(ic.identificacaoNumerica) || NAO_IDENTIFICADO,
+    codigoUASG: normalizarCodigoUasg(textoOuNulo(ic.codigoUASG)),
+    numeroEdital: textoOuNulo(ic.numeroEdital) || "",
+    dataHoraSessao: textoOuNulo(ic.dataHoraSessao) || NAO_IDENTIFICADO,
+  };
+  if (!result.identificacaoCertame.codigoUASG) {
+    result.identificacaoCertame.codigoUASG = extrairCodigoUasg(
+      [result.identificacaoCertame.orgaoComprador, rawTextInput, result.reportMarkdown].filter(Boolean).join(" ")
+    );
+  }
+  return result;
+}
+
+const SERVER_AI_ROUTES = new Set([
   "/api/ai-status",
   "/api/chat",
   "/api/chat/title",
@@ -161,9 +290,11 @@ const AI_DIRECT_ROUTES = new Set([
   "/api/compare-products",
   "/api/analyze-competitor",
   "/api/analyze-edital",
+  "/api/upload-chunk/init",
+  "/api/upload-chunk",
 ]);
 
-// Authenticated fetch wrapper: automatically sends JWT + aiConfig on every AI request
+// Authenticated fetch wrapper: sends requests to the backend server (/api/*) with automatic fallback
 export async function apiFetch(
   url: string,
   options: { method?: string; body?: Record<string, any>; headers?: Record<string, string>; signal?: AbortSignal } = {}
@@ -175,34 +306,7 @@ export async function apiFetch(
     const rawAiConfig = bodyObj.aiConfig || aiConfig;
 
     const cleanPath = url.replace(/^https?:\/\/[^/]+(\/functions\/v1)?/, "").split("?")[0];
-    const isAiRoute = AI_DIRECT_ROUTES.has(cleanPath);
-    const hasPlaintextKey =
-      Boolean(rawAiConfig?.apiKey) &&
-      rawAiConfig.apiKey.trim().length > 10 &&
-      !chaveEstaCifrada(rawAiConfig.apiKey);
-
-    // 1. Execução direta no navegador quando o usuário tem uma chave em texto puro configurada
-    if (
-      isAiRoute &&
-      hasPlaintextKey &&
-      (rawAiConfig.provider === "gemini" || rawAiConfig.provider === "openai" || rawAiConfig.provider === "deepseek")
-    ) {
-      try {
-        const directRes = await executeDirectClientAiRoute(cleanPath, bodyObj, {
-          provider: rawAiConfig.provider || "gemini",
-          apiKey: rawAiConfig.apiKey.trim(),
-          model:
-            rawAiConfig.provider === "gemini"
-              ? normalizeGeminiModelForClient(rawAiConfig.model)
-              : rawAiConfig.model || ""
-        });
-        if (directRes) {
-          return directRes;
-        }
-      } catch (directErr: any) {
-        console.warn(`[apiFetch] Execução direta de ${cleanPath} falhou, tentando Edge Function:`, directErr?.message || directErr);
-      }
-    }
+    const isServerAiRoute = SERVER_AI_ROUTES.has(cleanPath);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -215,33 +319,40 @@ export async function apiFetch(
     }
 
     const method = options.method || "GET";
+    const remoteAiConfig = rawAiConfig
+      ? {
+          ...rawAiConfig,
+          model: normalizeModelForRemoteEdge(rawAiConfig.provider || "gemini", rawAiConfig.model),
+        }
+      : aiConfig;
+
     const fetchOptions: RequestInit = {
       method,
       headers,
       signal: options.signal,
     };
 
-    // Normaliza o modelo enviado à Edge Function remota para "gemini-flash-latest"
-    // (ou "gemini-3.1-pro-preview"), que existe no ListModels real do Google e é aceito
-    // por VALID_GEMINI_MODELS na função remota.
-    const remoteAiConfig = rawAiConfig
-      ? {
-          ...rawAiConfig,
-          model: normalizeModelForRemoteEdge(rawAiConfig.provider || "gemini", rawAiConfig.model)
-        }
-      : aiConfig;
-
     if (method !== "GET" && method !== "HEAD") {
       fetchOptions.body = JSON.stringify({ ...bodyObj, aiConfig: remoteAiConfig });
     }
 
+    // 1. Call the app's own Node.js server endpoint (/api/...) first for AI routes
+    if (isServerAiRoute && url.startsWith("/api/")) {
+      try {
+        const localResp = await fetch(url, fetchOptions);
+        const contentType = localResp.headers.get("content-type") || "";
+        // Ensure it hit the Express API route and not an HTML SPA fallback
+        if (localResp.status !== 404 && contentType.includes("application/json")) {
+          return localResp;
+        }
+      } catch {
+        // Fall through to Supabase Edge Function URL if local server is not running
+      }
+    }
+
+    // 2. Fallback to Supabase Edge Function URL
     const response = await fetch(urlDaApi(url), fetchOptions);
 
-    // 2. Recuperação automática para /api/analyze-edital com chave cifrada (enc:v1:...):
-    // Se a rota /api/analyze-edital da Edge Function remota devolver degraded: true
-    // (por conta de thinkingLevel incompatível na versão publicada), refaz a análise
-    // estruturada passando pela rota /api/chat da mesma Edge Function (que decifra a
-    // chave no servidor e não envia thinkingLevel).
     if (cleanPath === "/api/analyze-edital" && response.ok) {
       const cloned = response.clone();
       const jsonData = await cloned.json().catch(() => null);
@@ -253,26 +364,23 @@ export async function apiFetch(
             ...(Array.isArray(bodyObj.files) ? bodyObj.files : []),
             ...(bodyObj.fileBase64
               ? [{ base64: bodyObj.fileBase64, name: bodyObj.fileName, type: bodyObj.fileType }]
-              : [])
+              : []),
           ];
-
           const firstFileWithB64 = allFiles.find((f: any) => f && (f.base64 || f.fileBase64 || f.data));
-          const prompt = buildEditalAnalysisPrompt(String(bodyObj.textInput || ""), bodyObj.selectedItems);
-
           const chatMessages: any[] = [
             {
               role: "user",
-              content: prompt,
+              content: `Analise o Edital anexado e retorne EXCLUSIVAMENTE um JSON válido com identificacaoCertame, itensEdital, documentosExigidos, viabilidadeFinanceira, logisticaCronograma, especificacoesTecnicas, burocraciaBarreiras, parecerFinal, dossieExecutivo e reportMarkdown.\n${String(bodyObj.textInput || "")}`,
               ...(firstFileWithB64
                 ? {
                     attachment: {
                       name: firstFileWithB64.name || firstFileWithB64.fileName || "edital.pdf",
                       type: firstFileWithB64.type || firstFileWithB64.fileType || "application/pdf",
-                      data: firstFileWithB64.base64 || firstFileWithB64.fileBase64 || firstFileWithB64.data
-                    }
+                      data: firstFileWithB64.base64 || firstFileWithB64.fileBase64 || firstFileWithB64.data,
+                    },
                   }
-                : {})
-            }
+                : {}),
+            },
           ];
 
           const chatResp = await fetch(urlDaApi("/api/chat"), {
@@ -281,23 +389,22 @@ export async function apiFetch(
             signal: options.signal,
             body: JSON.stringify({
               messages: chatMessages,
-              aiConfig: remoteAiConfig
-            })
+              aiConfig: remoteAiConfig,
+            }),
           });
 
           if (chatResp.ok) {
             const chatJson = await chatResp.json().catch(() => null);
             if (chatJson?.reply && !chatJson?.degraded) {
-              const parsed = cleanAndParseJsonClient(chatJson.reply);
+              const parsed = cleanAndParseJsonFallback(chatJson.reply);
               if (parsed && Object.keys(parsed).length > 2) {
-                const normalized = normalizeEditalAnalysisObject(parsed, String(bodyObj.textInput || ""));
-                // Preserva dados oficiais do PNCP caso a primeira resposta já os tenha obtido
+                const normalized = normalizeEditalAnalysisFallback(parsed, String(bodyObj.textInput || ""));
                 if (jsonData.analysis?.dadosOficiaisPNCP) {
                   normalized.dadosOficiaisPNCP = jsonData.analysis.dadosOficiaisPNCP;
                 }
                 return new Response(JSON.stringify({ analysis: normalized }), {
                   status: 200,
-                  headers: { "Content-Type": "application/json" }
+                  headers: { "Content-Type": "application/json" },
                 });
               }
             }
@@ -317,7 +424,7 @@ export async function apiFetch(
         url,
         method: options.method || "GET",
         errorMsg: error?.message,
-        error
+        error,
       });
     }
     throw error;
@@ -329,19 +436,17 @@ export async function prepareAttachmentForServer(fileObj: any): Promise<any> {
   if (!fileObj) return fileObj;
 
   const base64Str = fileObj.base64 || fileObj.fileBase64 || fileObj.data || "";
-  // If no base64, or small base64 (< 3MB base64 string ~ 2.2MB binary), or already has uploadId
   if (fileObj.uploadId || !base64Str || base64Str.length < 3 * 1024 * 1024) {
     return fileObj;
   }
 
-  // Large file (> 2.2MB binary) -> upload in 2.5MB base64 chunks to /api/upload-chunk
   try {
     const fileName = fileObj.name || fileObj.fileName || "arquivo";
     const fileType = fileObj.type || fileObj.fileType || "application/pdf";
 
     const initRes = await apiFetch("/api/upload-chunk/init", {
       method: "POST",
-      body: { name: fileName, type: fileType }
+      body: { name: fileName, type: fileType },
     });
 
     if (!initRes.ok) {
@@ -352,7 +457,7 @@ export async function prepareAttachmentForServer(fileObj: any): Promise<any> {
     const { uploadId } = await initRes.json();
     if (!uploadId) return fileObj;
 
-    const chunkSize = 2.5 * 1024 * 1024; // 2.5MB base64 slice (~1.8MB per chunk)
+    const chunkSize = 2.5 * 1024 * 1024;
     const totalChunks = Math.ceil(base64Str.length / chunkSize);
 
     for (let i = 0; i < totalChunks; i++) {
@@ -363,21 +468,20 @@ export async function prepareAttachmentForServer(fileObj: any): Promise<any> {
           uploadId,
           chunkIndex: i,
           totalChunks,
-          chunkBase64
-        }
+          chunkBase64,
+        },
       });
       if (!chunkRes.ok) {
         throw new Error(`Falha no envio do bloco ${i + 1}/${totalChunks}`);
       }
     }
 
-    // Return sanitized object with uploadId and without the giant base64 payload
     const { base64, fileBase64, data, ...rest } = fileObj;
     return {
       ...rest,
       name: fileName,
       type: fileType,
-      uploadId
+      uploadId,
     };
   } catch (err: any) {
     console.error("Upload em partes falhou, enviando diretamente:", err);
@@ -393,4 +497,3 @@ export async function prepareAttachmentsForServer(attachments: any[]): Promise<a
   }
   return processed;
 }
-

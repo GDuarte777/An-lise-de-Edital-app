@@ -102,6 +102,7 @@ function pontuar(nome: string): number {
     n.includes("gemma") ||
     n.startsWith("gemini-1.") ||
     n.startsWith("gemini-2.0") ||
+    n.startsWith("gemini-2.5") ||
     n.includes("-001")
   ) {
     return -1;

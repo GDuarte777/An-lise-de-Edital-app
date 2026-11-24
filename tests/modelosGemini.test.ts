@@ -13,25 +13,25 @@ import {
 
 describe("modelos aposentados", () => {
   it("não oferece como válido nenhum modelo fictício ou aposentado que o projeto não serve", () => {
-    for (const morto of ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]) {
+    for (const morto of ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]) {
       expect(VALID_GEMINI_MODELS).not.toContain(morto);
     }
   });
 
   it("redireciona o modelo antigo/fictício que vinha gravado no banco do usuário", () => {
-    expect(normalizeGeminiModel("gemini-3.8-flash")).toBe("gemini-flash-latest");
-    expect(normalizeGeminiModel("gemini-3.7-flash")).toBe("gemini-flash-latest");
-    expect(normalizeGeminiModel("gemini-3.6-flash")).toBe("gemini-flash-latest");
-    expect(normalizeGeminiModel("gemini-3.5-flash-lite")).toBe("gemini-2.5-flash-lite");
-    expect(normalizeGeminiModel("gemini-3.1-flash-lite")).toBe("gemini-2.5-flash-lite");
+    expect(normalizeGeminiModel("gemini-3.7-flash")).toBe("gemini-3.5-flash-lite");
+    expect(normalizeGeminiModel("gemini-3.6-flash")).toBe("gemini-3.5-flash-lite");
+    expect(normalizeGeminiModel("gemini-2.5-flash-lite")).toBe("gemini-3.5-flash-lite");
+    expect(normalizeGeminiModel("gemini-2.5-flash")).toBe("gemini-3.5-flash-lite");
+    expect(normalizeGeminiModel("gemini-flash-latest")).toBe("gemini-3.5-flash-lite");
   });
 
   it("preserva um modelo válido e aceita apelidos", () => {
-    expect(normalizeGeminiModel("gemini-flash-latest")).toBe("gemini-flash-latest");
-    expect(normalizeGeminiModel("gemini-2.5-flash")).toBe("gemini-2.5-flash");
-    expect(normalizeGeminiModel("gemini-2.5-flash-lite")).toBe("gemini-2.5-flash-lite");
-    expect(normalizeGeminiModel("flash-lite")).toBe("gemini-2.5-flash-lite");
-    expect(normalizeGeminiModel("GEMINI-FLASH-LATEST")).toBe("gemini-flash-latest");
+    expect(normalizeGeminiModel("gemini-3.5-flash-lite")).toBe("gemini-3.5-flash-lite");
+    expect(normalizeGeminiModel("gemini-3.5-flash")).toBe("gemini-3.5-flash");
+    expect(normalizeGeminiModel("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
+    expect(normalizeGeminiModel("flash-lite")).toBe("gemini-3.5-flash-lite");
+    expect(normalizeGeminiModel("GEMINI-3.5-FLASH-LITE")).toBe("gemini-3.5-flash-lite");
   });
 
   it("cai num modelo que existe quando o nome é desconhecido ou vazio", () => {
@@ -43,19 +43,19 @@ describe("modelos aposentados", () => {
 
 describe("cadeia de reserva", () => {
   it("cabe no teto de chamadas por requisição", () => {
-    expect(getFallbackModels("gemini-flash-latest").length).toBeLessThanOrEqual(MAX_CHAMADAS_PROVEDOR);
+    expect(getFallbackModels("gemini-3.5-flash").length).toBeLessThanOrEqual(MAX_CHAMADAS_PROVEDOR);
   });
 
   it("começa pelo modelo pedido, já normalizado", () => {
-    expect(getFallbackModels("gemini-3.7-flash")[0]).toBe("gemini-flash-latest");
+    expect(getFallbackModels("gemini-3.7-flash")[0]).toBe("gemini-3.5-flash-lite");
   });
 
   it("tem o Flash Lite como primeiro reserva, que é quem tem folga de limite", () => {
-    expect(getFallbackModels("gemini-flash-latest")[1]).toBe("gemini-2.5-flash-lite");
+    expect(getFallbackModels("gemini-3.5-flash")[1]).toBe("gemini-3.5-flash-lite");
   });
 
   it("não repete o mesmo modelo dentro da cadeia", () => {
-    const chain = getFallbackModels("gemini-2.5-flash-lite");
+    const chain = getFallbackModels("gemini-3.5-flash-lite");
     expect(new Set(chain).size).toBe(chain.length);
   });
 

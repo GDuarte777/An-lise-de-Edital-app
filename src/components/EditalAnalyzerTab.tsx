@@ -1207,9 +1207,9 @@ export default function EditalAnalyzerTab({
       return;
     }
 
-    // 🔑 Validate API key BEFORE sending to avoid long waits on misconfiguration
+    // 🔑 Validate custom API key format if provided (otherwise server uses its own GEMINI_API_KEY)
     const aiConfig = getActiveAiConfig();
-    const keyError = validateApiKeyFormat(aiConfig.apiKey, aiConfig.provider);
+    const keyError = aiConfig.apiKey ? validateApiKeyFormat(aiConfig.apiKey, aiConfig.provider) : null;
     if (keyError) {
       alert(keyError);
       return;

@@ -216,9 +216,9 @@ export default function CompetitorAnalyzerTab({ activeEdital }: CompetitorAnalyz
       return;
     }
 
-    // Validate API key before sending
+    // Validate custom API key format if provided (otherwise server uses its own GEMINI_API_KEY)
     const aiConfig = getActiveAiConfig();
-    const keyError = validateApiKeyFormat(aiConfig.apiKey, aiConfig.provider);
+    const keyError = aiConfig.apiKey ? validateApiKeyFormat(aiConfig.apiKey, aiConfig.provider) : null;
     if (keyError) { alert(keyError); return; }
 
     setLoading(true);
