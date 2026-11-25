@@ -1055,6 +1055,9 @@ export default function EditalAnalyzerTab({
   // as outras ferramentas enxergam.
   const history = useEditalHistory();
   const [showConfirmClearHistory, setShowConfirmClearHistory] = useState(false);
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null);
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const [historyActionError, setHistoryActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const handleExternalText = () => {
@@ -1810,43 +1813,78 @@ export default function EditalAnalyzerTab({
                     {showConfirmClearHistory ? (
                       <div className="flex items-center gap-1.5 animate-in fade-in slide-in-from-right-1 duration-150">
                         <button
-                          onClick={() => {
-                            // Delete all from Supabase
-                            clearEditalHistory().catch(() => {});
-                            setActiveEdital(null);
+                          disabled={clearingHistory}
+                          onClick={async () => {
+                            setClearingHistory(true);
+                            setHistoryActionError(null);
                             setShowConfirmClearHistory(false);
+                            setActiveEdital(null);
+                            setTextInput("");
+                            setAttachedFiles([]);
+                            try {
+                              localStorage.removeItem("aip_active_edital");
+                            } catch {
+                              // ignore
+                            }
+                            const res = await clearEditalHistory();
+                            if (!res.ok && res.error) {
+                              setHistoryActionError(res.error);
+                            }
+                            setClearingHistory(false);
                           }}
-                          className="text-[10px] text-success hover:opacity-80 font-bold bg-success/10 px-2 py-0.5 rounded border border-success/30 transition-all cursor-pointer"
+                          className="text-[10px] text-success hover:opacity-80 font-bold bg-success/10 px-2 py-0.5 rounded border border-success/30 transition-all cursor-pointer disabled:opacity-50"
                         >
-                          Sim, apagar tudo!
+                          {clearingHistory ? "Apagando..." : "Sim, apagar tudo!"}
                         </button>
                         <button
+                          disabled={clearingHistory}
                           onClick={() => setShowConfirmClearHistory(false)}
-                          className="text-[10px] text-muted-foreground hover:text-foreground bg-muted px-2 py-0.5 rounded border border-border transition-all cursor-pointer"
+                          className="text-[10px] text-muted-foreground hover:text-foreground bg-muted px-2 py-0.5 rounded border border-border transition-all cursor-pointer disabled:opacity-50"
                         >
                           Cancelar
                         </button>
                       </div>
                     ) : (
                       <button
+                        disabled={clearingHistory}
                         onClick={() => {
+                          setHistoryActionError(null);
                           setShowConfirmClearHistory(true);
                         }}
-                        className="text-[10px] text-destructive hover:opacity-80 font-bold tracking-tight bg-destructive/10 px-2 py-0.5 rounded border border-destructive/30 transition-all cursor-pointer"
+                        className="text-[10px] text-destructive hover:opacity-80 font-bold tracking-tight bg-destructive/10 px-2 py-0.5 rounded border border-destructive/30 transition-all cursor-pointer disabled:opacity-50"
                       >
-                        Apagar Tudo
+                        {clearingHistory ? "Apagando..." : "Apagar Tudo"}
                       </button>
                     )}
                   </div>
                 )}
               </div>
 
+              {historyActionError && (
+                <div className="flex items-start justify-between gap-2 p-2 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-[10px] leading-snug">
+                  <span className="flex-1">{historyActionError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryActionError(null)}
+                    className="font-bold hover:opacity-75 cursor-pointer shrink-0"
+                    title="Fechar aviso"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
               {history.length === 0 ? (
                 <p className="text-muted-foreground text-center py-4 text-[11px]">Nenhuma análise armazenada no Supabase ainda.</p>
               ) : (
                 <div className="space-y-2 max-h-[170px] overflow-y-auto pr-1">
                   {history.map((item) => {
-                    const isSelected = activeEdital && activeEdital.descricaoProduto === item.analysis.descricaoProduto;
+                    const isSelected = Boolean(
+                      activeEdital &&
+                        ((activeEdital as any).id === item.id ||
+                          activeEdital.descricaoProduto === item.analysis.descricaoProduto)
+                    );
+                    const isDeleting = deletingHistoryId === item.id;
                     return (
                       <div
                         key={item.id}
@@ -1880,19 +1918,35 @@ export default function EditalAnalyzerTab({
                         </button>
 
                         <button
-                          onClick={(e) => {
+                          disabled={isDeleting || clearingHistory}
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            removeEditalFromHistory(item.id).catch(() => {});
+                            setDeletingHistoryId(item.id);
+                            setHistoryActionError(null);
                             if (isSelected) {
                               setActiveEdital(null);
                               setTextInput("");
                               setAttachedFiles([]);
+                              try {
+                                localStorage.removeItem("aip_active_edital");
+                              } catch {
+                                // ignore
+                              }
                             }
+                            const res = await removeEditalFromHistory(item.id);
+                            if (!res.ok && res.error) {
+                              setHistoryActionError(res.error);
+                            }
+                            setDeletingHistoryId((curr) => (curr === item.id ? null : curr));
                           }}
-                          className="text-muted-foreground hover:text-destructive p-1 bg-card hover:bg-destructive/10 rounded transition-colors cursor-pointer shrink-0 ml-1 border border-border hover:border-destructive/30"
+                          className="text-muted-foreground hover:text-destructive p-1 bg-card hover:bg-destructive/10 rounded transition-colors cursor-pointer shrink-0 ml-1 border border-border hover:border-destructive/30 disabled:opacity-50"
                           title="Apagar análise do histórico"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          {isDeleting ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
                         </button>
                       </div>
                     );

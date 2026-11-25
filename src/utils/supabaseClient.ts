@@ -348,6 +348,39 @@ export function subscribeToSupabaseTable(
   }
 }
 
+// Resolve sessão localmente (sem round-trip extra de rede para /auth/v1/user)
+// para que DELETE/SELECT sejam disparados imediatamente ao clicar.
+async function getActiveSessionContext(): Promise<{
+  userId: string;
+  guestId: string;
+  accessToken: string;
+}> {
+  const guestId = getGuestUserId();
+  const client = getSupabaseClient();
+  if (!client) {
+    return { userId: guestId, guestId, accessToken: "" };
+  }
+  try {
+    const { data } = await client.auth.getSession();
+    const session = data?.session;
+    if (session?.user?.id) {
+      return {
+        userId: String(session.user.id),
+        guestId,
+        accessToken: session.access_token || "",
+      };
+    }
+  } catch {
+    // fallback para getActiveUser abaixo
+  }
+  const user = await getActiveUser();
+  return {
+    userId: user?.id ? String(user.id) : guestId,
+    guestId,
+    accessToken: "",
+  };
+}
+
 // 1. Editais Analisados (editais_analisados)
 //
 // Retorna { ok } separado das linhas porque "o banco respondeu e está vazio" e
@@ -359,9 +392,7 @@ export async function fetchEditaisFromSupabase(): Promise<{ ok: boolean; rows: a
   const client = getSupabaseClient();
   if (!client || isTableMissing("editais_analisados")) return { ok: false, rows: [] };
   try {
-    const user = await getActiveUser();
-    const guestId = getGuestUserId();
-    const userId = user?.id || guestId;
+    const { userId, guestId } = await getActiveSessionContext();
 
     const { data, error } = await client
       .from("editais_analisados")
@@ -404,12 +435,12 @@ export async function saveEditalToSupabase(item: { id: string; title: string; da
     return { success: false, message: "Tabela editais_analisados ausente." };
   }
   try {
-    const user = await getActiveUser();
-    if (!user) return { success: false, message: "Usuário não autenticado." };
-    
+    const { userId } = await getActiveSessionContext();
+    if (!userId) return { success: false, message: "Usuário não autenticado." };
+
     const record = {
       id: item.id,
-      user_id: user.id,
+      user_id: userId,
       title: item.title,
       date: item.date,
       analysis: item.analysis,
@@ -435,92 +466,244 @@ export async function saveEditalToSupabase(item: { id: string; title: string; da
   }
 }
 
-// Só devolve true quando o banco confirma que a linha saiu de lá. Um DELETE que
-// não casa com nenhuma linha (RLS barrou, user_id de outro usuário, id que não
-// existe) NÃO é erro no PostgREST — antes isso passava por sucesso e o edital
-// "apagado" voltava na próxima sincronização. O `.select()` devolve as linhas
-// efetivamente removidas, que é a única confirmação confiável.
-export async function deleteEditalFromSupabase(id: string): Promise<boolean> {
-  const client = getSupabaseClient();
-  if (!client || isTableMissing("editais_analisados")) return false;
-  try {
-    const user = await getActiveUser();
-    const guestId = getGuestUserId();
-    const userId = user?.id || guestId;
+export interface EditalDeleteResult {
+  ok: boolean;
+  deletedCount: number;
+  error?: string;
+}
 
-    // 1. Tenta remover filtrando pelo id (compatível com RLS do usuário atual)
+// Dispara DELETE direto no PostgREST com keepalive: true (sobrevive a F5 imediato)
+// e confirma no banco se a linha efetivamente saiu de editais_analisados.
+export async function deleteEditalFromSupabase(id: string): Promise<EditalDeleteResult> {
+  const client = getSupabaseClient();
+  const config = getSupabaseConfig();
+  if (!client || isTableMissing("editais_analisados")) {
+    return { ok: false, deletedCount: 0, error: "Supabase não configurado." };
+  }
+
+  const strId = String(id || "").trim();
+  if (!strId) return { ok: true, deletedCount: 0 };
+
+  try {
+    const { userId, guestId, accessToken } = await getActiveSessionContext();
+    const baseUrl = config.url.replace(/\/+$/, "");
+    const headers: Record<string, string> = {
+      apikey: config.anonKey,
+      Authorization: `Bearer ${accessToken || config.anonKey}`,
+      Prefer: "return=representation",
+    };
+
+    // 1. DELETE direto via fetch com keepalive: true para não ser cancelado se o usuário recarregar a página logo em seguida
+    try {
+      const resp = await fetch(
+        `${baseUrl}/rest/v1/editais_analisados?id=eq.${encodeURIComponent(strId)}`,
+        {
+          method: "DELETE",
+          headers,
+          keepalive: true,
+        }
+      );
+      if (resp.ok) {
+        const deletedRows = await resp.json().catch(() => []);
+        if (Array.isArray(deletedRows) && deletedRows.length > 0) {
+          return { ok: true, deletedCount: deletedRows.length };
+        }
+      }
+    } catch {
+      // Fallback abaixo via Supabase JS client
+    }
+
+    // 2. Fallback via Supabase JS client filtrando pelo id
     const { data, error } = await client
       .from("editais_analisados")
       .delete()
-      .eq("id", id)
+      .eq("id", strId)
       .select("id");
 
     if (!error && Array.isArray(data) && data.length > 0) {
-      return true;
+      return { ok: true, deletedCount: data.length };
     }
 
-    // 2. Fallback explícito com user_id/guestId caso a política exija filtro explícito
-    const { data: data2, error: error2 } = await client
+    // 3. Verifica se o registro ainda existe no banco (pode já ter sido apagado antes)
+    const { data: remaining, error: checkErr } = await client
       .from("editais_analisados")
-      .delete()
-      .eq("id", id)
-      .or(`user_id.eq.${userId},user_id.eq.${guestId}`)
-      .select("id");
+      .select("id, user_id")
+      .eq("id", strId)
+      .limit(1);
 
-    if (error2) {
-      console.warn("deleteEditalFromSupabase error:", error2.message);
-      return false;
+    if (!checkErr && (!remaining || remaining.length === 0)) {
+      return { ok: true, deletedCount: 0 };
     }
-    return Array.isArray(data2) && data2.length > 0;
+
+    // 4. Se ainda existe, tenta com filtro explícito de user_id / guestId / null
+    const rowOwner = remaining?.[0]?.user_id ? String(remaining[0].user_id) : "";
+    if (rowOwner) {
+      const { data: dOwner } = await client
+        .from("editais_analisados")
+        .delete()
+        .eq("id", strId)
+        .eq("user_id", rowOwner)
+        .select("id");
+      if (Array.isArray(dOwner) && dOwner.length > 0) {
+        return { ok: true, deletedCount: dOwner.length };
+      }
+    } else {
+      const { data: dNull } = await client
+        .from("editais_analisados")
+        .delete()
+        .eq("id", strId)
+        .is("user_id", null)
+        .select("id");
+      if (Array.isArray(dNull) && dNull.length > 0) {
+        return { ok: true, deletedCount: dNull.length };
+      }
+    }
+
+    if (userId || guestId) {
+      const orClause =
+        guestId && guestId !== userId
+          ? `user_id.eq.${userId},user_id.eq.${guestId}`
+          : `user_id.eq.${userId}`;
+      const { data: data2, error: error2 } = await client
+        .from("editais_analisados")
+        .delete()
+        .eq("id", strId)
+        .or(orClause)
+        .select("id");
+
+      if (!error2 && Array.isArray(data2) && data2.length > 0) {
+        return { ok: true, deletedCount: data2.length };
+      }
+      if (error2) {
+        console.warn("deleteEditalFromSupabase error:", error2.message);
+        return { ok: false, deletedCount: 0, error: error2.message };
+      }
+    }
+
+    console.warn(
+      "deleteEditalFromSupabase: linha permaneceu em editais_analisados após DELETE (possível bloqueio de RLS):",
+      { id: strId, rowOwner, userId }
+    );
+    return {
+      ok: false,
+      deletedCount: 0,
+      error: "O banco de dados recusou a exclusão desta análise (verifique as permissões RLS da tabela editais_analisados).",
+    };
   } catch (err: any) {
     console.warn("deleteEditalFromSupabase exception:", err?.message || err);
-    return false;
+    return { ok: false, deletedCount: 0, error: err?.message || "Erro de rede ao apagar análise." };
   }
 }
 
-export async function clearAllEditaisFromSupabase(ids?: string[]): Promise<boolean> {
+export async function clearAllEditaisFromSupabase(ids?: string[]): Promise<EditalDeleteResult> {
   const client = getSupabaseClient();
-  if (!client || isTableMissing("editais_analisados")) return false;
+  const config = getSupabaseConfig();
+  if (!client || isTableMissing("editais_analisados")) {
+    return { ok: false, deletedCount: 0, error: "Supabase não configurado." };
+  }
   try {
-    const user = await getActiveUser();
-    const guestId = getGuestUserId();
-    const userId = user?.id || guestId;
+    const { userId, guestId, accessToken } = await getActiveSessionContext();
+    const baseUrl = config.url.replace(/\/+$/, "");
+    const headers: Record<string, string> = {
+      apikey: config.anonKey,
+      Authorization: `Bearer ${accessToken || config.anonKey}`,
+      Prefer: "return=representation",
+    };
 
-    if (Array.isArray(ids) && ids.length > 0) {
-      await client
-        .from("editais_analisados")
-        .delete()
-        .in("id", ids);
+    let deletedTotal = 0;
+
+    // 1. Apaga em lote pelos IDs conhecidos com keepalive: true
+    const cleanIds = Array.isArray(ids)
+      ? Array.from(new Set(ids.map((x) => String(x || "").trim()).filter(Boolean)))
+      : [];
+
+    for (let i = 0; i < cleanIds.length; i += 40) {
+      const chunk = cleanIds.slice(i, i + 40);
+      try {
+        const inFilter = chunk.map((c) => `"${c.replace(/"/g, '\\"')}"`).join(",");
+        const resp = await fetch(
+          `${baseUrl}/rest/v1/editais_analisados?id=in.(${encodeURIComponent(inFilter)})`,
+          {
+            method: "DELETE",
+            headers,
+            keepalive: true,
+          }
+        );
+        if (resp.ok) {
+          const rows = await resp.json().catch(() => []);
+          if (Array.isArray(rows)) deletedTotal += rows.length;
+        }
+      } catch {
+        const { data } = await client
+          .from("editais_analisados")
+          .delete()
+          .in("id", chunk)
+          .select("id");
+        if (Array.isArray(data)) deletedTotal += data.length;
+      }
     }
 
+    // 2. Apaga todas as linhas pertencentes ao userId atual (mesmo que não estivessem na lista local)
     if (userId) {
-      await client
-        .from("editais_analisados")
-        .delete()
-        .eq("user_id", userId);
+      try {
+        const resp = await fetch(
+          `${baseUrl}/rest/v1/editais_analisados?user_id=eq.${encodeURIComponent(userId)}`,
+          {
+            method: "DELETE",
+            headers,
+            keepalive: true,
+          }
+        );
+        if (resp.ok) {
+          const rows = await resp.json().catch(() => []);
+          if (Array.isArray(rows)) deletedTotal += rows.length;
+        }
+      } catch {
+        const { data } = await client
+          .from("editais_analisados")
+          .delete()
+          .eq("user_id", userId)
+          .select("id");
+        if (Array.isArray(data)) deletedTotal += data.length;
+      }
     }
 
+    // 3. Apaga linhas legadas do guestId, se diferente
     if (guestId && guestId !== userId) {
-      await client
+      const { data } = await client
         .from("editais_analisados")
         .delete()
-        .eq("user_id", guestId);
+        .eq("user_id", guestId)
+        .select("id");
+      if (Array.isArray(data)) deletedTotal += data.length;
     }
 
-    // Remove quaisquer linhas restantes visíveis para a sessão atual
-    const { error } = await client
-      .from("editais_analisados")
-      .delete()
-      .neq("id", "__never_match__");
+    // 4. Confirma no banco se restou alguma análise visível para este usuário
+    const check = await fetchEditaisFromSupabase();
+    if (check.ok && check.rows.length > 0) {
+      // Última tentativa individual para qualquer registro remanescente
+      const remainingIds = check.rows.map((r: any) => String(r.id)).filter(Boolean);
+      const { data: extraDel } = await client
+        .from("editais_analisados")
+        .delete()
+        .in("id", remainingIds)
+        .select("id");
+      if (Array.isArray(extraDel)) deletedTotal += extraDel.length;
 
-    if (error) {
-      console.warn("clearAllEditaisFromSupabase warning:", error.message);
-      return false;
+      const recheck = await fetchEditaisFromSupabase();
+      if (recheck.ok && recheck.rows.length > 0) {
+        return {
+          ok: false,
+          deletedCount: deletedTotal,
+          error: `Ainda restaram ${recheck.rows.length} análise(s) no banco (verifique a política RLS DELETE da tabela editais_analisados).`,
+        };
+      }
     }
-    return true;
+
+    return { ok: true, deletedCount: deletedTotal };
   } catch (err: any) {
     console.warn("clearAllEditaisFromSupabase exception:", err?.message || err);
-    return false;
+    return { ok: false, deletedCount: 0, error: err?.message || "Erro ao limpar histórico no Supabase." };
   }
 }
 
@@ -1966,10 +2149,12 @@ create policy "Acesso proprio planilhas_disputas" on public.planilhas_disputas
   for all using (auth.uid()::text = user_id::text)
   with check (auth.uid()::text = user_id::text);
 
+drop policy if exists "Usuários podem ver apenas seus próprios editais" on public.editais_analisados;
 drop policy if exists "Permitir tudo editais_analisados" on public.editais_analisados;
 drop policy if exists "Acesso proprio editais_analisados" on public.editais_analisados;
 create policy "Acesso proprio editais_analisados" on public.editais_analisados
-  for all using (auth.uid()::text = user_id::text)
+  for all
+  using (auth.uid()::text = user_id::text or user_id is null or user_id::text = '00000000-0000-0000-0000-000000000001')
   with check (auth.uid()::text = user_id::text);
 
 drop policy if exists "Permitir tudo documentos_sincronizados" on public.documentos_sincronizados;

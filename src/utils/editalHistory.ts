@@ -6,18 +6,21 @@ import {
   deleteEditalFromSupabase,
   clearAllEditaisFromSupabase,
   subscribeToSupabaseTable,
-  generateUUID
+  generateUUID,
 } from "./supabaseClient";
 
 // ═══════════════════════════════════════════════════════════════════════
 // FONTE ÚNICA DA VERDADE do histórico de editais analisados.
 //
-// Antes cada aba carregava o histórico por conta própria — umas liam só o
-// localStorage, outras o Supabase primeiro, outras liam uma única vez no
-// mount e nunca mais. O resultado era o que o usuário via: uma ferramenta
-// com editais já apagados, outra atualizada, e a aba de análise com uma
-// contagem diferente das duas. Agora todas leem deste módulo, que mantém
-// uma lista só, sincroniza com o Supabase e avisa todo mundo a cada mudança.
+// Regras fundamentais de integridade:
+// 1. O Supabase é a fonte autoritativa: itens que deixaram de existir no
+//    banco NUNCA são regravados automaticamente a partir do cache local,
+//    exceto se estiverem explicitamente na fila `pendingSyncIds` (criação
+//    ou edição cuja gravação no banco realmente falhou).
+// 2. Exclusões (individual ou "Apagar Tudo") são registradas em memória
+//    (`memoryTombstones` + `deletingIdsInFlight`) e no `localStorage`,
+//    com cache local compacto (sem `rawText` gigante) para nunca estourar
+//    a cota de 5 MB do navegador e nunca deixar registros obsoletos presos.
 // ═══════════════════════════════════════════════════════════════════════
 
 export interface EditalHistoryItem {
@@ -27,33 +30,40 @@ export interface EditalHistoryItem {
   analysis: EditalAnalysis;
 }
 
+export interface EditalHistoryActionResult {
+  ok: boolean;
+  error?: string;
+}
+
 const STORAGE_KEY = "aip_edital_history";
-// Ids apagados pelo usuário. Se o DELETE no banco falhar (RLS, id de outro
-// usuário, offline), a linha continua lá e voltaria na próxima sincronização.
-// A lápide garante que o que o usuário apagou fica apagado.
 const TOMBSTONE_KEY = "aip_edital_history_removidos";
+const PENDING_SYNC_KEY = "aip_edital_history_pendentes";
 const MAX_TOMBSTONES = 500;
 const UPDATED_EVENT = "aip_edital_history_updated";
 
-// Conjunto em memória de IDs atualmente sendo apagados para evitar que
-// eventos Realtime ou focus restaurem linhas enquanto o DELETE está em voo.
+// Proteção em RAM (funciona mesmo se localStorage estiver cheio ou indisponível)
+const memoryTombstones = new Set<string>();
 const deletingIdsInFlight = new Set<string>();
+const pendingSyncIds = new Set<string>();
 let clearAllInFlight = false;
 
 // ─────────────────────────── normalização ───────────────────────────
 
-// Aceita as três formas que já circulam pelo app (item local, linha crua do
-// banco, e o formato antigo com `analysis_data`) e devolve sempre a mesma.
 export function normalizeEditalHistoryItem(raw: any): EditalHistoryItem | null {
   if (!raw || typeof raw !== "object") return null;
 
-  const analysis = raw.analysis || raw.analysis_data || (raw.descricaoProduto || raw.identificacaoCertame ? raw : null);
+  const analysis =
+    raw.analysis ||
+    raw.analysis_data ||
+    (raw.descricaoProduto || raw.identificacaoCertame ? raw : null);
   if (!analysis) return null;
 
   const id = String(raw.id || generateUUID());
   const title =
     raw.title ||
-    (analysis.descricaoProduto ? `Análise - ${String(analysis.descricaoProduto).slice(0, 50)}...` : "") ||
+    (analysis.descricaoProduto
+      ? `Análise - ${String(analysis.descricaoProduto).slice(0, 50)}...`
+      : "") ||
     analysis.identificacaoCertame?.orgaoComprador ||
     "Análise de Edital";
   const date = raw.date || raw.updated_at || "";
@@ -74,32 +84,117 @@ function normalizeList(list: any): EditalHistoryItem[] {
   return out;
 }
 
-// ─────────────────────────── persistência local ───────────────────────────
+// ─────────────────────────── persistência local segura ───────────────────────────
 
-function readTombstones(): Set<string> {
+function readStoredIdSet(key: string): Set<string> {
   try {
-    const parsed = JSON.parse(localStorage.getItem(TOMBSTONE_KEY) || "[]");
-    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : []);
   } catch {
     return new Set();
   }
 }
 
-function writeTombstones(ids: Set<string>) {
+function writeStoredIdSet(key: string, ids: Set<string>, maxItems = MAX_TOMBSTONES) {
   try {
     const arr = [...ids];
-    const trimmed = arr.length > MAX_TOMBSTONES ? arr.slice(arr.length - MAX_TOMBSTONES) : arr;
-    localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(trimmed));
-  } catch (e) {
-    console.warn("Não foi possível gravar os editais removidos:", e);
+    const trimmed = arr.length > maxItems ? arr.slice(arr.length - maxItems) : arr;
+    localStorage.setItem(key, JSON.stringify(trimmed));
+  } catch {
+    // Se a cota estiver lotada pelo cache de editais, remove o cache obsoleto primeiro
+    // e tenta gravar o conjunto pequeno de IDs novamente.
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      const arr = [...ids];
+      const trimmed = arr.length > maxItems ? arr.slice(arr.length - maxItems) : arr;
+      localStorage.setItem(key, JSON.stringify(trimmed));
+    } catch (e) {
+      console.warn(`Não foi possível gravar ${key}:`, e);
+    }
   }
+}
+
+function getAllTombstones(): Set<string> {
+  const combined = new Set<string>(memoryTombstones);
+  for (const id of readStoredIdSet(TOMBSTONE_KEY)) {
+    combined.add(id);
+  }
+  return combined;
+}
+
+function persistTombstoneIds(ids: Iterable<string>) {
+  const combined = getAllTombstones();
+  for (const id of ids) {
+    const clean = String(id || "").trim();
+    if (!clean) continue;
+    memoryTombstones.add(clean);
+    combined.add(clean);
+  }
+  writeStoredIdSet(TOMBSTONE_KEY, combined);
+}
+
+function hydratePendingSyncIds(): Set<string> {
+  const stored = readStoredIdSet(PENDING_SYNC_KEY);
+  for (const id of stored) {
+    pendingSyncIds.add(id);
+  }
+  return pendingSyncIds;
+}
+
+function markPendingSync(id: string) {
+  const clean = String(id || "").trim();
+  if (!clean) return;
+  pendingSyncIds.add(clean);
+  writeStoredIdSet(PENDING_SYNC_KEY, pendingSyncIds);
+}
+
+function clearPendingSync(id: string) {
+  const clean = String(id || "").trim();
+  if (!clean) return;
+  pendingSyncIds.delete(clean);
+  writeStoredIdSet(PENDING_SYNC_KEY, pendingSyncIds);
+}
+
+// Remove campos gigantes (como rawText integral do PDF) antes de gravar no localStorage
+// para evitar QuotaExceededError silencioso que travava exclusões e tombstones.
+function compactItemForCache(item: EditalHistoryItem, minimal = false): EditalHistoryItem {
+  const analysis: any = item.analysis && typeof item.analysis === "object" ? { ...item.analysis } : {};
+  if (typeof analysis.rawText === "string" && analysis.rawText.length > 400) {
+    delete analysis.rawText;
+  }
+  if (minimal) {
+    return {
+      id: item.id,
+      title: item.title,
+      date: item.date,
+      analysis: {
+        descricaoProduto: analysis.descricaoProduto || "",
+        identificacaoCertame: analysis.identificacaoCertame || {},
+        viabilidadeFinanceira: analysis.viabilidadeFinanceira || {},
+        parecerFinal: analysis.parecerFinal || {},
+        itensEdital: Array.isArray(analysis.itensEdital) ? analysis.itensEdital.slice(0, 20) : [],
+        pontosPositivos: [],
+        pontosAlerta: [],
+        documentosExigidos: [],
+        prazoEntrega: analysis.prazoEntrega || "",
+        prazoPagamento: analysis.prazoPagamento || "",
+        reportMarkdown: "",
+      } as EditalAnalysis,
+    };
+  }
+  return {
+    id: item.id,
+    title: item.title,
+    date: item.date,
+    analysis: analysis as EditalAnalysis,
+  };
 }
 
 function readCache(): EditalHistoryItem[] {
   try {
-    const tombstones = readTombstones();
+    const tombstones = getAllTombstones();
     return normalizeList(JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")).filter(
-      item => !tombstones.has(item.id) && !deletingIdsInFlight.has(item.id)
+      (item) => !tombstones.has(item.id) && !deletingIdsInFlight.has(item.id)
     );
   } catch {
     return [];
@@ -107,21 +202,51 @@ function readCache(): EditalHistoryItem[] {
 }
 
 function writeCache(items: EditalHistoryItem[]) {
+  if (items.length === 0) {
+    try {
+      localStorage.setItem(STORAGE_KEY, "[]");
+    } catch {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // storage indisponível
+      }
+    }
+    return;
+  }
+
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  } catch (e) {
-    console.warn("Não foi possível gravar o histórico de editais:", e);
+    const compacted = items.map((item) => compactItemForCache(item, false));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(compacted));
+  } catch {
+    // Se exceder a cota mesmo compactado, limpa o cache antigo PRIMEIRO para
+    // garantir que itens já apagados NUNCA permaneçam no localStorage.
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      const minimal = items.slice(0, 30).map((item) => compactItemForCache(item, true));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(minimal));
+    } catch (e) {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // storage indisponível
+      }
+      console.warn("Não foi possível gravar o cache local de editais (mantendo apenas memória/Supabase):", e);
+    }
   }
 }
 
 // ─────────────────────────── store ───────────────────────────
 
+hydratePendingSyncIds();
 let snapshot: EditalHistoryItem[] = readCache();
 const listeners = new Set<() => void>();
 
 function sameList(a: EditalHistoryItem[], b: EditalHistoryItem[]): boolean {
   if (a.length !== b.length) return false;
-  return a.every((item, i) => item.id === b[i].id && item.title === b[i].title && item.date === b[i].date);
+  return a.every(
+    (item, i) => item.id === b[i].id && item.title === b[i].title && item.date === b[i].date
+  );
 }
 
 // Só troca a referência quando o conteúdo muda de verdade — useSyncExternalStore
@@ -130,7 +255,7 @@ function commit(items: EditalHistoryItem[], { persist = true, force = false } = 
   if (!force && sameList(snapshot, items)) return;
   snapshot = items;
   if (persist) writeCache(items);
-  listeners.forEach(l => l());
+  listeners.forEach((l) => l());
   window.dispatchEvent(new Event(UPDATED_EVENT));
 }
 
@@ -162,52 +287,100 @@ export function refreshEditalHistory(): Promise<void> {
 
     // Relê as lápides após o await para incluir qualquer exclusão feita pelo
     // usuário enquanto o SELECT estava em andamento.
-    const tombstones = readTombstones();
-    const remote = normalizeList(rows).filter(
-      item => !tombstones.has(item.id) && !deletingIdsInFlight.has(item.id)
+    const tombstones = getAllTombstones();
+    const allNormalizedRemote = normalizeList(rows);
+    const remote = allNormalizedRemote.filter(
+      (item) => !tombstones.has(item.id) && !deletingIdsInFlight.has(item.id)
     );
-    const remoteIds = new Set(remote.map(i => i.id));
+    const remoteIds = new Set(remote.map((i) => i.id));
+
+    // Qualquer item que já existe no Supabase não precisa mais ficar na fila pendente
+    for (const id of remoteIds) {
+      if (pendingSyncIds.has(id)) {
+        clearPendingSync(id);
+      }
+    }
 
     // Se existem linhas no banco que já foram apagadas pelo usuário (presentes
     // em tombstones), tenta removê-las silenciosamente em background.
-    const zombieIds = normalizeList(rows)
-      .map(i => i.id)
-      .filter(id => tombstones.has(id) && !deletingIdsInFlight.has(id));
+    const zombieIds = allNormalizedRemote
+      .map((i) => i.id)
+      .filter((id) => tombstones.has(id) && !deletingIdsInFlight.has(id));
     if (zombieIds.length > 0) {
-      zombieIds.forEach(id => { deleteEditalFromSupabase(id).catch(() => {}); });
+      zombieIds.forEach((id) => {
+        deleteEditalFromSupabase(id).catch(() => {});
+      });
     }
 
-    // Itens que existem só localmente (o save no banco falhou, ou foram criados
-    // offline) são preservados e reenviados, desde que não tenham sido apagados.
+    // REGRA CRÍTICA (Fim da ressurreição automática):
+    // Somente preserva e reenvia itens que estão EXPLICITAMENTE em `pendingSyncIds`
+    // (criados/editados offline cuja gravação inicial ainda não confirmou).
+    // Se um item existia no cache mas sumiu do banco, ele foi APAGADO e NÃO deve
+    // ser regravado de volta no Supabase.
     const pendingLocal = snapshot.filter(
-      item => !remoteIds.has(item.id) && !tombstones.has(item.id) && !deletingIdsInFlight.has(item.id)
+      (item) =>
+        pendingSyncIds.has(item.id) &&
+        !remoteIds.has(item.id) &&
+        !tombstones.has(item.id) &&
+        !deletingIdsInFlight.has(item.id)
     );
-    pendingLocal.forEach(item => { saveEditalToSupabase(item).catch(() => {}); });
+    pendingLocal.forEach((item) => {
+      saveEditalToSupabase(item)
+        .then((res) => {
+          if (res?.success) clearPendingSync(item.id);
+        })
+        .catch(() => {});
+    });
 
     commit([...pendingLocal, ...remote]);
-  })().finally(() => { inFlight = null; });
+  })().finally(() => {
+    inFlight = null;
+  });
 
   return inFlight;
 }
 
-export async function addEditalToHistory(analysis: EditalAnalysis, title?: string): Promise<EditalHistoryItem> {
+export async function addEditalToHistory(
+  analysis: EditalAnalysis,
+  title?: string
+): Promise<EditalHistoryItem> {
   const item: EditalHistoryItem = {
-    // UUID em vez de Date.now(): duas análises no mesmo milissegundo geravam o
-    // mesmo id e uma sobrescrevia a outra no upsert.
     id: generateUUID(),
-    title: title || (analysis.descricaoProduto ? `Análise - ${analysis.descricaoProduto.slice(0, 50)}...` : "Análise de Edital"),
+    title:
+      title ||
+      (analysis.descricaoProduto
+        ? `Análise - ${analysis.descricaoProduto.slice(0, 50)}...`
+        : "Análise de Edital"),
     date: new Date().toLocaleString("pt-BR"),
-    analysis
+    analysis,
   };
 
-  commit([item, ...snapshot.filter(h => h.id !== item.id)], { force: true });
-  saveEditalToSupabase(item).catch(() => {});
+  // Marca como pendente até o Supabase confirmar a gravação
+  markPendingSync(item.id);
+  commit([item, ...snapshot.filter((h) => h.id !== item.id)], { force: true });
+
+  saveEditalToSupabase(item)
+    .then((res) => {
+      if (res?.success) clearPendingSync(item.id);
+    })
+    .catch(() => {});
+
   window.dispatchEvent(new CustomEvent("aip_edital_analyzed", { detail: item }));
   return item;
 }
 
-export async function updateEditalInHistory(id: string, analysis: EditalAnalysis, title?: string): Promise<EditalHistoryItem | null> {
-  const existing = snapshot.find(h => h.id === id);
+export async function updateEditalInHistory(
+  id: string,
+  analysis: EditalAnalysis,
+  title?: string
+): Promise<EditalHistoryItem | null> {
+  const strId = String(id);
+  // Nunca ressuscita um edital que o usuário já apagou
+  if (getAllTombstones().has(strId) || deletingIdsInFlight.has(strId)) {
+    return null;
+  }
+
+  const existing = snapshot.find((h) => h.id === strId);
   if (!existing) {
     return addEditalToHistory(analysis, title);
   }
@@ -216,92 +389,130 @@ export async function updateEditalInHistory(id: string, analysis: EditalAnalysis
     title: title || existing.title,
     analysis,
   };
-  commit(snapshot.map(h => (h.id === id ? updated : h)), { force: true });
-  saveEditalToSupabase(updated).catch(() => {});
+  markPendingSync(updated.id);
+  commit(
+    snapshot.map((h) => (h.id === strId ? updated : h)),
+    { force: true }
+  );
+  saveEditalToSupabase(updated)
+    .then((res) => {
+      if (res?.success) clearPendingSync(updated.id);
+    })
+    .catch(() => {});
   return updated;
 }
 
-export async function removeEditalFromHistory(id: string): Promise<void> {
-  const strId = String(id);
+export async function removeEditalFromHistory(id: string): Promise<EditalHistoryActionResult> {
+  const strId = String(id || "").trim();
+  if (!strId) return { ok: true };
+
   deletingIdsInFlight.add(strId);
+  clearPendingSync(strId);
 
-  // Grava a lápide IMEDIATAMENTE antes da chamada de rede para que nenhum
-  // evento Realtime ou focus traga o item de volta durante o DELETE.
-  const tombstones = readTombstones();
-  tombstones.add(strId);
-  writeTombstones(tombstones);
-
-  commit(snapshot.filter(item => item.id !== strId), { force: true });
+  // 1. Atualiza o cache primeiro (liberando espaço no localStorage) e grava a
+  //    lápide em memória + localStorage ANTES da chamada de rede.
+  memoryTombstones.add(strId);
+  commit(
+    snapshot.filter((item) => item.id !== strId),
+    { force: true }
+  );
+  persistTombstoneIds([strId]);
 
   try {
-    await deleteEditalFromSupabase(strId);
-  } catch {
-    // A lápide já garante que o item não voltará.
+    const result = await deleteEditalFromSupabase(strId);
+    return {
+      ok: result.ok,
+      error: result.ok ? undefined : result.error,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      error: err?.message || "Erro ao excluir a análise no banco de dados.",
+    };
   } finally {
     deletingIdsInFlight.delete(strId);
   }
 }
 
-export async function clearEditalHistory(): Promise<void> {
+export async function clearEditalHistory(): Promise<EditalHistoryActionResult> {
   const previous = snapshot;
-  const idsToClear = previous.map(item => String(item.id));
+  const idsToClear = previous.map((item) => String(item.id)).filter(Boolean);
 
   clearAllInFlight = true;
-  idsToClear.forEach(id => deletingIdsInFlight.add(id));
+  idsToClear.forEach((id) => {
+    deletingIdsInFlight.add(id);
+    memoryTombstones.add(id);
+    pendingSyncIds.delete(id);
+  });
 
-  // Registra todas as lápides IMEDIATAMENTE antes de chamar o Supabase.
-  const tombstones = readTombstones();
-  idsToClear.forEach(id => tombstones.add(id));
-  writeTombstones(tombstones);
-
+  // 1. Zera lista e cache local primeiro (liberando todo espaço do localStorage)
   commit([], { force: true });
+  writeStoredIdSet(PENDING_SYNC_KEY, pendingSyncIds);
+  persistTombstoneIds(idsToClear);
 
   try {
-    await clearAllEditaisFromSupabase(idsToClear);
-    await Promise.all(
-      idsToClear.map(id => deleteEditalFromSupabase(id).catch(() => false))
-    );
-  } catch {
-    // Lápides já gravadas localmente impedem que voltem.
+    const result = await clearAllEditaisFromSupabase(idsToClear);
+    return {
+      ok: result.ok,
+      error: result.ok ? undefined : result.error,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      error: err?.message || "Erro ao limpar análises no banco de dados.",
+    };
   } finally {
-    idsToClear.forEach(id => deletingIdsInFlight.delete(id));
+    idsToClear.forEach((id) => deletingIdsInFlight.delete(id));
     clearAllInFlight = false;
   }
 }
 
-// Logout: zera memória, cache e lápides. Sem isso o histórico do usuário
-// anterior continuaria em memória para quem entrasse em seguida.
+// Logout: zera memória, cache, fila pendente e lápides.
 export function resetEditalHistory() {
+  memoryTombstones.clear();
+  deletingIdsInFlight.clear();
+  pendingSyncIds.clear();
+  clearAllInFlight = false;
+  inFlight = null;
   try {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(TOMBSTONE_KEY);
-  } catch { /* storage indisponível */ }
-  commit([], { persist: false });
+    localStorage.removeItem(PENDING_SYNC_KEY);
+  } catch {
+    /* storage indisponível */
+  }
+  commit([], { persist: false, force: true });
 }
 
 // ─────────────────────────── ligação com a janela ───────────────────────────
 
 let wired = false;
 
-// Uma assinatura de realtime e um jogo de listeners para o app inteiro, em vez
-// de cada aba abrir os seus.
 function wireOnce() {
   if (wired) return;
   wired = true;
 
-  const resync = () => { refreshEditalHistory(); };
+  const resync = () => {
+    refreshEditalHistory();
+  };
 
   subscribeToSupabaseTable("editais_analisados", resync);
   window.addEventListener("focus", resync);
 
   // Outra aba do navegador mexeu no histórico.
   window.addEventListener("storage", (e) => {
-    if (e.key === STORAGE_KEY || e.key === TOMBSTONE_KEY) commit(readCache(), { persist: false });
+    if (e.key === STORAGE_KEY || e.key === TOMBSTONE_KEY) {
+      commit(readCache(), { persist: false });
+    }
   });
 }
 
 export function useEditalHistory(): EditalHistoryItem[] {
-  const history = useSyncExternalStore(subscribeEditalHistory, getEditalHistory, getEditalHistory);
+  const history = useSyncExternalStore(
+    subscribeEditalHistory,
+    getEditalHistory,
+    getEditalHistory
+  );
 
   useEffect(() => {
     wireOnce();
