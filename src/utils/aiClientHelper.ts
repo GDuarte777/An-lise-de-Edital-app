@@ -142,7 +142,8 @@ export function validateApiKeyFormat(apiKey: string, provider: string): string |
  * Returns a user-friendly error message for AI errors.
  */
 export function formatAiError(error: any): string {
-  const msg = (error?.message || String(error || "")).toLowerCase();
+  const original = error?.message || String(error || "Erro desconhecido.");
+  const msg = original.toLowerCase();
 
   if (
     msg.includes("401") ||
@@ -154,6 +155,29 @@ export function formatAiError(error: any): string {
     msg.includes("api key not valid")
   ) {
     return '❌ Chave de API inválida ou sem permissão. Acesse "IA & Modelos" e verifique/atualize sua chave.';
+  }
+  if (msg.includes("limit: 0") || msg.includes("limit '0'") || msg.includes('limit: "0"')) {
+    return '⚠️ O projeto do Google AI Studio onde esta chave foi criada está com cota gratuita zero (limit: 0). Crie a chave em um projeto com nível gratuito/faturamento ativo em "IA & Modelos".';
+  }
+  if (
+    msg.includes("input token") ||
+    msg.includes("token count") ||
+    msg.includes("tokens per minute") ||
+    msg.includes("inputtokenspermodelperminute") ||
+    msg.includes("inputtokensperminute") ||
+    msg.includes("tokensperminute") ||
+    msg.includes("generatecontentinputtokens") ||
+    msg.includes("exceeds the maximum number of tokens") ||
+    msg.includes("maximum context length") ||
+    msg.includes("context_length_exceeded") ||
+    msg.includes("payload size exceeds") ||
+    msg.includes("prompt is too long") ||
+    msg.includes("too many tokens") ||
+    msg.includes("limite de tokens") ||
+    msg.includes("token limit")
+  ) {
+    if (original.startsWith("⚠️")) return original;
+    return '⚠️ O documento ultrapassou o limite de tokens por requisição/minuto do modelo Gemini (mesmo com chave nova e cota disponível). Tente novamente para compactação automática ou, se o PDF for escaneado (imagem), comprima/envie apenas as páginas principais.';
   }
   if (
     msg.includes("429") ||
@@ -186,8 +210,7 @@ export function formatAiError(error: any): string {
     return '⚙️ Nenhuma chave de API configurada. Acesse "IA & Modelos" e insira sua chave.';
   }
 
-  const original = error?.message || String(error || "Erro desconhecido.");
-  return original.length < 300 ? original : "Erro ao processar a solicitação. Tente novamente.";
+  return original.length < 350 ? original : "Erro ao processar a solicitação. Tente novamente.";
 }
 
 export async function readJsonResponse(response: Response): Promise<any> {

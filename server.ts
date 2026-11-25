@@ -144,6 +144,340 @@ interface UploadSession {
   createdAt: number;
 }
 const chunkUploads = new Map<string, UploadSession>();
+const CHUNK_UPLOAD_TTL_MS = 30 * 60_000;
+
+function pruneExpiredChunkUploads(): void {
+  const now = Date.now();
+  for (const [id, session] of chunkUploads.entries()) {
+    if (now - session.createdAt > CHUNK_UPLOAD_TTL_MS) {
+      chunkUploads.delete(id);
+    }
+  }
+}
+
+export const DEFAULT_DOCUMENT_CHAR_BUDGET = Number(process.env.MAX_DOCUMENT_CHARS || 160_000);
+export const PROGRESSIVE_COMPACTION_TIERS = [85_000, 45_000, 24_000] as const;
+const MAX_INLINE_BINARY_BYTES = 15 * 1024 * 1024;
+const FILES_API_THRESHOLD_BYTES = 4 * 1024 * 1024;
+
+type NodePdfExtractor = (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
+let nodePdfExtractorPromise: Promise<NodePdfExtractor | null> | null = null;
+
+async function loadNodePdfExtractor(): Promise<NodePdfExtractor | null> {
+  if (!nodePdfExtractorPromise) {
+    nodePdfExtractorPromise = import("unpdf")
+      .then((mod: any) => {
+        const { extractText, getDocumentProxy } = mod;
+        if (typeof extractText !== "function" || typeof getDocumentProxy !== "function") {
+          throw new Error("unpdf não expõe extractText/getDocumentProxy");
+        }
+        const extractor: NodePdfExtractor = async (buffer: Buffer) => {
+          const doc = await getDocumentProxy(new Uint8Array(buffer));
+          try {
+            const { text, totalPages } = await extractText(doc, { mergePages: true });
+            return {
+              text: String(text || "").trim(),
+              numpages: Number(totalPages) || 0,
+            };
+          } finally {
+            try {
+              if (typeof doc?.destroy === "function") await doc.destroy();
+            } catch {
+              // ignore cleanup failure
+            }
+          }
+        };
+        return extractor;
+      })
+      .catch((err: any) => {
+        console.warn("[unpdf] Falha ao carregar extrator de PDF no servidor:", err?.message || err);
+        return null;
+      });
+  }
+  return nodePdfExtractorPromise;
+}
+
+export async function extractPdfTextFromBuffer(buffer: Buffer): Promise<{ text: string; numpages: number } | null> {
+  const extractor = await loadNodePdfExtractor();
+  if (!extractor) return null;
+  try {
+    return await extractor(buffer);
+  } catch (err: any) {
+    console.warn("[unpdf] Falha ao extrair texto de PDF:", err?.message || err);
+    return null;
+  }
+}
+
+const SINAIS_RELEVANCIA_EDITAL = [
+  /\bitem\s*n?[ºo°]?\s*\d+/gi,
+  /\blote\s*n?[ºo°]?\s*\d+/gi,
+  /\bquantidade\b/gi,
+  /\bunidade(?:\s+de\s+medida)?\b/gi,
+  /\bvalor\s+(?:unit[áa]rio|total|estimado|m[áa]ximo)\b/gi,
+  /\bplanilha\b/gi,
+  /r\$\s*\d/gi,
+  /termo\s+de\s+refer[êe]ncia/gi,
+  /\banexo\s+[ivx\d]+\b/gi,
+  /\bespecifica[çc][õo]es?\s+t[ée]cnicas?\b/gi,
+  /\bdescri[çc][ãa]o\s+do\s+objeto\b/gi,
+  /\bhabilita[çc][ãa]o\b/gi,
+  /\bqualifica[çc][ãa]o\s+t[ée]cnica\b/gi,
+  /\batestado\b/gi,
+  /\bprazo\s+de\s+(?:entrega|execu[çc][ãa]o|pagamento)\b/gi,
+  /\bamostra\b/gi,
+  /\bgarantia\b/gi,
+  /\bcarta\s+de\s+solidariedade\b/gi,
+  /\buasg\b/gi,
+];
+
+export function cleanExtractedDocumentText(rawText: string): string {
+  const normalized = String(rawText || "")
+    .replace(/\u0000/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\f/g, "\n");
+
+  const rawLines = normalized.split("\n").map((line) =>
+    line
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\.{5,}/g, " ... ")
+      .replace(/_{6,}/g, " ___ ")
+      .replace(/-{8,}/g, " --- ")
+      .trim()
+  );
+
+  // Count repeated short lines (typical page headers/footers repeated on every page)
+  const lineFreq = new Map<string, number>();
+  for (const line of rawLines) {
+    if (line.length >= 10 && line.length <= 140) {
+      lineFreq.set(line, (lineFreq.get(line) || 0) + 1);
+    }
+  }
+
+  const seenRepeated = new Set<string>();
+  const keptLines: string[] = [];
+
+  for (const line of rawLines) {
+    if (!line) {
+      if (keptLines.length > 0 && keptLines[keptLines.length - 1] !== "") {
+        keptLines.push("");
+      }
+      continue;
+    }
+
+    if (/^(?:p[áa]gina|p[áa]g\.?|fls?\.?)\s*\d+(?:\s*(?:de|\/)\s*\d+)?$/i.test(line)) {
+      continue;
+    }
+
+    const freq = lineFreq.get(line) || 0;
+    const looksLikeItemRow = /^(?:item|lote|\d{1,4}[\s.)\-–])/i.test(line);
+    if (freq >= 5 && !looksLikeItemRow) {
+      if (seenRepeated.has(line)) continue;
+      seenRepeated.add(line);
+    }
+
+    keptLines.push(line);
+  }
+
+  return keptLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function scoreEditalChunk(chunk: string): number {
+  let score = 0;
+  for (const pattern of SINAIS_RELEVANCIA_EDITAL) {
+    const matches = chunk.match(pattern);
+    if (matches) score += matches.length;
+  }
+  return score;
+}
+
+export function compactTextForTokenBudget(
+  text: string,
+  maxChars: number,
+  label = "Documento"
+): { text: string; compacted: boolean; originalChars: number; finalChars: number } {
+  const originalChars = String(text || "").length;
+  const cleaned = cleanExtractedDocumentText(text);
+  const safeMax = Math.max(4_000, Math.floor(maxChars));
+
+  if (cleaned.length <= safeMax) {
+    return {
+      text: cleaned,
+      compacted: cleaned.length < originalChars,
+      originalChars,
+      finalChars: cleaned.length,
+    };
+  }
+
+  const chunkSize = Math.min(6_000, Math.max(1_500, Math.floor(safeMax / 12)));
+  const chunks: string[] = [];
+  for (let i = 0; i < cleaned.length; i += chunkSize) {
+    chunks.push(cleaned.slice(i, i + chunkSize));
+  }
+
+  const budgetChunks = Math.max(3, Math.floor(safeMax / chunkSize));
+  const headCount = Math.min(chunks.length, Math.max(1, Math.floor(budgetChunks * 0.35)));
+  const tailCount = Math.min(chunks.length - headCount, Math.max(1, Math.floor(budgetChunks * 0.15)));
+
+  const selected = new Set<number>();
+  for (let i = 0; i < headCount; i++) selected.add(i);
+  for (let i = chunks.length - tailCount; i < chunks.length; i++) selected.add(i);
+
+  const candidates = chunks
+    .map((chunk, idx) => ({ idx, score: scoreEditalChunk(chunk) }))
+    .filter((c) => !selected.has(c.idx))
+    .sort((a, b) => b.score - a.score || a.idx - b.idx);
+
+  for (const cand of candidates) {
+    if (selected.size >= budgetChunks) break;
+    if (cand.score > 0) selected.add(cand.idx);
+  }
+
+  // If budget still has room, evenly sample remaining chunks
+  if (selected.size < budgetChunks) {
+    const remaining = candidates.filter((c) => !selected.has(c.idx)).sort((a, b) => a.idx - b.idx);
+    const needed = budgetChunks - selected.size;
+    if (remaining.length > 0 && needed > 0) {
+      const step = Math.max(1, Math.floor(remaining.length / needed));
+      for (let i = 0; i < remaining.length && selected.size < budgetChunks; i += step) {
+        selected.add(remaining[i].idx);
+      }
+    }
+  }
+
+  const ordered = Array.from(selected).sort((a, b) => a - b);
+  let output = "";
+  let prev = -1;
+  for (const idx of ordered) {
+    if (prev >= 0 && idx > prev + 1) {
+      output += "\n\n[... trecho intermediário omitido para respeitar o limite de tokens ...]\n\n";
+    }
+    output += chunks[idx];
+    prev = idx;
+  }
+
+  if (output.length > safeMax + 600) {
+    output =
+      output.slice(0, Math.floor(safeMax * 0.8)) +
+      "\n\n[... conteúdo resumido para respeitar o limite de tokens ...]\n\n" +
+      output.slice(-Math.floor(safeMax * 0.18));
+  }
+
+  console.log(
+    `[Token Budget] ${label}: ${originalChars} -> ${output.length} chars (teto ${safeMax}, ${ordered.length}/${chunks.length} blocos).`
+  );
+
+  return {
+    text: output,
+    compacted: true,
+    originalChars,
+    finalChars: output.length,
+  };
+}
+
+export function isTokenLimitError(err: any): boolean {
+  const msg = String(err?.message || err || "").toLowerCase();
+  if (!msg) return false;
+  if (msg.includes("limit: 0") || msg.includes("limit '0'") || msg.includes('limit: "0"')) {
+    return false;
+  }
+  return (
+    msg.includes("input token") ||
+    msg.includes("token count") ||
+    msg.includes("tokens per minute") ||
+    msg.includes("inputtokenspermodelperminute") ||
+    msg.includes("inputtokensperminute") ||
+    msg.includes("tokensperminute") ||
+    msg.includes("generatecontentinputtokens") ||
+    msg.includes("exceeds the maximum number of tokens") ||
+    msg.includes("maximum context length") ||
+    msg.includes("context_length_exceeded") ||
+    msg.includes("request payload size exceeds") ||
+    msg.includes("payload size exceeds") ||
+    msg.includes("prompt is too long") ||
+    msg.includes("too many tokens") ||
+    msg.includes("token limit") ||
+    msg.includes("max_tokens")
+  );
+}
+
+export function compactGeminiContentsForBudget(
+  formattedContents: Array<{ role: string; parts: any[] }>,
+  targetTotalChars: number
+): { contents: Array<{ role: string; parts: any[] }>; didCompact: boolean; totalCharsAfter: number } {
+  const textEntries: Array<{ msgIdx: number; partIdx: number; len: number; isPromptTail: boolean }> = [];
+  let totalChars = 0;
+
+  formattedContents.forEach((msg, msgIdx) => {
+    const parts = Array.isArray(msg.parts) ? msg.parts : [];
+    parts.forEach((p, partIdx) => {
+      if (typeof p?.text === "string" && p.text.length > 0) {
+        totalChars += p.text.length;
+        const isLastShortPrompt =
+          msgIdx === formattedContents.length - 1 && partIdx === parts.length - 1 && p.text.length < 12_000;
+        textEntries.push({ msgIdx, partIdx, len: p.text.length, isPromptTail: isLastShortPrompt });
+      }
+    });
+  });
+
+  if (totalChars <= targetTotalChars) {
+    return { contents: formattedContents, didCompact: false, totalCharsAfter: totalChars };
+  }
+
+  const fixedChars = textEntries.filter((e) => e.isPromptTail).reduce((acc, e) => acc + e.len, 0);
+  const compactable = textEntries.filter((e) => !e.isPromptTail);
+  const compactableTotal = compactable.reduce((acc, e) => acc + e.len, 0);
+
+  if (compactable.length === 0 || compactableTotal <= 6_000) {
+    // Fallback: compact every long text part if no separate attachment parts exist
+    const fallbackBudget = Math.max(8_000, Math.floor(targetTotalChars / Math.max(1, textEntries.length)));
+    let didCompact = false;
+    let totalAfter = 0;
+    const cloned = formattedContents.map((msg) => ({
+      ...msg,
+      parts: (msg.parts || []).map((p) => {
+        if (typeof p?.text === "string" && p.text.length > fallbackBudget) {
+          const res = compactTextForTokenBudget(p.text, fallbackBudget, "Prompt/Conteúdo");
+          didCompact = didCompact || res.finalChars < p.text.length;
+          totalAfter += res.text.length;
+          return { ...p, text: res.text };
+        }
+        if (typeof p?.text === "string") totalAfter += p.text.length;
+        return p;
+      }),
+    }));
+    return { contents: cloned, didCompact, totalCharsAfter: totalAfter };
+  }
+
+  const availableForCompactable = Math.max(8_000, targetTotalChars - fixedChars);
+  let didCompact = false;
+  let totalAfter = 0;
+
+  const cloned = formattedContents.map((msg, msgIdx) => ({
+    ...msg,
+    parts: (msg.parts || []).map((p, partIdx) => {
+      if (typeof p?.text !== "string") return p;
+      const entry = textEntries.find((e) => e.msgIdx === msgIdx && e.partIdx === partIdx);
+      if (!entry || entry.isPromptTail) {
+        totalAfter += p.text.length;
+        return p;
+      }
+      const share = Math.max(
+        4_000,
+        Math.floor((entry.len / Math.max(1, compactableTotal)) * availableForCompactable)
+      );
+      if (p.text.length <= share) {
+        totalAfter += p.text.length;
+        return p;
+      }
+      const res = compactTextForTokenBudget(p.text, share, `Parte ${partIdx + 1}`);
+      if (res.text.length < p.text.length) didCompact = true;
+      totalAfter += res.text.length;
+      return { ...p, text: res.text };
+    }),
+  }));
+
+  return { contents: cloned, didCompact, totalCharsAfter: totalAfter };
+}
 
 function getUserIdFromJwt(token: string): string | null {
   try {
@@ -347,6 +681,7 @@ function sanitizeServerAiText(text: string): string {
 }
 
 function resolveUploadAttachment(file: any): any {
+  pruneExpiredChunkUploads();
   if (!file || typeof file !== "object") return file;
   if (file.uploadId && chunkUploads.has(file.uploadId)) {
     const session = chunkUploads.get(file.uploadId)!;
@@ -364,7 +699,20 @@ function resolveUploadAttachment(file: any): any {
   return file;
 }
 
-function fileAttachmentToPart(rawFile: any): any | null {
+interface PreparedAttachmentPart {
+  part: any;
+  binaryBuffer?: Buffer;
+  mimeType?: string;
+  fileName?: string;
+  isScannedBinary?: boolean;
+}
+
+const UNSUPPORTED_BINARY_EXTS = [".zip", ".rar", ".7z", ".tar", ".gz", ".dwg", ".dxf", ".exe", ".bin"];
+
+async function fileAttachmentToPartAsync(
+  rawFile: any,
+  maxCharsPerDoc = DEFAULT_DOCUMENT_CHAR_BUDGET
+): Promise<PreparedAttachmentPart | null> {
   const file = resolveUploadAttachment(rawFile);
   if (!file) return null;
   const rawB64 = file.base64 || file.fileBase64 || file.data || "";
@@ -373,22 +721,47 @@ function fileAttachmentToPart(rawFile: any): any | null {
   const cleanB64 = rawB64.replace(/^data:[^;]+;base64,/, "").trim();
   if (!cleanB64) return null;
 
-  const fname = (file.name || file.fileName || "").toLowerCase();
-  let mtype = file.type || file.fileType || file.mimeType || "";
-  if (!mtype || mtype === "application/octet-stream") {
+  const originalName = String(file.name || file.fileName || "Documento");
+  const fname = originalName.toLowerCase();
+
+  if (UNSUPPORTED_BINARY_EXTS.some((ext) => fname.endsWith(ext))) {
+    return {
+      part: {
+        text: `\n[Anexo "${originalName}" ignorado automaticamente por ser arquivo compactado/binário não legível diretamente.]\n`,
+      },
+      fileName: originalName,
+    };
+  }
+
+  let mtype = String(file.type || file.fileType || file.mimeType || "").trim();
+  if (!mtype || mtype === "application/octet-stream" || mtype === "binary/octet-stream") {
     if (fname.endsWith(".pdf")) mtype = "application/pdf";
     else if (fname.endsWith(".txt") || fname.endsWith(".md") || fname.endsWith(".csv")) mtype = "text/plain";
+    else if (fname.endsWith(".json")) mtype = "application/json";
+    else if (fname.endsWith(".xml")) mtype = "application/xml";
     else if (fname.endsWith(".png")) mtype = "image/png";
     else if (fname.endsWith(".jpg") || fname.endsWith(".jpeg")) mtype = "image/jpeg";
+    else if (fname.endsWith(".webp")) mtype = "image/webp";
     else mtype = "application/pdf";
   }
 
-  if (mtype.startsWith("text/") || fname.endsWith(".txt") || fname.endsWith(".md") || fname.endsWith(".csv")) {
+  if (
+    mtype.startsWith("text/") ||
+    mtype === "application/json" ||
+    mtype === "application/xml" ||
+    fname.endsWith(".txt") ||
+    fname.endsWith(".md") ||
+    fname.endsWith(".csv")
+  ) {
     try {
       const decoded = Buffer.from(cleanB64, "base64").toString("utf-8");
       if (decoded.trim()) {
+        const compacted = compactTextForTokenBudget(decoded, maxCharsPerDoc, originalName);
         return {
-          text: `\n\n--- INÍCIO DO ANEXO (${file.name || "Documento"}) ---\n${decoded}\n--- FIM DO ANEXO ---\n\n`,
+          part: {
+            text: `\n\n--- INÍCIO DO ANEXO (${originalName}) ---\n${compacted.text}\n--- FIM DO ANEXO (${originalName}) ---\n\n`,
+          },
+          fileName: originalName,
         };
       }
     } catch {
@@ -396,12 +769,78 @@ function fileAttachmentToPart(rawFile: any): any | null {
     }
   }
 
+  // PDF files: extract textual content first so large PDFs stay well inside Gemini's TPM / token budget
+  if (mtype === "application/pdf" || fname.endsWith(".pdf")) {
+    try {
+      const buffer = Buffer.from(cleanB64, "base64");
+      const extracted = await extractPdfTextFromBuffer(buffer);
+      const cleanedText = extracted ? cleanExtractedDocumentText(extracted.text) : "";
+      const minReadableChars = extracted && extracted.numpages <= 1 ? 25 : 80;
+
+      if (extracted && cleanedText.length >= minReadableChars) {
+        const compacted = compactTextForTokenBudget(cleanedText, maxCharsPerDoc, originalName);
+        console.log(
+          `[PDF Extractor] ${originalName} (${extracted.numpages || "?"} págs): extraídos ${extracted.text.length} chars -> enviados ${compacted.finalChars} chars como texto.`
+        );
+        return {
+          part: {
+            text: `\n\n--- INÍCIO DO DOCUMENTO: ${originalName} (${extracted.numpages || "?"} páginas) ---\n${compacted.text}\n--- FIM DO DOCUMENTO: ${originalName} ---\n\n`,
+          },
+          fileName: originalName,
+        };
+      }
+
+      // Scanned / image-only PDF fallback (no selectable text layer)
+      console.log(
+        `[PDF Extractor] ${originalName} sem camada de texto legível (${cleanedText.length} chars); enviando como PDF visual (${(buffer.length / (1024 * 1024)).toFixed(1)} MB).`
+      );
+      return {
+        part: {
+          inlineData: {
+            mimeType: "application/pdf",
+            data: cleanB64,
+          },
+        },
+        binaryBuffer: buffer,
+        mimeType: "application/pdf",
+        fileName: originalName,
+        isScannedBinary: true,
+      };
+    } catch (pdfErr: any) {
+      console.warn(`[PDF Extractor] Falha ao processar ${originalName}, usando fallback visual:`, pdfErr?.message || pdfErr);
+    }
+  }
+
   return {
-    inlineData: {
-      mimeType: mtype,
-      data: cleanB64,
+    part: {
+      inlineData: {
+        mimeType: mtype,
+        data: cleanB64,
+      },
     },
+    mimeType: mtype,
+    fileName: originalName,
+    isScannedBinary: mtype === "application/pdf" || mtype.startsWith("image/"),
   };
+}
+
+async function prepareAttachmentParts(
+  rawFiles: any[],
+  totalBudgetChars = DEFAULT_DOCUMENT_CHAR_BUDGET
+): Promise<PreparedAttachmentPart[]> {
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) return [];
+  const validFiles = rawFiles.filter(Boolean);
+  const perDocBudget = Math.max(
+    20_000,
+    Math.floor(totalBudgetChars / Math.max(1, validFiles.length))
+  );
+
+  const prepared: PreparedAttachmentPart[] = [];
+  for (const f of validFiles) {
+    const item = await fileAttachmentToPartAsync(f, perDocBudget);
+    if (item) prepared.push(item);
+  }
+  return prepared;
 }
 
 function createServerGeminiClient(apiKey: string): GoogleGenAI {
@@ -520,8 +959,9 @@ async function runServerLLMCall(params: {
   systemInstruction?: string;
   jsonMode?: boolean;
   responseSchema?: any;
+  preparedAttachments?: PreparedAttachmentPart[];
 }): Promise<string> {
-  const { aiConfig, contents, systemInstruction, jsonMode, responseSchema } = params;
+  const { aiConfig, contents, systemInstruction, jsonMode, responseSchema, preparedAttachments } = params;
   const provider = aiConfig.provider || "gemini";
   const keysToTry =
     Array.isArray(aiConfig.candidateKeys) && aiConfig.candidateKeys.length > 0
@@ -536,7 +976,7 @@ async function runServerLLMCall(params: {
         : "https://api.deepseek.com/v1/chat/completions";
     const defaultModel = provider === "openai" ? "gpt-4o" : "deepseek-chat";
 
-    const textPrompt = contents
+    const rawTextPrompt = contents
       .map((c: any) => {
         if (typeof c === "string") return c;
         if (c?.text) return c.text;
@@ -548,36 +988,56 @@ async function runServerLLMCall(params: {
       .filter(Boolean)
       .join("\n\n");
 
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: aiConfig.model || defaultModel,
-        messages: [
-          ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
-          { role: "user", content: textPrompt },
-        ],
-        ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
-      }),
-    });
+    let currentTextPrompt = rawTextPrompt;
+    const budgets = [null, ...PROGRESSIVE_COMPACTION_TIERS];
 
-    if (!resp.ok) {
+    for (const budget of budgets) {
+      if (budget !== null) {
+        const compacted = compactTextForTokenBudget(currentTextPrompt, budget, "Prompt");
+        if (compacted.finalChars >= currentTextPrompt.length) break;
+        currentTextPrompt = compacted.text;
+      }
+
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: aiConfig.model || defaultModel,
+          messages: [
+            ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+            { role: "user", content: currentTextPrompt },
+          ],
+          ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+        }),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        lastVerifiedProviderKey.set(provider, apiKey);
+        return sanitizeServerAiText(data?.choices?.[0]?.message?.content || "");
+      }
+
       const errText = await resp.text();
-      throw new Error(`${provider.toUpperCase()} API Error (${resp.status}): ${errText.slice(0, 200)}`);
+      const errObj = new Error(`${provider.toUpperCase()} API Error (${resp.status}): ${errText.slice(0, 260)}`);
+      if (!isTokenLimitError(errObj)) {
+        throw errObj;
+      }
+      console.warn(`[${provider.toUpperCase()}] Limite de tokens detectado; compactando automaticamente...`);
     }
-    const data = await resp.json();
-    lastVerifiedProviderKey.set(provider, apiKey);
-    return sanitizeServerAiText(data?.choices?.[0]?.message?.content || "");
+
+    throw new Error(
+      `⚠️ O conteúdo do documento excedeu o limite de tokens do modelo ${provider.toUpperCase()} mesmo após compactação automática.`
+    );
   }
 
   const isRoleBased = contents.every((c) => c && typeof c === "object" && Array.isArray(c.parts));
-  const formattedContents = isRoleBased
+  const baseFormattedContents = isRoleBased
     ? contents.map((c) => ({
         role: c.role === "assistant" || c.role === "model" ? "model" : "user",
-        parts: c.parts,
+        parts: [...c.parts],
       }))
     : [
         {
@@ -586,83 +1046,206 @@ async function runServerLLMCall(params: {
         },
       ];
 
+  const hasScannedBinary =
+    Boolean(preparedAttachments?.some((a) => a.isScannedBinary)) ||
+    baseFormattedContents.some((m) =>
+      (m.parts || []).some((p: any) => Boolean(p?.inlineData?.data) || Boolean(p?.fileData?.fileUri))
+    );
+
   let lastError: any = null;
+  let tokenLimitExhausted = false;
 
   for (const keyToUse of keysToTry) {
     const cleanKey = (keyToUse || "").trim();
     if (!cleanKey || cleanKey.length < 10) continue;
 
     const ai = createServerGeminiClient(cleanKey);
-    const discovered = await discoverServerGeminiModels(cleanKey);
-    const modelsToTry = chooseServerGeminiChain(aiConfig.model, discovered);
+    const uploadedGeminiFiles: string[] = [];
 
-    const tried = new Set<string>();
-    const queue = [...modelsToTry];
+    // Prepare contents for this API key (using Gemini Files API for large scanned/binary PDFs > 4MB)
+    let activeContents = baseFormattedContents.map((m) => ({
+      ...m,
+      parts: [...m.parts],
+    }));
 
-    while (queue.length > 0) {
-      const modelName = queue.shift()!;
-      if (!modelName || tried.has(modelName)) continue;
-      tried.add(modelName);
-
-      try {
-        const config: any = {};
-        if (systemInstruction) config.systemInstruction = systemInstruction;
-        if (jsonMode) config.responseMimeType = "application/json";
-        if (responseSchema) config.responseSchema = responseSchema;
-
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: formattedContents,
-          ...(Object.keys(config).length > 0 ? { config } : {}),
-        });
-
-        if (response?.text) {
-          lastVerifiedProviderKey.set("gemini", cleanKey);
-          return sanitizeServerAiText(response.text);
-        }
-      } catch (err: any) {
-        lastError = err;
-        const errMsg = String(err?.message || "");
-
-        // If the API key itself is invalid (401/403 API_KEY_INVALID), move immediately to the next candidate key
-        if (
-          err?.status === 401 ||
-          err?.status === 403 ||
-          errMsg.includes("API_KEY_INVALID") ||
-          errMsg.includes("API key not valid")
-        ) {
-          break;
-        }
-
-        // Self-heal if Google's 404 error recommends a replacement model ("Please update your code to use models/<name>")
-        const suggestedMatch = errMsg.match(/use\s+models\/([a-zA-Z0-9._-]+)/i);
-        if (suggestedMatch && suggestedMatch[1]) {
-          const suggestedModel = suggestedMatch[1].trim();
-          if (!tried.has(suggestedModel)) {
-            queue.unshift(suggestedModel);
-          }
-        }
-
-        if (responseSchema && (err?.status === 400 || errMsg.includes("400"))) {
-          try {
-            const fallbackConfig: any = {};
-            if (systemInstruction) fallbackConfig.systemInstruction = systemInstruction;
-            if (jsonMode) fallbackConfig.responseMimeType = "application/json";
-            const responseNoSchema = await ai.models.generateContent({
-              model: modelName,
-              contents: formattedContents,
-              config: fallbackConfig,
-            });
-            if (responseNoSchema?.text) {
-              lastVerifiedProviderKey.set("gemini", cleanKey);
-              return sanitizeServerAiText(responseNoSchema.text);
+    try {
+      if (preparedAttachments && preparedAttachments.length > 0 && typeof ai.files?.upload === "function") {
+        for (const att of preparedAttachments) {
+          if (att.isScannedBinary && att.binaryBuffer && att.binaryBuffer.length > FILES_API_THRESHOLD_BYTES) {
+            try {
+              const mime = att.mimeType || "application/pdf";
+              const blob = new Blob([new Uint8Array(att.binaryBuffer)], { type: mime });
+              const uploaded: any = await ai.files.upload({
+                file: blob,
+                config: { mimeType: mime, displayName: att.fileName || "edital.pdf" },
+              });
+              if (uploaded?.uri) {
+                if (uploaded.name) uploadedGeminiFiles.push(uploaded.name);
+                const replacementPart = {
+                  fileData: {
+                    fileUri: uploaded.uri,
+                    mimeType: uploaded.mimeType || mime,
+                  },
+                };
+                activeContents = activeContents.map((m) => ({
+                  ...m,
+                  parts: m.parts.map((p: any) => (p === att.part ? replacementPart : p)),
+                }));
+                console.log(`[Gemini Files API] PDF escaneado "${att.fileName}" enviado via Files API (${uploaded.name}).`);
+              }
+            } catch (uploadErr: any) {
+              console.warn("[Gemini Files API] Falha no upload, seguindo com inlineData:", uploadErr?.message || uploadErr);
+              if (att.binaryBuffer.length > MAX_INLINE_BINARY_BYTES) {
+                throw new Error(
+                  `⚠️ O PDF escaneado "${att.fileName || "documento"}" (${(att.binaryBuffer.length / (1024 * 1024)).toFixed(1)} MB) não possui texto selecionável e excede o limite de envio direto. Comprima o PDF ou envie as páginas principais.`
+                );
+              }
             }
-          } catch (retryErr: any) {
-            lastError = retryErr;
           }
         }
       }
+
+      const discovered = await discoverServerGeminiModels(cleanKey);
+      const modelsToTry = chooseServerGeminiChain(aiConfig.model, discovered);
+
+      const tried = new Set<string>();
+      const queue = [...modelsToTry];
+      let compactionTierIndex = 0;
+      let nonTokenQuotaFailures = 0;
+      const MAX_QUOTA_ROTATIONS = 3;
+
+      while (queue.length > 0) {
+        const modelName = queue.shift()!;
+        if (!modelName || tried.has(modelName)) continue;
+        tried.add(modelName);
+
+        try {
+          const config: any = {};
+          if (systemInstruction) config.systemInstruction = systemInstruction;
+          if (jsonMode) config.responseMimeType = "application/json";
+          if (responseSchema) config.responseSchema = responseSchema;
+
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: activeContents,
+            ...(Object.keys(config).length > 0 ? { config } : {}),
+          });
+
+          if (response?.text) {
+            lastVerifiedProviderKey.set("gemini", cleanKey);
+            return sanitizeServerAiText(response.text);
+          }
+        } catch (err: any) {
+          lastError = err;
+          const errMsg = String(err?.message || "");
+          const errLower = errMsg.toLowerCase();
+
+          // If the API key itself is invalid (401/403 API_KEY_INVALID), move immediately to the next candidate key
+          if (
+            err?.status === 401 ||
+            err?.status === 403 ||
+            errMsg.includes("API_KEY_INVALID") ||
+            errMsg.includes("API key not valid")
+          ) {
+            break;
+          }
+
+          // Token / TPM / Payload size overflow: automatically compact text and retry the SAME model & key
+          if (isTokenLimitError(err)) {
+            let compactedAndQueued = false;
+            while (compactionTierIndex < PROGRESSIVE_COMPACTION_TIERS.length) {
+              const nextBudget = PROGRESSIVE_COMPACTION_TIERS[compactionTierIndex++];
+              const res = compactGeminiContentsForBudget(activeContents, nextBudget);
+              if (res.didCompact) {
+                console.warn(
+                  `[Gemini Token Guard] Modelo ${modelName} atingiu limite de tokens; compactando automaticamente para ~${res.totalCharsAfter} chars (teto ${nextBudget}) e reenviando...`
+                );
+                activeContents = res.contents;
+                tried.delete(modelName);
+                queue.unshift(modelName);
+                compactedAndQueued = true;
+                break;
+              }
+            }
+            if (compactedAndQueued) {
+              continue;
+            }
+            // No more text left to compact — stop immediately instead of rotating models/keys with the same oversized payload
+            tokenLimitExhausted = true;
+            break;
+          }
+
+          // Zero-quota project key (limit: 0) — move to next candidate key if any
+          if (errLower.includes("limit: 0") || errLower.includes("limit '0'") || errLower.includes('limit: "0"')) {
+            break;
+          }
+
+          // General rate-limit / RPM 429: rotate up to 3 distinct models, never spam all 8
+          if (
+            err?.status === 429 ||
+            errMsg.includes("429") ||
+            errLower.includes("resource_exhausted") ||
+            errLower.includes("quota")
+          ) {
+            nonTokenQuotaFailures++;
+            if (nonTokenQuotaFailures >= MAX_QUOTA_ROTATIONS) {
+              break;
+            }
+            continue;
+          }
+
+          // Self-heal if Google's 404 error recommends a replacement model ("Please update your code to use models/<name>")
+          const suggestedMatch = errMsg.match(/use\s+models\/([a-zA-Z0-9._-]+)/i);
+          if (suggestedMatch && suggestedMatch[1]) {
+            const suggestedModel = suggestedMatch[1].trim();
+            if (!tried.has(suggestedModel)) {
+              queue.unshift(suggestedModel);
+            }
+          }
+
+          if (responseSchema && (err?.status === 400 || errMsg.includes("400"))) {
+            try {
+              const fallbackConfig: any = {};
+              if (systemInstruction) fallbackConfig.systemInstruction = systemInstruction;
+              if (jsonMode) fallbackConfig.responseMimeType = "application/json";
+              const responseNoSchema = await ai.models.generateContent({
+                model: modelName,
+                contents: activeContents,
+                config: fallbackConfig,
+              });
+              if (responseNoSchema?.text) {
+                lastVerifiedProviderKey.set("gemini", cleanKey);
+                return sanitizeServerAiText(responseNoSchema.text);
+              }
+            } catch (retryErr: any) {
+              lastError = retryErr;
+            }
+          }
+        }
+      }
+    } finally {
+      if (uploadedGeminiFiles.length > 0 && typeof ai.files?.delete === "function") {
+        for (const fileName of uploadedGeminiFiles) {
+          ai.files.delete({ name: fileName }).catch(() => {});
+        }
+      }
     }
+
+    // Do NOT jump to stale fallback keys when the user's own key is valid and hit a token limit
+    if (tokenLimitExhausted) {
+      break;
+    }
+  }
+
+  if (tokenLimitExhausted) {
+    if (hasScannedBinary) {
+      throw new Error(
+        "⚠️ Este PDF parece ser escaneado (imagem sem texto selecionável) e ultrapassou o limite de tokens por requisição da sua conta Gemini. Comprima o arquivo, reduza a resolução ou envie apenas as páginas principais (Edital e Termo de Referência)."
+      );
+    }
+    throw new Error(
+      "⚠️ O conteúdo do edital excedeu o limite de tokens por minuto/requisição do modelo Gemini mesmo após compactação automática. Aguarde ~1 minuto e tente novamente, ou selecione outro modelo em 'IA & Modelos'."
+    );
   }
 
   const finalMsg = String(lastError?.message || "");
@@ -1018,6 +1601,7 @@ app.post("/api/user-config", async (req, res) => {
 });
 
 app.post("/api/upload-chunk/init", (req, res) => {
+  pruneExpiredChunkUploads();
   const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   chunkUploads.set(uploadId, {
     name: String(req.body?.name || "arquivo.pdf"),
@@ -1098,23 +1682,31 @@ app.post("/api/chat", async (req, res) => {
     const companyData = req.body?.companyData;
     const activeEdital = req.body?.activeEditalAnalysis;
 
-    const formattedHistory = messages.map((m: any) => {
+    const preparedChatAttachments: PreparedAttachmentPart[] = [];
+    const formattedHistory = [];
+    for (const m of messages) {
       const parts: any[] = [];
       if (m.attachment && (m.attachment.data || m.attachment.uploadId)) {
-        const part = fileAttachmentToPart({
-          name: m.attachment.name,
-          type: m.attachment.type,
-          base64: m.attachment.data,
-          uploadId: m.attachment.uploadId,
-        });
-        if (part) parts.push(part);
+        const prepared = await fileAttachmentToPartAsync(
+          {
+            name: m.attachment.name,
+            type: m.attachment.type,
+            base64: m.attachment.data,
+            uploadId: m.attachment.uploadId,
+          },
+          100_000
+        );
+        if (prepared) {
+          preparedChatAttachments.push(prepared);
+          parts.push(prepared.part);
+        }
       }
       parts.push({ text: m.content || "Analise o documento anexado." });
-      return {
+      formattedHistory.push({
         role: m.role === "assistant" ? "model" : "user",
         parts,
-      };
-    });
+      });
+    }
 
     const editalCompacto = activeEdital
       ? (() => {
@@ -1136,6 +1728,7 @@ ${editalCompacto ? `\nEdital Selecionado nesta Conversa:\n${JSON.stringify(edita
       aiConfig: serverAi,
       contents: formattedHistory,
       systemInstruction,
+      preparedAttachments: preparedChatAttachments,
     });
 
     return res.json({ reply });
@@ -1161,13 +1754,16 @@ app.post("/api/analyze-cert", async (req, res) => {
     const docName = bodyObj.docName || bodyObj.name || fileName;
 
     const parts: any[] = [];
-    const filePart = fileAttachmentToPart({
-      base64: fileBase64,
-      name: fileName,
-      type: fileType,
-      uploadId: bodyObj.uploadId,
-    });
-    if (filePart) parts.push(filePart);
+    const preparedFile = await fileAttachmentToPartAsync(
+      {
+        base64: fileBase64,
+        name: fileName,
+        type: fileType,
+        uploadId: bodyObj.uploadId,
+      },
+      80_000
+    );
+    if (preparedFile) parts.push(preparedFile.part);
 
     parts.push({
       text: `Analise esta certidão/documento empresarial ("${docName}", arquivo "${fileName}") e retorne EXCLUSIVAMENTE um JSON válido com os campos:
@@ -1194,6 +1790,7 @@ app.post("/api/analyze-cert", async (req, res) => {
       aiConfig: serverAi,
       contents: parts,
       jsonMode: true,
+      preparedAttachments: preparedFile ? [preparedFile] : [],
     });
 
     const parsed = cleanAndParseJsonServer(rawText);
@@ -1350,14 +1947,14 @@ app.post("/api/analyze-competitor", async (req, res) => {
       ...(Array.isArray(files) ? files : []),
       ...(fileBase64 ? [{ base64: fileBase64, type: fileType }] : []),
     ];
-    const parts: any[] = [];
-    for (const f of rawFiles) {
-      const p = fileAttachmentToPart(f);
-      if (p) parts.push(p);
-    }
+    const preparedFiles = await prepareAttachmentParts(rawFiles, DEFAULT_DOCUMENT_CHAR_BUDGET);
+    const parts: any[] = preparedFiles.map((p) => p.part);
+    const safeCompetitorText = competitorDocumentText
+      ? compactTextForTokenBudget(String(competitorDocumentText), 60_000, "Proposta do Concorrente").text
+      : "";
     parts.push({
       text: `Você é um Advogado Especialista em Licitações Públicas (Lei 14.133/2021). Audite a proposta/documentação do concorrente "${competitorName || "Concorrente"}" contra o Edital (${editalText || "regras gerais da Lei 14.133/2021"}). Foco: ${focusItems || "Análise Completa"}.
-${competitorDocumentText ? `\nTexto do Concorrente:\n${competitorDocumentText}` : ""}
+${safeCompetitorText ? `\nTexto do Concorrente:\n${safeCompetitorText}` : ""}
 Retorne EXCLUSIVAMENTE um JSON válido com:
 {
   "competitorName": "...",
@@ -1375,6 +1972,7 @@ Retorne EXCLUSIVAMENTE um JSON válido com:
       aiConfig: serverAi,
       contents: parts,
       jsonMode: true,
+      preparedAttachments: preparedFiles,
     });
     return res.json({ analysis: cleanAndParseJsonServer(raw) });
   } catch (err: any) {
@@ -1401,24 +1999,29 @@ app.post("/api/analyze-edital", async (req, res) => {
       ...(fileBase64 ? [{ base64: fileBase64, name: fileName, type: fileType }] : []),
     ];
 
-    const parts: any[] = [];
-    for (const f of allFiles) {
-      const p = fileAttachmentToPart(f);
-      if (p) parts.push(p);
-    }
+    const rawTextInput = String(textInput || "");
+    const textInputBudget = allFiles.length > 0 ? Math.min(40_000, Math.floor(DEFAULT_DOCUMENT_CHAR_BUDGET * 0.25)) : DEFAULT_DOCUMENT_CHAR_BUDGET;
+    const safeTextInput = rawTextInput.trim()
+      ? compactTextForTokenBudget(rawTextInput, textInputBudget, "Texto do Edital").text
+      : "";
+    const attachmentsBudget = Math.max(40_000, DEFAULT_DOCUMENT_CHAR_BUDGET - safeTextInput.length);
+
+    const preparedFiles = await prepareAttachmentParts(allFiles, attachmentsBudget);
+    const parts: any[] = preparedFiles.map((p) => p.part);
 
     parts.push({
-      text: buildEditalAnalysisPrompt(String(textInput || ""), selectedItems),
+      text: buildEditalAnalysisPrompt(safeTextInput, selectedItems),
     });
 
     const rawJson = await runServerLLMCall({
       aiConfig: serverAi,
       contents: parts,
       jsonMode: true,
+      preparedAttachments: preparedFiles,
     });
 
     const parsed = cleanAndParseJsonServer(rawJson);
-    const normalized = normalizeEditalAnalysisObject(parsed, String(textInput || ""));
+    const normalized = normalizeEditalAnalysisObject(parsed, rawTextInput);
     return res.json({ analysis: normalized });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || "Erro ao analisar o edital na IA." });
@@ -1453,7 +2056,7 @@ async function startServer() {
   });
 }
 
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && !process.env.VITEST) {
   startServer();
 }
 

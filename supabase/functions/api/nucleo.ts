@@ -80,28 +80,78 @@ async function loadPdfParse(): Promise<PdfExtractor | null> {
  * o começo (identificação, objeto, valor, habilitação) e o fim (anexos e termo de
  * referência), que é onde está o conteúdo decisivo.
  */
-export const MAX_DOCUMENT_CHARS = Number(process.env.MAX_DOCUMENT_CHARS || 400_000);
+export const MAX_DOCUMENT_CHARS = Number(process.env.MAX_DOCUMENT_CHARS || 160_000);
+const EDGE_PROGRESSIVE_COMPACTION_TIERS = [85_000, 45_000, 24_000] as const;
 
-/**
- * Sinais de que um trecho contém a planilha de itens/lotes do edital.
- *
- * O corte anterior era cego: mantinha começo e fim e jogava fora o miolo. Só que
- * é justamente no miolo que ficam o Termo de Referência e as tabelas de itens —
- * em edital grande, a plataforma descartava exatamente a parte que precisava ler
- * e depois relatava um item só. Agora o miolo é selecionado por relevância.
- */
 export const SINAIS_DE_ITENS = [
   /\bitem\s*n?[ºo°]?\s*\d+/gi,
   /\blote\s*n?[ºo°]?\s*\d+/gi,
   /\bquantidade\b/gi,
-  /\bunidade\s+de\s+medida\b/gi,
-  /\bvalor\s+unit[áa]rio\b/gi,
+  /\bunidade(?:\s+de\s+medida)?\b/gi,
+  /\bvalor\s+(?:unit[áa]rio|total|estimado|m[áa]ximo)\b/gi,
   /\bplanilha\b/gi,
+  /r\$\s*\d/gi,
   /termo\s+de\s+refer[êe]ncia/gi,
-  /\banexo\s+[ivx]+\b/gi,
+  /\banexo\s+[ivx\d]+\b/gi,
   /\bespecifica[çc][õo]es?\s+t[ée]cnicas?\b/gi,
-  /\bdescri[çc][ãa]o\s+do\s+objeto\b/gi
+  /\bdescri[çc][ãa]o\s+do\s+objeto\b/gi,
+  /\bhabilita[çc][ãa]o\b/gi,
+  /\bqualifica[çc][ãa]o\s+t[ée]cnica\b/gi,
+  /\batestado\b/gi,
+  /\bprazo\s+de\s+(?:entrega|execu[çc][ãa]o|pagamento)\b/gi,
+  /\bamostra\b/gi,
+  /\bgarantia\b/gi,
 ];
+
+export function cleanExtractedDocumentText(rawText: string): string {
+  const normalized = String(rawText || "")
+    .replace(/\u0000/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\f/g, "\n");
+
+  const rawLines = normalized.split("\n").map((line) =>
+    line
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\.{5,}/g, " ... ")
+      .replace(/_{6,}/g, " ___ ")
+      .replace(/-{8,}/g, " --- ")
+      .trim()
+  );
+
+  const lineFreq = new Map<string, number>();
+  for (const line of rawLines) {
+    if (line.length >= 10 && line.length <= 140) {
+      lineFreq.set(line, (lineFreq.get(line) || 0) + 1);
+    }
+  }
+
+  const seenRepeated = new Set<string>();
+  const keptLines: string[] = [];
+
+  for (const line of rawLines) {
+    if (!line) {
+      if (keptLines.length > 0 && keptLines[keptLines.length - 1] !== "") {
+        keptLines.push("");
+      }
+      continue;
+    }
+
+    if (/^(?:p[áa]gina|p[áa]g\.?|fls?\.?)\s*\d+(?:\s*(?:de|\/)\s*\d+)?$/i.test(line)) {
+      continue;
+    }
+
+    const freq = lineFreq.get(line) || 0;
+    const looksLikeItemRow = /^(?:item|lote|\d{1,4}[\s.)\-–])/i.test(line);
+    if (freq >= 5 && !looksLikeItemRow) {
+      if (seenRepeated.has(line)) continue;
+      seenRepeated.add(line);
+    }
+
+    keptLines.push(line);
+  }
+
+  return keptLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 export function pontuarTrecho(trecho: string): number {
   let pontos = 0;
@@ -112,34 +162,54 @@ export function pontuarTrecho(trecho: string): number {
   return pontos;
 }
 
+export function isEdgeTokenLimitError(err: any): boolean {
+  const msg = String(err?.message || err || "").toLowerCase();
+  if (!msg) return false;
+  if (msg.includes("limit: 0") || msg.includes("limit '0'") || msg.includes('limit: "0"')) {
+    return false;
+  }
+  return (
+    msg.includes("input token") ||
+    msg.includes("token count") ||
+    msg.includes("tokens per minute") ||
+    msg.includes("inputtokenspermodelperminute") ||
+    msg.includes("inputtokensperminute") ||
+    msg.includes("tokensperminute") ||
+    msg.includes("generatecontentinputtokens") ||
+    msg.includes("exceeds the maximum number of tokens") ||
+    msg.includes("maximum context length") ||
+    msg.includes("context_length_exceeded") ||
+    msg.includes("request payload size exceeds") ||
+    msg.includes("payload size exceeds") ||
+    msg.includes("prompt is too long") ||
+    msg.includes("too many tokens") ||
+    msg.includes("token limit") ||
+    msg.includes("max_tokens")
+  );
+}
+
 /**
  * Reduz um documento ao teto de caracteres preservando o que importa.
- *
- * Mantém sempre o começo (identificação, objeto, valor) e o fim (anexos), e
- * preenche o restante do orçamento com os trechos do miolo que mais parecem
- * conter itens, remontando tudo na ordem original do documento.
  */
-export function capDocumentText(text: string, label: string): string {
-  const full = String(text || "");
-  if (full.length <= MAX_DOCUMENT_CHARS) return full;
+export function capDocumentText(text: string, label: string, maxCharsOverride?: number): string {
+  const full = cleanExtractedDocumentText(text);
+  const limit = Math.max(4_000, Math.floor(maxCharsOverride || MAX_DOCUMENT_CHARS));
+  if (full.length <= limit) return full;
 
-  const TAMANHO_TRECHO = 8_000;
+  const TAMANHO_TRECHO = Math.min(6_000, Math.max(1_500, Math.floor(limit / 12)));
   const trechos: string[] = [];
   for (let i = 0; i < full.length; i += TAMANHO_TRECHO) {
     trechos.push(full.slice(i, i + TAMANHO_TRECHO));
   }
 
-  const orcamentoTrechos = Math.floor(MAX_DOCUMENT_CHARS / TAMANHO_TRECHO);
-  // Cabeça e cauda são sempre preservadas.
-  const nCabeca = Math.min(trechos.length, Math.floor(orcamentoTrechos * 0.35));
-  const nCauda = Math.min(trechos.length - nCabeca, Math.floor(orcamentoTrechos * 0.15));
+  const orcamentoTrechos = Math.max(3, Math.floor(limit / TAMANHO_TRECHO));
+  const nCabeca = Math.min(trechos.length, Math.max(1, Math.floor(orcamentoTrechos * 0.35)));
+  const nCauda = Math.min(trechos.length - nCabeca, Math.max(1, Math.floor(orcamentoTrechos * 0.15)));
 
   const selecionados = new Set<number>();
   for (let i = 0; i < nCabeca; i++) selecionados.add(i);
   for (let i = trechos.length - nCauda; i < trechos.length; i++) selecionados.add(i);
 
-  // O que sobrar do orçamento vai para os trechos do miolo com mais sinais de
-  // tabela de itens.
   const candidatos = trechos
     .map((trecho, indice) => ({ indice, pontos: pontuarTrecho(trecho) }))
     .filter(c => !selecionados.has(c.indice) && c.pontos > 0)
@@ -159,17 +229,63 @@ export function capDocumentText(text: string, label: string): string {
     if (anterior >= 0 && indice > anterior + 1) {
       const pulados = indice - anterior - 1;
       omitidos += pulados * TAMANHO_TRECHO;
-      saida += `\n\n[... trecho intermediário omitido por limite de tamanho ...]\n\n`;
+      saida += `\n\n[... trecho intermediário omitido por limite de tokens ...]\n\n`;
     }
     saida += trechos[indice];
     anterior = indice;
   }
 
   console.log(
-    `[PDF Parser] ${label}: ${full.length} caracteres excedem o teto de ${MAX_DOCUMENT_CHARS}; ` +
+    `[PDF Parser] ${label}: ${full.length} caracteres excedem o teto de ${limit}; ` +
     `mantidos ${ordenados.length}/${trechos.length} trechos (priorizando tabelas de itens), ~${omitidos} caracteres omitidos.`
   );
   return saida;
+}
+
+function compactEdgeNormalizedContents(
+  contents: any[],
+  targetChars: number
+): { contents: any[]; didCompact: boolean } {
+  const entries: Array<{ msgIdx: number; partIdx: number; len: number; isPromptTail: boolean }> = [];
+  let total = 0;
+  contents.forEach((msg, msgIdx) => {
+    const parts = Array.isArray(msg?.parts) ? msg.parts : [];
+    parts.forEach((p: any, partIdx: number) => {
+      if (typeof p?.text === "string" && p.text.length > 0) {
+        total += p.text.length;
+        const isLastShortPrompt =
+          msgIdx === contents.length - 1 && partIdx === parts.length - 1 && p.text.length < 12_000;
+        entries.push({ msgIdx, partIdx, len: p.text.length, isPromptTail: isLastShortPrompt });
+      }
+    });
+  });
+
+  if (total <= targetChars) return { contents, didCompact: false };
+
+  const fixed = entries.filter((e) => e.isPromptTail).reduce((acc, e) => acc + e.len, 0);
+  const compactable = entries.filter((e) => !e.isPromptTail);
+  const compactableTotal = compactable.reduce((acc, e) => acc + e.len, 0);
+  const available = Math.max(8_000, targetChars - fixed);
+  let didCompact = false;
+
+  const nextContents = contents.map((msg, msgIdx) => ({
+    ...msg,
+    parts: (msg.parts || []).map((p: any, partIdx: number) => {
+      if (typeof p?.text !== "string") return p;
+      const entry = entries.find((e) => e.msgIdx === msgIdx && e.partIdx === partIdx);
+      if (!entry || (compactableTotal > 6_000 && entry.isPromptTail)) return p;
+      const share =
+        compactableTotal > 6_000
+          ? Math.max(4_000, Math.floor((entry.len / Math.max(1, compactableTotal)) * available))
+          : Math.max(8_000, Math.floor(targetChars / Math.max(1, entries.length)));
+      if (p.text.length <= share) return p;
+      const compacted = capDocumentText(p.text, `Parte ${partIdx + 1}`, share);
+      if (compacted.length < p.text.length) didCompact = true;
+      return { ...p, text: compacted };
+    }),
+  }));
+
+  return { contents: nextContents, didCompact };
 }
 
 /** Extrai o texto de um PDF. Devolve "" se o extrator não estiver disponível. */
@@ -263,6 +379,9 @@ export function describeAiFailure(error: any): string {
   const raw = String(error?.message || error || "");
   const msg = raw.toLowerCase();
 
+  if (isEdgeTokenLimitError(error)) {
+    return "O conteúdo do edital excedeu o limite de tokens por requisição/minuto do modelo Gemini. Se for um PDF escaneado (imagem), tente comprimir ou enviar as páginas principais.";
+  }
   if (msg.includes("429") || msg.includes("quota") || msg.includes("resource_exhausted") || msg.includes("rate limit")) {
     return "Cota da sua chave de IA esgotada (429). Verifique os limites em https://ai.dev/rate-limit ou ative o faturamento no Google AI Studio.";
   }
@@ -1035,7 +1154,7 @@ export async function generateAiResponse(params: {
   const activeModel = configModel || model;
   console.log(`[Dynamic AI Router] Executing via user provider: ${provider} | Model: ${activeModel}`);
 
-  const normalizedContents = normalizeContents(contents);
+  let normalizedContents = normalizeContents(contents);
 
   const hasInlineData = normalizedContents.some(c =>
     c.parts && c.parts.some((p: any) => p.inlineData)
@@ -1346,6 +1465,25 @@ export async function generateAiResponse(params: {
             if (isPermissionError) {
               // Try next model or next candidate key immediately
               break;
+            }
+
+            if (isEdgeTokenLimitError(error)) {
+              let compactedForRetry = false;
+              for (const tierBudget of EDGE_PROGRESSIVE_COMPACTION_TIERS) {
+                const res = compactEdgeNormalizedContents(normalizedContents, tierBudget);
+                if (res.didCompact) {
+                  console.warn(`[Dynamic AI Router] Limite de tokens em ${geminiModelName}; compactando automaticamente para teto ${tierBudget} e repetindo...`);
+                  normalizedContents = res.contents;
+                  compactedForRetry = true;
+                  break;
+                }
+              }
+              if (compactedForRetry && attempt < maxAttempts + 2) {
+                continue;
+              }
+              throw new Error(
+                "⚠️ O conteúdo do edital excedeu o limite de tokens por requisição/minuto do modelo Gemini mesmo após compactação automática. Se for um PDF escaneado (imagem), comprima ou envie as páginas principais."
+              );
             }
 
             const isQuotaOrRateLimit = 
