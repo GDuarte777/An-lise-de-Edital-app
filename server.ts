@@ -1,28 +1,127 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { GoogleGenAI } from "@google/genai";
-import { extrairCodigoUasg, normalizarCodigoUasg } from "./src/utils/identificacaoEdital";
-import {
-  CAMPOS_SECRETOS,
-  criptografarConfiguracao,
-  derivarChaveMestra,
-  descriptografarConfiguracao,
-  descriptografarSegredo,
-  estaCriptografado,
-  mascararSegredo,
-} from "./src/utils/segredos";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SUPABASE_URL_DEFAULT = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
+const SUPABASE_URL_DEFAULT =
+  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://cghlfhndoqohmrrvppjj.supabase.co";
 const SUPABASE_ANON_KEY_DEFAULT =
-  process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  "sb_publishable_FWDd-D9L6tGwasm1-qyT1Q_c7T9m_6o";
+
+// ═══════════════════════════════════════════════════════════════════════
+// INLINED HELPERS (Zero relative local imports for Vercel Node ESM compatibility)
+// ═══════════════════════════════════════════════════════════════════════
+
+const ROTULOS_UASG =
+  "UASG|U\\.?A\\.?S\\.?G\\.?|Unidade\\s+Gestora|Unidade\\s+Compradora|Und\\.?\\s*Compradora|C[óo]digo\\s+(?:da\\s+)?Unidade|C[óo]d\\.?\\s*Unidade";
+
+function ehCodigoUasgPlausivel(valor: string | null | undefined): boolean {
+  const bruto = String(valor ?? "").trim();
+  if (!bruto || bruto.includes("/")) return false;
+  const somenteDigitos = bruto
+    .replace(new RegExp(`^\\s*(?:${ROTULOS_UASG})\\s*[:\\-]?\\s*`, "i"), "")
+    .replace(/[.\s]/g, "");
+  return /^\d{4,6}$/.test(somenteDigitos);
+}
+
+function normalizarCodigoUasg(valor: string | null | undefined): string {
+  if (!ehCodigoUasgPlausivel(valor)) return "";
+  return String(valor)
+    .trim()
+    .replace(new RegExp(`^\\s*(?:${ROTULOS_UASG})\\s*[:\\-]?\\s*`, "i"), "")
+    .replace(/[.\s]/g, "");
+}
+
+function extrairCodigoUasg(texto: string | null | undefined): string {
+  const conteudo = String(texto ?? "");
+  if (!conteudo) return "";
+  const comRotulo = conteudo.match(
+    new RegExp(`(?:${ROTULOS_UASG})\\s*(?:n[ºo°.]?\\s*)?[:\\-]?\\s*(\\d{4,6})(?!\\s*[/\\d])`, "i")
+  );
+  return comRotulo ? comRotulo[1] : "";
+}
+
+const PREFIXO_CIFRADO = "enc:v1:";
+const ALGORITMO_CIFRA = "aes-256-gcm";
+const CAMPOS_SECRETOS = ["gemini_key", "openai_key", "anthropic_key", "deepseek_key"] as const;
+
+function derivarChaveMestra(segredo: string | undefined | null): Buffer | null {
+  const bruto = String(segredo || "").trim();
+  if (!bruto) return null;
+  if (/^[0-9a-fA-F]{64}$/.test(bruto)) return Buffer.from(bruto, "hex");
+  return createHash("sha256").update(bruto, "utf-8").digest();
+}
+
+function estaCriptografado(valor: string | undefined | null): boolean {
+  return typeof valor === "string" && valor.startsWith(PREFIXO_CIFRADO);
+}
+
+function criptografarSegredo(valor: string, chaveMestra: Buffer | null): string {
+  if (!chaveMestra || !valor || estaCriptografado(valor)) return valor;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(ALGORITMO_CIFRA, chaveMestra, iv);
+  const cifrado = Buffer.concat([cipher.update(valor, "utf-8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${PREFIXO_CIFRADO}${iv.toString("base64")}:${tag.toString("base64")}:${cifrado.toString("base64")}`;
+}
+
+function descriptografarSegredo(valor: string, chaveMestra: Buffer | null): string {
+  if (!valor || !estaCriptografado(valor)) return valor || "";
+  if (!chaveMestra) return "";
+  try {
+    const partes = valor.slice(PREFIXO_CIFRADO.length).split(":");
+    if (partes.length !== 3) return "";
+    const [ivB64, tagB64, cifradoB64] = partes;
+    const decipher = createDecipheriv(ALGORITMO_CIFRA, chaveMestra, Buffer.from(ivB64, "base64"));
+    decipher.setAuthTag(Buffer.from(tagB64, "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(cifradoB64, "base64")), decipher.final()]).toString("utf-8");
+  } catch {
+    return "";
+  }
+}
+
+function mascararSegredo(valor: string | undefined | null): string {
+  const bruto = String(valor || "");
+  if (!bruto) return "";
+  if (bruto.length <= 4) return "••••";
+  return `${"•".repeat(Math.min(12, bruto.length - 4))}${bruto.slice(-4)}`;
+}
+
+function criptografarConfiguracao<T extends Record<string, any>>(config: T, chaveMestra: Buffer | null): T {
+  if (!chaveMestra) return config;
+  const saida: Record<string, any> = { ...config };
+  for (const campo of CAMPOS_SECRETOS) {
+    if (typeof saida[campo] === "string" && saida[campo]) {
+      saida[campo] = criptografarSegredo(saida[campo], chaveMestra);
+    }
+  }
+  return saida as T;
+}
+
+function descriptografarConfiguracao<T extends Record<string, any>>(config: T, chaveMestra: Buffer | null): T {
+  const saida: Record<string, any> = { ...config };
+  for (const campo of CAMPOS_SECRETOS) {
+    if (typeof saida[campo] === "string" && saida[campo]) {
+      saida[campo] = descriptografarSegredo(saida[campo], chaveMestra);
+    }
+  }
+  return saida as T;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SERVER AI ROUTER & MULTI-ACCOUNT CONFIGURATION
+// ═══════════════════════════════════════════════════════════════════════
 
 export interface ServerAiConfig {
   provider: string;
   apiKey: string;
+  candidateKeys?: string[];
   model: string;
 }
 
@@ -34,12 +133,9 @@ interface CachedModels {
 const modelDiscoveryCache = new Map<string, CachedModels>();
 const MODEL_CACHE_TTL_MS = 10 * 60_000;
 
-// In-memory cache of verified keys per user and per provider so secondary accounts
-// or encrypted-key sessions on the same server never fall back to broken legacy routes.
 const userConfigCache = new Map<string, Record<string, string>>();
 const lastVerifiedProviderKey = new Map<string, string>();
 
-// In-memory store for chunked large file uploads (> 2.2MB)
 interface UploadSession {
   name: string;
   type: string;
@@ -82,7 +178,6 @@ export function normalizeModelForRemoteEdge(provider: string, model?: string | n
   if (provider !== "gemini") return model || "";
   const clean = (model || "").trim().toLowerCase();
   if (clean.includes("pro")) return "gemini-3.1-pro-preview";
-  // "gemini-3.1-flash-lite" is accepted by VALID_GEMINI_MODELS in both b662dec2 and current
   return "gemini-3.1-flash-lite";
 }
 
@@ -100,28 +195,34 @@ function scoreGeminiModel(name: string): number {
     n.includes("computer-use") ||
     n.includes("gemma") ||
     n.startsWith("gemini-1.") ||
-    n.startsWith("gemini-2.0") ||
-    n.startsWith("gemini-2.5") ||
+    n === "gemini-2.5-flash-lite" ||
+    n.startsWith("gemini-2.5-flash-lite-") ||
     n === "gemini-flash-latest" ||
     n === "gemini-flash-lite-latest" ||
     n === "gemini-pro-latest" ||
     n.includes("-001") ||
-    n.includes("exp")
+    n.includes("exp") ||
+    n.includes("thinking")
   ) {
     return -1;
   }
   if (n === "gemini-3.5-flash-lite") return 200;
   if (n === "gemini-3.5-flash") return 195;
-  if (n === "gemini-3.1-flash-lite") return 190;
-  if (n === "gemini-3.1-flash-lite-preview") return 188;
+  if (n === "gemini-3.1-flash-lite") return 192;
+  if (n === "gemini-3.1-flash-lite-preview") return 190;
+  if (n === "gemini-3-flash-preview" || n === "gemini-3-flash") return 188;
   if (n === "gemini-3.8-flash-lite") return 186;
   if (n === "gemini-3.8-flash") return 185;
-  if (n === "gemini-4-hydrogen") return 180;
-  if (n === "gemini-3-flash-preview" || n === "gemini-3-flash") return 175;
-  if (n.includes("flash-lite")) return 170;
-  if (n.includes("flash")) return 165;
-  if (n === "gemini-3.5-pro" || n === "gemini-3.1-pro-preview" || n === "gemini-4-neon") return 150;
-  if (n.includes("pro")) return 140;
+  if (n === "gemini-4-hydrogen") return 182;
+  if (n.startsWith("gemini-3") && n.includes("flash-lite")) return 178;
+  if (n.startsWith("gemini-3") && n.includes("flash")) return 175;
+  if (n === "gemini-2.5-flash") return 140;
+  if (n === "gemini-2.0-flash") return 130;
+  if (n === "gemini-2.0-flash-lite") return 125;
+  if (n.includes("flash-lite")) return 120;
+  if (n.includes("flash")) return 115;
+  if (n === "gemini-3.5-pro" || n === "gemini-3.1-pro-preview" || n === "gemini-4-neon") return 105;
+  if (n.includes("pro")) return 95;
   return 10;
 }
 
@@ -170,31 +271,32 @@ function chooseServerGeminiChain(preferredModel: string, discovered: string[] | 
     "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3-flash-preview",
     "gemini-3.8-flash",
     "gemini-4-hydrogen",
-    "gemini-3-flash-preview",
   ];
 
   if (!discovered || discovered.length === 0) {
-    return Array.from(new Set(defaults)).slice(0, 6);
+    return Array.from(new Set(defaults)).slice(0, 8);
   }
 
   const chain: string[] = [];
   if (normPreferred && discovered.includes(normPreferred)) {
     chain.push(normPreferred);
   }
-  if (!chain.includes("gemini-3.5-flash-lite")) {
-    chain.push("gemini-3.5-flash-lite");
-  }
   for (const m of discovered) {
-    if (chain.length >= 6) break;
+    if (chain.length >= 8) break;
     if (!chain.includes(m)) chain.push(m);
   }
+  if (!chain.includes("gemini-3.5-flash-lite")) {
+    chain.unshift("gemini-3.5-flash-lite");
+  }
   for (const d of defaults) {
-    if (chain.length >= 6) break;
+    if (chain.length >= 8) break;
     if (!chain.includes(d)) chain.push(d);
   }
-  return chain;
+  return chain.slice(0, 8);
 }
 
 export function cleanAndParseJsonServer(text: string): any {
@@ -319,52 +421,38 @@ async function resolveServerAiConfig(rawAiConfig?: any, authHeader?: string): Pr
   const masterSecret = derivarChaveMestra(process.env.AI_KEYS_ENCRYPTION_KEY || "");
 
   if (estaCriptografado(rawKey)) {
-    if (masterSecret) {
-      rawKey = descriptografarSegredo(rawKey, masterSecret).trim();
-    } else {
-      rawKey = "";
-    }
+    rawKey = masterSecret ? descriptografarSegredo(rawKey, masterSecret).trim() : "";
   }
 
   const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   const userId = token ? getUserIdFromJwt(token) : null;
 
-  // 1. If we received a valid plaintext key from the client, cache it for this user & provider
+  const candidateKeys: string[] = [];
+  const addCandidateKey = (k?: string | null) => {
+    const clean = String(k || "").trim();
+    if (clean && clean.length > 10 && !estaCriptografado(clean) && !candidateKeys.includes(clean)) {
+      candidateKeys.push(clean);
+    }
+  };
+
+  // 1. Client plaintext key
   if (rawKey && rawKey.length > 10 && !estaCriptografado(rawKey)) {
-    lastVerifiedProviderKey.set(provider, rawKey);
+    addCandidateKey(rawKey);
     if (userId) {
       const existing = userConfigCache.get(userId) || {};
       existing[provider] = rawKey;
       userConfigCache.set(userId, existing);
     }
-    return {
-      provider,
-      apiKey: rawKey,
-      model:
-        provider === "gemini"
-          ? normalizeServerGeminiModel(rawAiConfig?.model)
-          : String(rawAiConfig?.model || ""),
-    };
   }
 
-  // 2. Check server in-memory cache for this authenticated user
+  // 2. Server in-memory cache for this authenticated user
   if (userId && userConfigCache.has(userId)) {
     const cachedUserKeys = userConfigCache.get(userId)!;
-    const cachedKey = cachedUserKeys[provider] || cachedUserKeys["gemini"];
-    if (cachedKey && cachedKey.length > 10) {
-      const resolvedProv = cachedUserKeys[provider] ? provider : "gemini";
-      return {
-        provider: resolvedProv,
-        apiKey: cachedKey,
-        model:
-          resolvedProv === "gemini"
-            ? normalizeServerGeminiModel(rawAiConfig?.model)
-            : String(rawAiConfig?.model || ""),
-      };
-    }
+    addCandidateKey(cachedUserKeys[provider]);
   }
 
   // 3. Query Supabase configuracoes_usuario for this authenticated user
+  let dbModel = "";
   if (token && userId) {
     try {
       const resp = await fetch(
@@ -381,90 +469,49 @@ async function resolveServerAiConfig(rawAiConfig?: any, authHeader?: string): Pr
         const rows: any[] = await resp.json();
         if (rows && rows.length > 0) {
           const row = descriptografarConfiguracao(rows[0], masterSecret);
-          const dbProvider = provider || row.active_provider || "gemini";
           const keyMap: Record<string, string> = {
             gemini: String(row.gemini_key || "").trim(),
             openai: String(row.openai_key || "").trim(),
             anthropic: String(row.anthropic_key || "").trim(),
             deepseek: String(row.deepseek_key || "").trim(),
           };
-          let dbKey = keyMap[dbProvider] || "";
-          if (!dbKey || dbKey.length < 10 || estaCriptografado(dbKey)) {
-            const altProv = Object.keys(keyMap).find(
-              (p) => keyMap[p] && keyMap[p].length > 10 && !estaCriptografado(keyMap[p])
-            );
-            if (altProv) {
-              dbKey = keyMap[altProv];
-            } else {
-              dbKey = "";
-            }
-          }
-          if (dbKey && dbKey.length > 10 && !estaCriptografado(dbKey)) {
-            lastVerifiedProviderKey.set(dbProvider, dbKey);
-            const existing = userConfigCache.get(userId) || {};
-            existing[dbProvider] = dbKey;
-            userConfigCache.set(userId, existing);
-            return {
-              provider: dbProvider,
-              apiKey: dbKey,
-              model:
-                dbProvider === "gemini"
-                  ? normalizeServerGeminiModel(rawAiConfig?.model || row.gemini_model)
-                  : String(rawAiConfig?.model || row[`${dbProvider}_model`] || ""),
-            };
-          }
+          addCandidateKey(keyMap[provider]);
+          dbModel = String(row[`${provider}_model`] || "");
         }
       }
     } catch {
-      // Fall through to environment or server cache
+      // ignore DB lookup failure
     }
   }
 
   // 4. Environment variables on the server
-  if (provider === "gemini" && process.env.GEMINI_API_KEY) {
-    return {
-      provider: "gemini",
-      apiKey: process.env.GEMINI_API_KEY.trim(),
-      model: normalizeServerGeminiModel(rawAiConfig?.model),
-    };
-  }
-  if (provider === "openai" && process.env.OPENAI_API_KEY) {
-    return {
-      provider: "openai",
-      apiKey: process.env.OPENAI_API_KEY.trim(),
-      model: String(rawAiConfig?.model || "gpt-4o"),
-    };
-  }
-  if (provider === "deepseek" && process.env.DEEPSEEK_API_KEY) {
-    return {
-      provider: "deepseek",
-      apiKey: process.env.DEEPSEEK_API_KEY.trim(),
-      model: String(rawAiConfig?.model || "deepseek-chat"),
-    };
-  }
-  if (process.env.GEMINI_API_KEY) {
-    return {
-      provider: "gemini",
-      apiKey: process.env.GEMINI_API_KEY.trim(),
-      model: normalizeServerGeminiModel(rawAiConfig?.model),
-    };
+  if (provider === "gemini") {
+    addCandidateKey(process.env.GEMINI_API_KEY);
+    addCandidateKey(process.env.VITE_GEMINI_API_KEY);
+  } else if (provider === "openai") {
+    addCandidateKey(process.env.OPENAI_API_KEY);
+  } else if (provider === "deepseek") {
+    addCandidateKey(process.env.DEEPSEEK_API_KEY);
   }
 
-  // 5. Fallback to last verified provider key on this server instance
-  const fallbackServerKey = lastVerifiedProviderKey.get(provider) || lastVerifiedProviderKey.get("gemini");
-  if (fallbackServerKey && fallbackServerKey.length > 10) {
-    const resolvedProv = lastVerifiedProviderKey.has(provider) ? provider : "gemini";
-    return {
-      provider: resolvedProv,
-      apiKey: fallbackServerKey,
-      model:
-        resolvedProv === "gemini"
-          ? normalizeServerGeminiModel(rawAiConfig?.model)
-          : String(rawAiConfig?.model || ""),
-    };
+  // 5. Last verified working key for this provider on this server instance
+  addCandidateKey(lastVerifiedProviderKey.get(provider));
+
+  if (candidateKeys.length === 0) {
+    return null;
   }
 
-  return null;
+  const chosenModel =
+    provider === "gemini"
+      ? normalizeServerGeminiModel(rawAiConfig?.model || dbModel)
+      : String(rawAiConfig?.model || dbModel || "");
+
+  return {
+    provider,
+    apiKey: candidateKeys[0],
+    candidateKeys,
+    model: chosenModel,
+  };
 }
 
 async function runServerLLMCall(params: {
@@ -476,9 +523,13 @@ async function runServerLLMCall(params: {
 }): Promise<string> {
   const { aiConfig, contents, systemInstruction, jsonMode, responseSchema } = params;
   const provider = aiConfig.provider || "gemini";
-  const apiKey = (aiConfig.apiKey || "").trim();
+  const keysToTry =
+    Array.isArray(aiConfig.candidateKeys) && aiConfig.candidateKeys.length > 0
+      ? aiConfig.candidateKeys
+      : [aiConfig.apiKey].filter(Boolean);
 
   if (provider === "openai" || provider === "deepseek") {
+    const apiKey = (keysToTry[0] || "").trim();
     const endpoint =
       provider === "openai"
         ? "https://api.openai.com/v1/chat/completions"
@@ -518,13 +569,9 @@ async function runServerLLMCall(params: {
       throw new Error(`${provider.toUpperCase()} API Error (${resp.status}): ${errText.slice(0, 200)}`);
     }
     const data = await resp.json();
+    lastVerifiedProviderKey.set(provider, apiKey);
     return sanitizeServerAiText(data?.choices?.[0]?.message?.content || "");
   }
-
-  // Server-side Gemini call via @google/genai SDK with User-Agent: 'aistudio-build'
-  const ai = createServerGeminiClient(apiKey);
-  const discovered = await discoverServerGeminiModels(apiKey);
-  const modelsToTry = chooseServerGeminiChain(aiConfig.model, discovered);
 
   const isRoleBased = contents.every((c) => c && typeof c === "object" && Array.isArray(c.parts));
   const formattedContents = isRoleBased
@@ -540,59 +587,89 @@ async function runServerLLMCall(params: {
       ];
 
   let lastError: any = null;
-  const tried = new Set<string>();
-  const queue = [...modelsToTry];
 
-  while (queue.length > 0) {
-    const modelName = queue.shift()!;
-    if (!modelName || tried.has(modelName)) continue;
-    tried.add(modelName);
+  for (const keyToUse of keysToTry) {
+    const cleanKey = (keyToUse || "").trim();
+    if (!cleanKey || cleanKey.length < 10) continue;
 
-    try {
-      const config: any = {};
-      if (systemInstruction) config.systemInstruction = systemInstruction;
-      if (jsonMode) config.responseMimeType = "application/json";
-      if (responseSchema) config.responseSchema = responseSchema;
+    const ai = createServerGeminiClient(cleanKey);
+    const discovered = await discoverServerGeminiModels(cleanKey);
+    const modelsToTry = chooseServerGeminiChain(aiConfig.model, discovered);
 
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: formattedContents,
-        ...(Object.keys(config).length > 0 ? { config } : {}),
-      });
+    const tried = new Set<string>();
+    const queue = [...modelsToTry];
 
-      if (response?.text) {
-        return sanitizeServerAiText(response.text);
-      }
-    } catch (err: any) {
-      lastError = err;
-      const errMsg = String(err?.message || "");
-      // Self-heal if Google's 404 error recommends a replacement model ("Please update your code to use models/<name>")
-      const suggestedMatch = errMsg.match(/use\s+models\/([a-zA-Z0-9._-]+)/i);
-      if (suggestedMatch && suggestedMatch[1]) {
-        const suggestedModel = suggestedMatch[1].trim();
-        if (!tried.has(suggestedModel)) {
-          queue.unshift(suggestedModel);
+    while (queue.length > 0) {
+      const modelName = queue.shift()!;
+      if (!modelName || tried.has(modelName)) continue;
+      tried.add(modelName);
+
+      try {
+        const config: any = {};
+        if (systemInstruction) config.systemInstruction = systemInstruction;
+        if (jsonMode) config.responseMimeType = "application/json";
+        if (responseSchema) config.responseSchema = responseSchema;
+
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: formattedContents,
+          ...(Object.keys(config).length > 0 ? { config } : {}),
+        });
+
+        if (response?.text) {
+          lastVerifiedProviderKey.set("gemini", cleanKey);
+          return sanitizeServerAiText(response.text);
         }
-      }
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = String(err?.message || "");
 
-      if (responseSchema && (err?.status === 400 || errMsg.includes("400"))) {
-        try {
-          const fallbackConfig: any = {};
-          if (systemInstruction) fallbackConfig.systemInstruction = systemInstruction;
-          if (jsonMode) fallbackConfig.responseMimeType = "application/json";
-          const responseNoSchema = await ai.models.generateContent({
-            model: modelName,
-            contents: formattedContents,
-            config: fallbackConfig,
-          });
-          if (responseNoSchema?.text) {
-            return sanitizeServerAiText(responseNoSchema.text);
+        // If the API key itself is invalid (401/403 API_KEY_INVALID), move immediately to the next candidate key
+        if (
+          err?.status === 401 ||
+          err?.status === 403 ||
+          errMsg.includes("API_KEY_INVALID") ||
+          errMsg.includes("API key not valid")
+        ) {
+          break;
+        }
+
+        // Self-heal if Google's 404 error recommends a replacement model ("Please update your code to use models/<name>")
+        const suggestedMatch = errMsg.match(/use\s+models\/([a-zA-Z0-9._-]+)/i);
+        if (suggestedMatch && suggestedMatch[1]) {
+          const suggestedModel = suggestedMatch[1].trim();
+          if (!tried.has(suggestedModel)) {
+            queue.unshift(suggestedModel);
           }
-        } catch (retryErr: any) {
-          lastError = retryErr;
+        }
+
+        if (responseSchema && (err?.status === 400 || errMsg.includes("400"))) {
+          try {
+            const fallbackConfig: any = {};
+            if (systemInstruction) fallbackConfig.systemInstruction = systemInstruction;
+            if (jsonMode) fallbackConfig.responseMimeType = "application/json";
+            const responseNoSchema = await ai.models.generateContent({
+              model: modelName,
+              contents: formattedContents,
+              config: fallbackConfig,
+            });
+            if (responseNoSchema?.text) {
+              lastVerifiedProviderKey.set("gemini", cleanKey);
+              return sanitizeServerAiText(responseNoSchema.text);
+            }
+          } catch (retryErr: any) {
+            lastError = retryErr;
+          }
         }
       }
     }
+  }
+
+  const finalMsg = String(lastError?.message || "");
+  if (finalMsg.includes("limit: 0") || finalMsg.includes("limit '0'") || finalMsg.includes('limit: "0"')) {
+    throw new Error(
+      "O projeto do Google AI Studio onde esta chave foi criada está com cota gratuita zero (limit: 0). Use a mesma chave de API que funcionou na sua conta principal ou crie a chave em um projeto com nível gratuito/faturamento ativo no Google AI Studio."
+    );
   }
 
   throw lastError || new Error("Falha ao comunicar com a API do Gemini no servidor.");
@@ -839,69 +916,6 @@ async function forwardToSupabaseEdge(req: express.Request, res: express.Response
     }
 
     const edgeResp = await fetch(targetUrl, fetchOpts);
-
-    if (req.path === "/api/analyze-edital" && edgeResp.ok) {
-      const cloned = edgeResp.clone();
-      const jsonData = await cloned.json().catch(() => null);
-      if (jsonData?.degraded) {
-        try {
-          const allFiles = [
-            ...(Array.isArray(bodyObj.attachments) ? bodyObj.attachments : []),
-            ...(Array.isArray(bodyObj.attachedFiles) ? bodyObj.attachedFiles : []),
-            ...(Array.isArray(bodyObj.files) ? bodyObj.files : []),
-            ...(bodyObj.fileBase64
-              ? [{ base64: bodyObj.fileBase64, name: bodyObj.fileName, type: bodyObj.fileType }]
-              : []),
-          ].map(resolveUploadAttachment);
-
-          const firstFileWithB64 = allFiles.find((f: any) => f && (f.base64 || f.fileBase64 || f.data));
-          const prompt = buildEditalAnalysisPrompt(String(bodyObj.textInput || ""), bodyObj.selectedItems);
-
-          const chatMessages: any[] = [
-            {
-              role: "user",
-              content: prompt,
-              ...(firstFileWithB64
-                ? {
-                    attachment: {
-                      name: firstFileWithB64.name || firstFileWithB64.fileName || "edital.pdf",
-                      type: firstFileWithB64.type || firstFileWithB64.fileType || "application/pdf",
-                      data: firstFileWithB64.base64 || firstFileWithB64.fileBase64 || firstFileWithB64.data,
-                    },
-                  }
-                : {}),
-            },
-          ];
-
-          const chatUrl = `${SUPABASE_URL_DEFAULT.replace(/\/+$/, "")}/functions/v1/api/chat`;
-          const chatResp = await fetch(chatUrl, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-              messages: chatMessages,
-              aiConfig: bodyObj.aiConfig,
-            }),
-          });
-
-          if (chatResp.ok) {
-            const chatJson = await chatResp.json().catch(() => null);
-            if (chatJson?.reply && !chatJson?.degraded) {
-              const parsed = cleanAndParseJsonServer(chatJson.reply);
-              if (parsed && Object.keys(parsed).length > 2) {
-                const normalized = normalizeEditalAnalysisObject(parsed, String(bodyObj.textInput || ""));
-                if (jsonData.analysis?.dadosOficiaisPNCP) {
-                  normalized.dadosOficiaisPNCP = jsonData.analysis.dadosOficiaisPNCP;
-                }
-                return res.status(200).json({ analysis: normalized });
-              }
-            }
-          }
-        } catch (recoverErr) {
-          console.warn("[server] Falha na recuperação de analyze-edital via /api/chat:", recoverErr);
-        }
-      }
-    }
-
     const contentType = edgeResp.headers.get("content-type") || "application/json";
     res.status(edgeResp.status).setHeader("Content-Type", contentType);
     const buffer = Buffer.from(await edgeResp.arrayBuffer());
@@ -920,7 +934,7 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
-    runtime: "node-express",
+    runtime: process.env.VERCEL ? "vercel-serverless-node" : "node-express",
     chavesIaCriptografadas: Boolean(process.env.AI_KEYS_ENCRYPTION_KEY),
   });
 });
@@ -957,7 +971,6 @@ app.post("/api/user-config", async (req, res) => {
       if (corpo[campo] !== undefined) linha[campo] = corpo[campo];
     }
 
-    // Cache any valid plaintext keys on the server for immediate multi-account use
     const userCached = userConfigCache.get(userId) || {};
     const providerKeyMap: Array<[string, string]> = [
       ["gemini", String(linha.gemini_key || "").trim()],
@@ -1031,7 +1044,10 @@ app.post("/api/upload-chunk", (req, res) => {
 const handleAiStatus = async (req: express.Request, res: express.Response) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.json({
+      configured: false,
+      message: "Nenhuma chave de API configurada. Acesse 'IA & Modelos' e salve sua chave.",
+    });
   }
 
   if (serverAi.provider === "gemini") {
@@ -1072,7 +1088,9 @@ app.post("/api/chat/title", (req, res) => {
 app.post("/api/chat", async (req, res) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.status(400).json({
+      error: "Chave de API não configurada. Insira sua chave em 'IA & Modelos' e clique em 'Salvar Configurações'.",
+    });
   }
 
   try {
@@ -1130,7 +1148,9 @@ ${editalCompacto ? `\nEdital Selecionado nesta Conversa:\n${JSON.stringify(edita
 app.post("/api/analyze-cert", async (req, res) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.status(400).json({
+      error: "Chave de API não configurada. Insira sua chave em 'IA & Modelos' e clique em 'Salvar Configurações'.",
+    });
   }
 
   try {
@@ -1187,7 +1207,9 @@ app.post("/api/analyze-cert", async (req, res) => {
 app.post("/api/generate-cert-description", async (req, res) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.status(400).json({
+      error: "Chave de API não configurada. Insira sua chave em 'IA & Modelos' e clique em 'Salvar Configurações'.",
+    });
   }
 
   try {
@@ -1210,7 +1232,9 @@ app.post("/api/generate-cert-description", async (req, res) => {
 app.post("/api/generate-document", async (req, res) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.status(400).json({
+      error: "Chave de API não configurada. Insira sua chave em 'IA & Modelos' e clique em 'Salvar Configurações'.",
+    });
   }
 
   try {
@@ -1267,7 +1291,9 @@ Finalize com assinatura formal de 3 linhas. Retorne apenas o documento em Markdo
 app.post("/api/compare-products", async (req, res) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.status(400).json({
+      error: "Chave de API não configurada. Insira sua chave em 'IA & Modelos' e clique em 'Salvar Configurações'.",
+    });
   }
 
   try {
@@ -1312,7 +1338,9 @@ Retorne EXCLUSIVAMENTE um JSON válido no formato:
 app.post("/api/analyze-competitor", async (req, res) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.status(400).json({
+      error: "Chave de API não configurada. Insira sua chave em 'IA & Modelos' e clique em 'Salvar Configurações'.",
+    });
   }
 
   try {
@@ -1358,7 +1386,9 @@ Retorne EXCLUSIVAMENTE um JSON válido com:
 app.post("/api/analyze-edital", async (req, res) => {
   const serverAi = await resolveServerAiConfig(req.body?.aiConfig, req.headers.authorization);
   if (!serverAi) {
-    return forwardToSupabaseEdge(req, res);
+    return res.status(400).json({
+      error: "Chave de API não configurada. Insira sua chave em 'IA & Modelos' e clique em 'Salvar Configurações'.",
+    });
   }
 
   try {

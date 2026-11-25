@@ -2694,7 +2694,9 @@ ${editalCompacto ? JSON.stringify(editalCompacto, null, 2) : "Nenhum edital sele
 ${acervo.leu ? acervo.texto : "Não foi possível ler o acervo nesta requisição. Se o usuário perguntar o que existe na plataforma, diga que não conseguiu consultar agora — não responda de memória nem suponha."}
 `;
 
-      const tools = ferramentasDeBusca();
+      const ultimaMsg = String(messages[messages.length - 1]?.content || "");
+      const ehTesteConexao = /ia funcionando/i.test(ultimaMsg) && messages.length <= 2;
+      const tools = ehTesteConexao ? undefined : ferramentasDeBusca();
       console.log(`Chamando Gemini API Chat | busca web: ${tools ? "ativa" : "desligada"}`);
       // Conversa não é análise de edital: o orçamento de 60 s existe para ler um
       // documento de 180 páginas, e aplicá-lo ao chat só garantiu que o usuário

@@ -229,20 +229,31 @@ export default function AiConfigTab() {
     setDiagnosticando(true);
     setDiagnostico(null);
     try {
-      localStorage.setItem("ai_active_provider", activeProvider);
-      localStorage.setItem(`ai_${activeProvider}_key`, valorParaGravar(
+      const currentKey = valorParaGravar(
         activeProvider === "gemini" ? geminiKey :
         activeProvider === "openai" ? openaiKey :
         activeProvider === "anthropic" ? anthropicKey : deepseekKey,
         activeProvider
-      ));
-      localStorage.setItem(`ai_${activeProvider}_model`,
-        activeProvider === "gemini" ? geminiModel :
-        activeProvider === "openai" ? openaiModel :
-        activeProvider === "anthropic" ? anthropicModel : deepseekModel
       );
+      const currentModel =
+        activeProvider === "gemini" ? normalizarModeloGeminiSalvo(geminiModel) :
+        activeProvider === "openai" ? openaiModel :
+        activeProvider === "anthropic" ? anthropicModel : deepseekModel;
 
-      const response = await apiFetch("/api/ai-status", { method: "POST", body: {} });
+      localStorage.setItem("ai_active_provider", activeProvider);
+      localStorage.setItem(`ai_${activeProvider}_key`, currentKey);
+      localStorage.setItem(`ai_${activeProvider}_model`, currentModel);
+
+      const response = await apiFetch("/api/ai-status", {
+        method: "POST",
+        body: {
+          aiConfig: {
+            provider: activeProvider,
+            apiKey: currentKey,
+            model: currentModel,
+          },
+        },
+      });
       const data = await readJsonResponseSafe(response);
       setDiagnostico(data);
     } catch (err: any) {
@@ -256,24 +267,30 @@ export default function AiConfigTab() {
     setTesting(true);
     setTestResult(null);
     try {
-      // First save to localStorage
-      localStorage.setItem("ai_active_provider", activeProvider);
-      localStorage.setItem(`ai_${activeProvider}_key`, valorParaGravar(
+      const currentKey = valorParaGravar(
         activeProvider === "gemini" ? geminiKey :
         activeProvider === "openai" ? openaiKey :
         activeProvider === "anthropic" ? anthropicKey : deepseekKey,
         activeProvider
-      ));
-      localStorage.setItem(`ai_${activeProvider}_model`,
-        activeProvider === "gemini" ? geminiModel :
-        activeProvider === "openai" ? openaiModel :
-        activeProvider === "anthropic" ? anthropicModel : deepseekModel
       );
+      const currentModel =
+        activeProvider === "gemini" ? normalizarModeloGeminiSalvo(geminiModel) :
+        activeProvider === "openai" ? openaiModel :
+        activeProvider === "anthropic" ? anthropicModel : deepseekModel;
+
+      localStorage.setItem("ai_active_provider", activeProvider);
+      localStorage.setItem(`ai_${activeProvider}_key`, currentKey);
+      localStorage.setItem(`ai_${activeProvider}_model`, currentModel);
 
       const response = await apiFetch("/api/chat", {
         method: "POST",
         body: {
-          messages: [{ role: "user", content: "Responda apenas: 'IA funcionando!' em português." }]
+          messages: [{ role: "user", content: "Responda apenas: 'IA funcionando!' em português." }],
+          aiConfig: {
+            provider: activeProvider,
+            apiKey: currentKey,
+            model: currentModel,
+          },
         }
       });
 

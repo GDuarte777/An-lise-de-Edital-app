@@ -1186,46 +1186,25 @@ export async function generateAiResponse(params: {
     const uniqueModels = getFallbackModels(primaryModel);
     
     let lastError: any = null;
-    // Quando vários modelos DIFERENTES respondem 503 seguidos, a indisponibilidade é do
-    // serviço, não do modelo — continuar rotacionando só reenvia o documento à toa.
-    let modelsDownInARow = 0;
     const MAX_MODELS_DOWN_IN_A_ROW = 3;
+    const MAX_MODELS_OUT_OF_QUOTA = 5;
     let budgetExhausted = false;
-
-    /**
-     * Desiste da rotação quando a COTA da chave acabou, não só quando o modelo caiu.
-     *
-     * A cota diária do plano gratuito é por modelo, então o primeiro 429 pode ser
-     * só daquele modelo e vale tentar outro. Quando o SEGUNDO modelo diferente
-     * também responde 429, não é mais o modelo: é a chave que está no fim do dia,
-     * e os outros quatro da cadeia vão responder igual.
-     *
-     * Sem este freio, uma resposta definitiva que o Google dá em 270 ms custava os
-     * 60 s inteiros do orçamento — seis modelos, duas tentativas cada, mais a
-     * repetição sem ferramentas — para terminar no mesmo lugar. O usuário esperava
-     * um minuto para ler "cota esgotada".
-     */
+    let modelsDownInARow = 0;
     let modelsOutOfQuota = 0;
-    const MAX_MODELS_OUT_OF_QUOTA = 2;
     let quotaExhausted = false;
-
-    // Chamadas efetivamente disparadas ao Google nesta requisição. É este número,
-    // e não o de modelos tentados, que conta contra o limite de 5 por minuto.
     let chamadasAoProvedor = 0;
     let tetoDeChamadasAtingido = false;
-
-    /**
-     * A busca no Google (grounding) tem cota PRÓPRIA e é a primeira a esgotar.
-     *
-     * O desligamento das ferramentas valia só para o modelo da vez, então a cada
-     * um dos seis modelos a chamada era refeita com busca ativa, tomava 429 da
-     * cota de grounding e só então repetia sem ela: seis idas e voltas perdidas
-     * por requisição. Uma vez que a busca recusou, ela está recusada para esta
-     * requisição inteira.
-     */
     let toolsBannedForRequest = false;
 
     for (const keyToUse of candidateKeys) {
+      // Reinicia contadores a cada chave candidata para que a chave de reserva do servidor
+      // seja de fato tentada caso a chave primária encontre erro 429 (limit: 0) ou 404.
+      modelsDownInARow = 0;
+      modelsOutOfQuota = 0;
+      quotaExhausted = false;
+      chamadasAoProvedor = 0;
+      tetoDeChamadasAtingido = false;
+
       const customClient = new GoogleGenAI({
         apiKey: keyToUse,
         httpOptions: {
