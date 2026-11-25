@@ -381,8 +381,18 @@ export function chaveContratacao(item: any): string {
 export function parseNumeroControlePNCP(
   numeroOuUrl: string,
 ): { cnpj: string; ano: string; sequencial: string } | null {
-  const texto = String(numeroOuUrl || "").trim();
-  if (!texto) return null;
+  const textoBruto = String(numeroOuUrl || "").trim();
+  if (!textoBruto) return null;
+
+  // Normaliza eventuais CNPJs formatados (00.394.460/0001-41 -> 00394460000141)
+  // preservando as barras que separam CNPJ/ANO/SEQUENCIAL na URL ou no ID.
+  let texto = textoBruto;
+  try {
+    texto = decodeURIComponent(texto);
+  } catch {
+    // mantém texto original caso contenha '%' literal
+  }
+  texto = texto.replace(/(\d{2})\.(\d{3})\.(\d{3})\/(\d{4})-(\d{2})/g, "$1$2$3$4$5");
 
   // 1. Formato Número de Controle PNCP: 79151312000156-1-000501/2026 ou 79151312000156-1-000501-2026
   const mControle = texto.match(/(\d{14})-\d+-(\d+)[/-](\d{4})/);
@@ -390,7 +400,7 @@ export function parseNumeroControlePNCP(
     return { cnpj: mControle[1], sequencial: String(parseInt(mControle[2], 10)), ano: mControle[3] };
   }
 
-  // 2. URL do Portal PNCP (/app/editais/CNPJ/ANO/SEQ ou /compras/CNPJ/ANO/SEQ ou /orgaos/CNPJ/compras/ANO/SEQ)
+  // 2. URL do Portal PNCP (/app/editais/CNPJ/ANO/SEQ, /compras/CNPJ/ANO/SEQ ou /orgaos/CNPJ/compras/ANO/SEQ)
   const mUrl =
     texto.match(/pncp\.gov\.br\/(?:app\/)?(?:editais|compras)\/(\d{14})\/(\d{4})\/(\d{1,8})/i) ||
     texto.match(/orgaos\/(\d{14})\/compras\/(\d{4})\/(\d{1,8})/i);
@@ -406,6 +416,89 @@ export function parseNumeroControlePNCP(
 
   return null;
 }
+
+const EXTENSOES_NAO_SUPORTADAS_IA = new Set([
+  ".zip",
+  ".rar",
+  ".7z",
+  ".tar",
+  ".gz",
+  ".xls",
+  ".xlsx",
+  ".xlsm",
+  ".xlsb",
+  ".ods",
+  ".doc",
+  ".docx",
+  ".odt",
+  ".rtf",
+  ".ppt",
+  ".pptx",
+  ".odp",
+  ".dwg",
+  ".dxf",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".bmp",
+  ".webp",
+  ".tif",
+  ".tiff",
+  ".svg",
+  ".p7s",
+  ".p7m",
+  ".xml",
+]);
+
+export interface ClassificacaoFormatoDocumentoPncp {
+  suportado: boolean;
+  ehPdf: boolean;
+  extensao?: string;
+  motivoNaoSuportado?: string;
+}
+
+/**
+ * Classifica previamente o formato de um anexo do PNCP a partir do título/URI
+ * antes de iniciar o download, permitindo alertar o usuário sobre arquivos
+ * que não são PDF/TXT (como ZIP, planilhas Excel, Word ou imagens).
+ */
+export function classificarFormatoDocumentoPncp(arq: {
+  titulo?: string;
+  tipo?: string;
+  uri?: string;
+}): ClassificacaoFormatoDocumentoPncp {
+  const titulo = String(arq?.titulo || "").trim();
+  const uriPath = String(arq?.uri || "").split("?")[0].trim();
+
+  const extrairExt = (valor: string): string | undefined => {
+    const m = valor.match(/(\.[a-z0-9]{2,5})$/i);
+    return m ? m[1].toLowerCase() : undefined;
+  };
+
+  const ext = extrairExt(titulo) || extrairExt(uriPath);
+
+  if (ext === ".pdf") {
+    return { suportado: true, ehPdf: true, extensao: ".pdf" };
+  }
+  if (ext === ".txt" || ext === ".md" || ext === ".csv") {
+    return { suportado: true, ehPdf: false, extensao: ext };
+  }
+  if (ext && EXTENSOES_NAO_SUPORTADAS_IA.has(ext)) {
+    const rotulo = ext.replace(".", "").toUpperCase();
+    return {
+      suportado: false,
+      ehPdf: false,
+      extensao: ext,
+      motivoNaoSuportado: `Arquivo ${rotulo} (não é PDF)`,
+    };
+  }
+
+  // No PNCP é comum o título não incluir a extensão (.pdf) mesmo quando o arquivo é um PDF válido.
+  // Esses casos passam para a verificação real por cabeçalho/assinatura binária no download.
+  return { suportado: true, ehPdf: true };
+}
+
 
 /**
  * Pontua um arquivo publicado no PNCP para identificar Edital e Termo de Referência.

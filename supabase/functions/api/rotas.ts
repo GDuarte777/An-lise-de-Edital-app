@@ -1035,6 +1035,29 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
     }
   });
 
+  /** Busca os dados oficiais e itens de uma contratação específica no PNCP (fallback por link/ID). */
+  app.get("/api/pncp/contratacao", async (req, res): Promise<any> => {
+    try {
+      const { numeroControle, cnpj, ano, sequencial } = req.query;
+      let alvo = { cnpj: String(cnpj || ""), ano: String(ano || ""), sequencial: String(sequencial || "") };
+      if (numeroControle) {
+        const parsed = parseNumeroControlePNCP(String(numeroControle));
+        if (parsed) alvo = parsed;
+      }
+      if (!alvo.cnpj || !alvo.ano || !alvo.sequencial) {
+        return res.status(400).json({ error: "Informe numeroControle ou cnpj, ano e sequencial da contratação." });
+      }
+      const dados = await pncpFetchContratacao(alvo.cnpj, alvo.ano, alvo.sequencial);
+      if (!dados) {
+        return res.status(404).json({ error: "Contratação não encontrada no PNCP." });
+      }
+      const { itens, ...contratacao } = dados;
+      return res.json({ contratacao, itens: Array.isArray(itens) ? itens : [], alvo });
+    } catch (error: any) {
+      return res.status(502).json({ error: `Erro ao consultar contratação no PNCP: ${error?.message || "erro desconhecido"}` });
+    }
+  });
+
   /** Lista os documentos (edital, anexos) de uma contratação do PNCP. */
   app.get("/api/pncp/arquivos", async (req, res): Promise<any> => {
     try {
@@ -1120,11 +1143,12 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
       ]);
 
       // Quando o usuário aciona a análise a partir do Radar ou cola apenas o link/ID do PNCP
-      // sem anexar arquivos manualmente, o servidor baixa automaticamente o Edital + Termo de Referência!
+      // sem anexar arquivos manualmente e sem seleção explícita, o servidor baixa automaticamente o Edital + TR!
       const arquivosBaixadosPNCP: string[] = [];
       let effectiveTextInput = String(textInput || "").trim();
+      const explicitSelection = Boolean(req.body?.explicitSelection);
 
-      if (earlyAlvoPncp && rawFileList.length === 0) {
+      if (earlyAlvoPncp && rawFileList.length === 0 && !explicitSelection) {
         try {
           const listaArquivos = await earlyArquivosPromise;
           const principais = escolherArquivosPrincipaisEdital(listaArquivos, 2);
@@ -1140,13 +1164,23 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
                 const ab = await upstream.arrayBuffer();
                 // Limita anexos automáticos a 25MB cada para não estourar memória da Edge Function
                 if (ab.byteLength > 25 * 1024 * 1024 || ab.byteLength === 0) return;
+                const buf = Buffer.from(ab);
+                const headAscii = buf.subarray(0, Math.min(buf.length, 256)).toString("latin1");
+                const isZipOrOffice = buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 0x03 || buf[2] === 0x05);
+                const isRar = buf.length >= 4 && buf[0] === 0x52 && buf[1] === 0x61 && buf[2] === 0x72 && buf[3] === 0x21;
+                const isOle = buf.length >= 4 && buf[0] === 0xd0 && buf[1] === 0xcf && buf[2] === 0x11 && buf[3] === 0xe0;
+                const isHtml = /^\s*<(?:!doctype\s+html|html)\b/i.test(headAscii);
+                if (isZipOrOffice || isRar || isOle || isHtml) {
+                  console.warn(`[analyze-edital] Ignorando anexo não-PDF do PNCP (${arq.titulo}).`);
+                  return;
+                }
                 const contentType = upstream.headers.get("content-type") || "application/pdf";
                 const rawTitle = arq.titulo || "Documento_PNCP.pdf";
                 const nome = /\.\w{2,5}$/.test(rawTitle) ? rawTitle : `${rawTitle}.pdf`;
                 rawFileList.push({
                   name: nome,
-                  type: contentType.includes("text") ? "text/plain" : "application/pdf",
-                  base64: Buffer.from(ab).toString("base64")
+                  type: headAscii.includes("%PDF-") ? "application/pdf" : contentType.includes("text") ? "text/plain" : "application/pdf",
+                  base64: buf.toString("base64")
                 });
                 arquivosBaixadosPNCP.push(nome);
               } catch (err: any) {
@@ -1188,7 +1222,8 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
             typeof oficialPre.valorTotalEstimado === "number" && oficialPre.valorTotalEstimado > 0
               ? `Valor Total Estimado Oficial: R$ ${oficialPre.valorTotalEstimado.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
               : "",
-            oficialPre.dataAberturaProposta ? `Data de Abertura/Sessão: ${new Date(oficialPre.dataAberturaProposta).toLocaleString("pt-BR")}` : "",
+            oficialPre.dataEncerramentoProposta ? `Data de Encerramento das Propostas / Início da Disputa (PNCP): ${new Date(oficialPre.dataEncerramentoProposta).toLocaleString("pt-BR")}` : "",
+            oficialPre.dataAberturaProposta ? `Data de Abertura do Recebimento de Propostas (PNCP): ${new Date(oficialPre.dataAberturaProposta).toLocaleString("pt-BR")}` : "",
             resumoItens
           ].filter(Boolean).join("\n");
 
@@ -1846,9 +1881,21 @@ REGRAS:
               ident.numeroEdital = `${numeroOficial}/${oficial.anoCompra}`;
             }
 
-            if (oficial.dataAberturaProposta) {
-              ident.dataHoraSessao = new Date(oficial.dataAberturaProposta).toLocaleString("pt-BR");
-              camposOficiais.push("data da sessão");
+            const dataAtualTemFormato = /\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(
+              String(ident.dataHoraSessao || "")
+            );
+            const dataPncpFallback = oficial.dataEncerramentoProposta || oficial.dataAberturaProposta;
+            if (!dataAtualTemFormato && dataPncpFallback) {
+              const dt = new Date(dataPncpFallback);
+              if (!isNaN(dt.getTime())) {
+                const dd = String(dt.getDate()).padStart(2, "0");
+                const mo = String(dt.getMonth() + 1).padStart(2, "0");
+                const yyyy = dt.getFullYear();
+                const hh = String(dt.getHours()).padStart(2, "0");
+                const mi = String(dt.getMinutes()).padStart(2, "0");
+                ident.dataHoraSessao = `${dd}/${mo}/${yyyy} ${hh}:${mi}`;
+                camposOficiais.push("data da sessão");
+              }
             }
 
             if (typeof oficial.valorTotalEstimado === "number" && oficial.valorTotalEstimado > 0) {

@@ -3,19 +3,27 @@ import { urlDaApi } from "../utils/apiBase";
 import {
   Search, ShieldCheck, MapPin, Calendar, Clock, Landmark, Coins,
   ExternalLink, Sparkles, RefreshCw, AlertCircle, FileText, CheckCircle2,
-  Filter, Info, ChevronLeft, ChevronRight, ChevronDown, X, Check, Building2, SlidersHorizontal, RotateCcw, Download, Eye, Link2, LayoutGrid, List, Globe
+  Filter, Info, ChevronLeft, ChevronRight, ChevronDown, X, Check, Building2, SlidersHorizontal, RotateCcw, Download, Eye, Link2, LayoutGrid, List, Globe,
+  Bookmark, BookmarkCheck
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Checkbox } from "./ui/checkbox";
-import { normalizarTextoBuscaPncp, type StatusBuscaPncp } from "../utils/pncpQuery";
+import {
+  classificarFormatoDocumentoPncp,
+  normalizarTextoBuscaPncp,
+  parseNumeroControlePNCP,
+  type StatusBuscaPncp,
+} from "../utils/pncpQuery";
 import {
   buscarContratacoesPncp,
   enriquecerPrecosEmSegundoPlano,
   listarArquivosPncp,
   baixarArquivoPncpComoBase64,
+  baixarArquivoPncpDetalhado,
   listarItensCompraPncp,
   type ItemPrecoPncp,
+  type ResultadoDownloadArquivoPncp,
 } from "../utils/pncpClient";
 import { Card } from "./ui/card";
 import { Input } from "./ui/input";
@@ -30,10 +38,19 @@ import {
   resolverCapagPorOrgaoOuLocal,
   obterEstiloNotaCapag,
 } from "../utils/capagData";
+import {
+  lerDisputasSalvasLocal,
+  alternarDisputaSalva,
+  persistirAlternanciaSalvoNaNuvem,
+  sincronizarDisputasSalvasComNuvem,
+  chaveDisputaSalva,
+  type DisputaSalvaRadar,
+} from "../utils/radarSalvos";
 
 interface RadarOportunidadesTabProps {
   onSelectForAnalysis: (text: string) => void;
   onNavigateToCapag?: (focus: { uf?: string; municipio?: string; orgao?: string }) => void;
+  isActive?: boolean;
 }
 
 interface LicitacaoDetailed {
@@ -149,6 +166,7 @@ const ALL_FONTES_PNCP = [
 export default function RadarOportunidadesTab({
   onSelectForAnalysis,
   onNavigateToCapag,
+  isActive = true,
 }: RadarOportunidadesTabProps) {
   // Filter States
   const [keyword, setKeyword] = useState("");
@@ -163,6 +181,9 @@ export default function RadarOportunidadesTab({
   const [periodDays, setPeriodDays] = useState<number>(90);
 
   // UI & Data States
+  const [radarSubTab, setRadarSubTab] = useState<"explorar" | "salvos">("explorar");
+  const [disputasSalvas, setDisputasSalvas] = useState<DisputaSalvaRadar[]>(() => lerDisputasSalvasLocal());
+  const [buscaSalvos, setBuscaSalvos] = useState<string>("");
   const [viewMode, setViewMode] = useState<"list" | "card">("card");
   const [page, setPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(15);
@@ -176,7 +197,7 @@ export default function RadarOportunidadesTab({
   // Arquivos oficiais (edital, anexos, termo de referência) da contratação
   // selecionada, buscados sob demanda no PNCP.
   const [arquivos, setArquivos] = useState<Array<{ sequencialDocumento: number; titulo: string; tipo: string; uri: string }>>([]);
-  const [selectedDocIds, setSelectedDocIds] = useState<number[]>([]);
+  const [selectedDocKeys, setSelectedDocKeys] = useState<string[]>([]);
   const [arquivosLoading, setArquivosLoading] = useState(false);
   const [arquivosError, setArquivosError] = useState<string | null>(null);
   const [itensDisputa, setItensDisputa] = useState<ItemPrecoPncp[]>([]);
@@ -590,9 +611,81 @@ export default function RadarOportunidadesTab({
     handleFetchPNCP(1);
   }, [statusFiltro, pageSize, periodDays]);
 
-  // Fecha o popup de detalhes ao pressionar ESC
+  // Sincroniza disputas salvas com o banco em segundo plano ao abrir o Radar.
   useEffect(() => {
-    if (!activeItem) return;
+    let cancelado = false;
+    sincronizarDisputasSalvasComNuvem(lerDisputasSalvasLocal())
+      .then((mesclada) => {
+        if (!cancelado) setDisputasSalvas(mesclada);
+      })
+      .catch(() => {});
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+
+  const chavesSalvasSet = useMemo(
+    () => new Set(disputasSalvas.map((d) => chaveDisputaSalva(d))),
+    [disputasSalvas]
+  );
+
+  const disputaEstaSalva = (item: { numeroControlePNCP?: string; id?: string }) =>
+    chavesSalvasSet.has(chaveDisputaSalva(item));
+
+  const handleToggleSalvarDisputa = (item: LicitacaoDetailed, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setDisputasSalvas((prev) => {
+      const resultado = alternarDisputaSalva(prev, item);
+      persistirAlternanciaSalvoNaNuvem(resultado);
+      return resultado.lista;
+    });
+  };
+
+  const disputasSalvasFiltradas = useMemo(() => {
+    const q = normalizarTextoBuscaPncp(buscaSalvos);
+    if (!q) return disputasSalvas;
+    return disputasSalvas.filter((item) => {
+      const alvo = normalizarTextoBuscaPncp(
+        `${item.orgao} ${item.objeto} ${item.municipio} ${item.uf} ${item.numero} ${item.tituloPncp} ${item.numeroControlePNCP} ${item.modalidade}`
+      );
+      return alvo.includes(q);
+    });
+  }, [disputasSalvas, buscaSalvos]);
+
+  // Preserva a posição vertical de rolagem do Radar ao trocar de aba ou analisar uma disputa.
+  const savedScrollYRef = useRef<number>(0);
+  const wasActiveRef = useRef<boolean>(isActive);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const handleScroll = () => {
+      savedScrollYRef.current = window.scrollY || 0;
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [isActive]);
+
+  useEffect(() => {
+    const prev = wasActiveRef.current;
+    wasActiveRef.current = isActive;
+    if (!prev && isActive) {
+      const targetY = savedScrollYRef.current;
+      const restore = () => {
+        if (typeof window.scrollTo === "function") {
+          window.scrollTo(0, targetY);
+        }
+      };
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(restore);
+      } else {
+        restore();
+      }
+    }
+  }, [isActive]);
+
+  // Fecha o popup de detalhes ao pressionar ESC (apenas quando a aba do Radar está visível)
+  useEffect(() => {
+    if (!activeItem || !isActive) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setActiveItem(null);
@@ -600,12 +693,26 @@ export default function RadarOportunidadesTab({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeItem]);
+  }, [activeItem, isActive]);
+
+  const obterChaveDocumento = (arq: { sequencialDocumento: number; uri: string }, idx: number) =>
+    `${arq.uri || ""}::${arq.sequencialDocumento}::${idx}`;
+
+  const baixarComDiagnostico = async (arq: { uri: string; titulo?: string }): Promise<ResultadoDownloadArquivoPncp> => {
+    if (typeof baixarArquivoPncpDetalhado === "function") {
+      return await baixarArquivoPncpDetalhado(arq);
+    }
+    const arquivo = await baixarArquivoPncpComoBase64(arq);
+    return {
+      arquivo,
+      erro: arquivo ? undefined : `Não foi possível baixar "${arq.titulo || "documento"}" do PNCP.`,
+    };
+  };
 
   // Busca os documentos oficiais e os itens com preços da contratação selecionada assim que ela muda.
   useEffect(() => {
     setArquivos([]);
-    setSelectedDocIds([]);
+    setSelectedDocKeys([]);
     setArquivosError(null);
     setAnalisePrepError(null);
     setDownloadProgress(null);
@@ -621,7 +728,7 @@ export default function RadarOportunidadesTab({
         if (cancelado) return;
         const docs = Array.isArray(lista) ? lista : [];
         setArquivos(docs);
-        setSelectedDocIds(docs.map((arq) => arq.sequencialDocumento));
+        setSelectedDocKeys(docs.map((arq, idx) => obterChaveDocumento(arq, idx)));
       })
       .catch((err) => {
         if (!cancelado) setArquivosError(err?.message || "Não foi possível listar os arquivos deste edital.");
@@ -675,42 +782,80 @@ export default function RadarOportunidadesTab({
     window.open(urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`), "_blank");
   };
 
-  const handleToggleDocSelection = (sequencialDocumento: number) => {
+  const handleToggleDocSelection = (docKey: string) => {
     setAnalisePrepError(null);
-    setSelectedDocIds((prev) =>
-      prev.includes(sequencialDocumento)
-        ? prev.filter((id) => id !== sequencialDocumento)
-        : [...prev, sequencialDocumento]
+    setSelectedDocKeys((prev) =>
+      prev.includes(docKey)
+        ? prev.filter((id) => id !== docKey)
+        : [...prev, docKey]
     );
   };
 
   const handleToggleAllDocsSelection = () => {
     setAnalisePrepError(null);
-    if (selectedDocIds.length === arquivos.length) {
-      setSelectedDocIds([]);
+    if (selectedDocKeys.length === arquivos.length) {
+      setSelectedDocKeys([]);
     } else {
-      setSelectedDocIds(arquivos.map((arq) => arq.sequencialDocumento));
+      setSelectedDocKeys(arquivos.map((arq, idx) => obterChaveDocumento(arq, idx)));
     }
   };
+
+  const handleDesmarcarNaoPdfs = () => {
+    setAnalisePrepError(null);
+    setSelectedDocKeys((prev) =>
+      prev.filter((key) => {
+        const idx = arquivos.findIndex((arq, i) => obterChaveDocumento(arq, i) === key);
+        if (idx === -1) return false;
+        return classificarFormatoDocumentoPncp(arquivos[idx]).suportado;
+      })
+    );
+  };
+
+  const resumoSelecaoDocs = useMemo(() => {
+    const marcados = arquivos
+      .map((arq, idx) => ({
+        arq,
+        idx,
+        key: obterChaveDocumento(arq, idx),
+        formato: classificarFormatoDocumentoPncp(arq),
+      }))
+      .filter((entry) => selectedDocKeys.includes(entry.key));
+
+    return {
+      marcados,
+      naoPdfsMarcados: marcados.filter((entry) => !entry.formato.suportado),
+      compativeisMarcados: marcados.filter((entry) => entry.formato.suportado),
+    };
+  }, [arquivos, selectedDocKeys]);
 
   /**
    * Manda o ARQUIVO REAL do edital para a análise (ação individual do card).
    */
-  const analisarArquivoComIA = async (item: LicitacaoDetailed, arq: { uri: string; titulo: string }) => {
+  const analisarArquivoComIA = async (item: LicitacaoDetailed, arq: { uri: string; titulo: string; tipo?: string }) => {
+    const formato = classificarFormatoDocumentoPncp(arq);
+    if (!formato.suportado) {
+      setAnalisePrepError(
+        `"${arq.titulo}" é um ${formato.motivoNaoSuportado || "arquivo não-PDF"} e não pode ser analisado diretamente pela IA. Selecione um documento em PDF.`
+      );
+      return;
+    }
+
     setPreparandoAnalise(arq.uri);
     setAnalisePrepError(null);
     try {
-      const arquivoPronto = await baixarArquivoPncpComoBase64(arq);
-      if (!arquivoPronto) {
-        throw new Error("Não foi possível baixar o arquivo selecionado do PNCP.");
+      const resultado = await baixarComDiagnostico(arq);
+      if (!resultado.arquivo) {
+        throw new Error(resultado.erro || "Não foi possível baixar o arquivo selecionado do PNCP.");
       }
 
       (window as any).__aipPendingEdital = {
         numeroControlePNCP: item.numeroControlePNCP,
-        file: arquivoPronto,
-        files: [arquivoPronto],
+        file: resultado.arquivo,
+        files: [resultado.arquivo],
+        explicitSelection: true,
       };
 
+      setActiveItem(null);
       onSelectForAnalysis(`Edital oficial do PNCP ${item.numeroControlePNCP} — ${item.orgao}`);
     } catch (err: any) {
       setAnalisePrepError(err?.message || "Não foi possível preparar a análise deste edital.");
@@ -729,11 +874,20 @@ export default function RadarOportunidadesTab({
       return;
     }
 
-    const selecionados = arquivos.filter((arq) => selectedDocIds.includes(arq.sequencialDocumento));
-    if (selecionados.length === 0) {
+    const { marcados, naoPdfsMarcados, compativeisMarcados } = resumoSelecaoDocs;
+    if (marcados.length === 0) {
       return;
     }
 
+    if (compativeisMarcados.length === 0) {
+      const listaNaoPdf = naoPdfsMarcados.map((e) => e.arq.titulo).join(", ");
+      setAnalisePrepError(
+        `Os arquivos marcados não são PDF (${listaNaoPdf}) e não podem ser lidos pela IA. Marque ao menos um documento em PDF para analisar.`
+      );
+      return;
+    }
+
+    const selecionados = compativeisMarcados.map((e) => e.arq);
     const chave = `selecionados:${item.numeroControlePNCP}`;
     setPreparandoAnalise(chave);
     setAnalisePrepError(null);
@@ -743,30 +897,50 @@ export default function RadarOportunidadesTab({
       let concluidos = 0;
       const resultados = await Promise.all(
         selecionados.map(async (arq) => {
-          const baixado = await baixarArquivoPncpComoBase64(arq).catch(() => null);
+          const resultado = await baixarComDiagnostico(arq).catch(
+            (err: any): ResultadoDownloadArquivoPncp => ({
+              arquivo: null,
+              erro: err?.message || `Falha ao baixar "${arq.titulo}".`,
+            })
+          );
           concluidos += 1;
           setDownloadProgress({ done: concluidos, total: selecionados.length });
-          return { arq, baixado };
+          return { arq, resultado };
         })
       );
 
       const arquivosProntos = resultados
-        .map((r) => r.baixado)
+        .map((r) => r.resultado.arquivo)
         .filter((f): f is NonNullable<typeof f> => Boolean(f));
 
+      const errosDownload = resultados
+        .filter((r) => !r.resultado.arquivo)
+        .map((r) => r.resultado.erro || `"${r.arq.titulo}" indisponível`);
+
       if (arquivosProntos.length === 0) {
+        const detalhe = errosDownload.slice(0, 3).join(" | ");
         throw new Error(
-          "Não foi possível baixar os documentos selecionados do PNCP (verifique se algum arquivo excede 25 MB ou tente selecionar outro documento)."
+          detalhe
+            ? `Não foi possível preparar os documentos marcados: ${detalhe}`
+            : "Não foi possível baixar os documentos selecionados do PNCP (verifique se algum arquivo excede 25 MB ou tente selecionar outro documento)."
         );
       }
 
       const nomesSelecionados = arquivosProntos.map((f) => f.name).join(", ");
+      const ignoradosNaoPdf = [
+        ...naoPdfsMarcados.map((e) => e.arq.titulo),
+        ...resultados.filter((r) => r.resultado.naoSuportado).map((r) => r.arq.titulo),
+      ];
+
       (window as any).__aipPendingEdital = {
         numeroControlePNCP: item.numeroControlePNCP,
         file: arquivosProntos[0],
         files: arquivosProntos,
+        explicitSelection: true,
+        skippedNonPdfNames: ignoradosNaoPdf,
       };
 
+      setActiveItem(null);
       onSelectForAnalysis(
         `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nDocumentos selecionados (${arquivosProntos.length}): ${nomesSelecionados}\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}`
       );
@@ -839,6 +1013,7 @@ export default function RadarOportunidadesTab({
       (window as any).__aipPendingEdital = {
         numeroControlePNCP: item.numeroControlePNCP
       };
+      setActiveItem(null);
       onSelectForAnalysis(
         `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}`
       );
@@ -884,8 +1059,62 @@ export default function RadarOportunidadesTab({
         </div>
       </Card>
 
+      {/* Navegação interna do Radar: Explorar PNCP x Disputas Salvas */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div
+          role="tablist"
+          aria-label="Seções do Radar de Oportunidades"
+          className="inline-flex items-center rounded-xl border border-border bg-card p-1 shadow-2xs"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={radarSubTab === "explorar"}
+            onClick={() => setRadarSubTab("explorar")}
+            className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold transition-colors cursor-pointer ${
+              radarSubTab === "explorar"
+                ? "bg-primary text-primary-foreground shadow-2xs"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/70"
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>Explorar PNCP</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={radarSubTab === "salvos"}
+            onClick={() => setRadarSubTab("salvos")}
+            className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-bold transition-colors cursor-pointer ${
+              radarSubTab === "salvos"
+                ? "bg-primary text-primary-foreground shadow-2xs"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/70"
+            }`}
+          >
+            <Bookmark className="w-3.5 h-3.5" />
+            <span>Salvos</span>
+            <span
+              className={`ml-0.5 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-extrabold leading-none ${
+                radarSubTab === "salvos"
+                  ? "bg-primary-foreground/20 text-primary-foreground"
+                  : "bg-primary/15 text-primary"
+              }`}
+            >
+              {disputasSalvas.length}
+            </span>
+          </button>
+        </div>
+
+        {radarSubTab === "salvos" && disputasSalvas.length > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            Clique em qualquer disputa salva para abrir a Ficha Oficial ou iniciar a análise com IA.
+          </p>
+        )}
+      </div>
+
       {/* Main Layout: Top Horizontal Filters & Bottom 2 Vertical Columns */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className={radarSubTab === "explorar" ? "grid grid-cols-1 lg:grid-cols-12 gap-6" : "hidden"}>
 
         {/* Top Horizontal Filter Controls (Full Width) */}
         <Card className="lg:col-span-12 rounded-xl shadow-xs p-5 space-y-4">
@@ -932,8 +1161,8 @@ export default function RadarOportunidadesTab({
                   onChange={(e) => {
                     const val = e.target.value;
                     setPncpLinkFilter(val);
-                    // Se o usuário colou um link completo do PNCP, já dispara a busca imediatamente
-                    if (/pncp\.gov\.br\/(?:app\/)?(?:editais|compras)\/\d{14}\/\d{4}\/\d+/i.test(val.trim())) {
+                    // Se o usuário colou um link ou número de controle completo do PNCP, já dispara a busca imediatamente
+                    if (parseNumeroControlePNCP(val.trim())) {
                       setPage(1);
                       handleFetchPNCP(1, val.trim());
                     }
@@ -1679,37 +1908,70 @@ export default function RadarOportunidadesTab({
                             )}
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 w-full">
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveItem(item);
-                              }}
-                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
-                            >
-                              <Eye className="w-3 h-3" />
-                              Ver detalhes
-                            </Button>
+                          <div className="space-y-1.5 w-full">
+                            <div className="grid grid-cols-2 gap-2 w-full">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveItem(item);
+                                }}
+                                className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
+                              >
+                                <Eye className="w-3 h-3" />
+                                Ver detalhes
+                              </Button>
 
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={preparandoAnalise !== null}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                analisarEditalDaLista(item);
-                              }}
-                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
-                            >
-                              <Sparkles className="w-3 h-3 text-primary" />
-                              {preparandoAnalise === `lista:${item.numeroControlePNCP}`
-                                ? "Baixando..."
-                                : "Analisar com IA"}
-                            </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={preparandoAnalise !== null}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  analisarEditalDaLista(item);
+                                }}
+                                className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
+                              >
+                                <Sparkles className="w-3 h-3 text-primary" />
+                                {preparandoAnalise === `lista:${item.numeroControlePNCP}`
+                                  ? "Baixando..."
+                                  : "Analisar com IA"}
+                              </Button>
+                            </div>
+
+                            {(() => {
+                              const salva = disputaEstaSalva(item);
+                              return (
+                                <Button
+                                  type="button"
+                                  variant={salva ? "secondary" : "ghost"}
+                                  size="sm"
+                                  aria-pressed={salva}
+                                  onClick={(e) => handleToggleSalvarDisputa(item, e)}
+                                  title={salva ? "Remover disputa dos salvos" : "Salvar disputa para analisar depois"}
+                                  className={`w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 border ${
+                                    salva
+                                      ? "bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border-amber-500/35"
+                                      : "border-border text-muted-foreground hover:text-foreground hover:bg-muted/70"
+                                  }`}
+                                >
+                                  {salva ? (
+                                    <>
+                                      <BookmarkCheck className="w-3 h-3 fill-current" />
+                                      Salvo
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Bookmark className="w-3 h-3" />
+                                      Salvar
+                                    </>
+                                  )}
+                                </Button>
+                              );
+                            })()}
                           </div>
                         </div>
                       </Card>
@@ -1801,8 +2063,8 @@ export default function RadarOportunidadesTab({
                             )}
                           </div>
 
-                          {/* Action Buttons: Ver detalhes (abre popup) + Analisar com IA */}
-                          <div className="grid grid-cols-2 gap-2 pt-0.5">
+                          {/* Action Buttons: Ver detalhes + Analisar com IA + Salvar */}
+                          <div className="flex items-center gap-1.5 pt-0.5">
                             <Button
                               type="button"
                               variant="secondary"
@@ -1811,9 +2073,9 @@ export default function RadarOportunidadesTab({
                                 e.stopPropagation();
                                 setActiveItem(item);
                               }}
-                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
+                              className="flex-1 h-auto py-1.5 text-[10px] font-bold gap-1 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
                             >
-                              <Eye className="w-3 h-3" />
+                              <Eye className="w-3 h-3 shrink-0" />
                               Ver detalhes
                             </Button>
 
@@ -1826,13 +2088,44 @@ export default function RadarOportunidadesTab({
                                 e.stopPropagation();
                                 analisarEditalDaLista(item);
                               }}
-                              className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
+                              className="flex-1 h-auto py-1.5 text-[10px] font-bold gap-1"
                             >
-                              <Sparkles className="w-3 h-3 text-primary" />
+                              <Sparkles className="w-3 h-3 text-primary shrink-0" />
                               {preparandoAnalise === `lista:${item.numeroControlePNCP}`
                                 ? "Baixando..."
                                 : "Analisar com IA"}
                             </Button>
+
+                            {(() => {
+                              const salva = disputaEstaSalva(item);
+                              return (
+                                <Button
+                                  type="button"
+                                  variant={salva ? "secondary" : "outline"}
+                                  size="sm"
+                                  aria-pressed={salva}
+                                  onClick={(e) => handleToggleSalvarDisputa(item, e)}
+                                  title={salva ? "Remover dos salvos" : "Salvar disputa para analisar depois"}
+                                  className={`shrink-0 h-auto px-2.5 py-1.5 text-[10px] font-bold gap-1 ${
+                                    salva
+                                      ? "bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border-amber-500/35"
+                                      : "text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  {salva ? (
+                                    <>
+                                      <BookmarkCheck className="w-3 h-3 fill-current shrink-0" />
+                                      Salvo
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Bookmark className="w-3 h-3 shrink-0" />
+                                      Salvar
+                                    </>
+                                  )}
+                                </Button>
+                              );
+                            })()}
                           </div>
                         </div>
                       </Card>
@@ -1888,6 +2181,337 @@ export default function RadarOportunidadesTab({
 
       </div>
 
+      {/* Aba Salvos: disputas guardadas pelo usuário para analisar depois */}
+      {radarSubTab === "salvos" && (
+        <Card className="p-4 sm:p-5 rounded-xl shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
+            <div>
+              <h4 className="font-bold text-foreground text-sm flex items-center gap-2">
+                <BookmarkCheck className="w-4 h-4 text-primary" />
+                Disputas Salvas ({disputasSalvas.length})
+              </h4>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Suas oportunidades guardadas para revisar detalhes, selecionar documentos ou analisar com IA depois.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {disputasSalvas.length > 0 && (
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <Input
+                    type="text"
+                    value={buscaSalvos}
+                    onChange={(e) => setBuscaSalvos(e.target.value)}
+                    placeholder="Filtrar nos salvos..."
+                    className="h-8 pl-8 pr-7 text-xs w-52 sm:w-60"
+                  />
+                  {buscaSalvos && (
+                    <button
+                      type="button"
+                      onClick={() => setBuscaSalvos("")}
+                      aria-label="Limpar busca nos salvos"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="inline-flex items-center rounded-lg border border-border bg-muted p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("list")}
+                  title="Visualização em Lista"
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                    viewMode === "list"
+                      ? "bg-card text-primary shadow-2xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <List className="w-3 h-3" />
+                  Lista
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("card")}
+                  title="Visualização em Cards"
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                    viewMode === "card"
+                      ? "bg-card text-primary shadow-2xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <LayoutGrid className="w-3 h-3" />
+                  Cards
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {disputasSalvas.length === 0 ? (
+            <div className="py-12 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mx-auto text-primary">
+                <Bookmark className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-sm text-foreground">Nenhuma disputa salva ainda</p>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  Clique em <strong>Salvar</strong> em qualquer licitação do Radar ou dentro da Ficha Oficial do Edital para guardá-la aqui e analisar depois.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setRadarSubTab("explorar")}
+                className="gap-1.5 text-xs font-semibold cursor-pointer"
+              >
+                <Search className="w-3.5 h-3.5" />
+                Explorar oportunidades no PNCP
+              </Button>
+            </div>
+          ) : disputasSalvasFiltradas.length === 0 ? (
+            <div className="py-10 text-center space-y-2">
+              <p className="text-xs font-semibold text-foreground">
+                Nenhuma disputa salva corresponde a &ldquo;{buscaSalvos}&rdquo;.
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setBuscaSalvos("")}
+                className="text-xs text-primary"
+              >
+                Limpar busca
+              </Button>
+            </div>
+          ) : viewMode === "list" ? (
+            <div className="space-y-2.5">
+              {disputasSalvasFiltradas.map((item) => {
+                const capagEnte = resolverCapagPorOrgaoOuLocal({
+                  uf: item.uf,
+                  municipio: item.municipio,
+                  orgao: item.orgao,
+                });
+                const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
+                const salvoData = item.salvoEm
+                  ? new Date(item.salvoEm).toLocaleDateString("pt-BR")
+                  : "";
+                return (
+                  <Card
+                    key={chaveDisputaSalva(item)}
+                    onClick={() => setActiveItem(item)}
+                    className="p-3.5 rounded-xl transition-all cursor-pointer text-left flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-none hover:border-primary/40 hover:bg-muted/50"
+                  >
+                    <div className="space-y-1.5 min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <Badge variant="outline" className="font-bold text-[9px] px-1.5 py-0.5 bg-primary/10 text-primary border-primary/20 rounded font-mono">
+                          {item.tituloPncp}
+                        </Badge>
+                        <span className="text-[9px] font-mono text-muted-foreground flex items-center gap-1 font-bold bg-muted px-1.5 py-0.5 rounded border border-border">
+                          <MapPin className="w-3 h-3 text-primary" />
+                          {item.municipio}/{item.uf}
+                        </span>
+                        <span
+                          className={`text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded border ${capagEstilo.badgeBg} ${capagEstilo.badgeText} ${capagEstilo.badgeBorder}`}
+                        >
+                          {capagEstilo.labelCurto}
+                        </span>
+                        {salvoData && (
+                          <span className="text-[9px] font-mono text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/25 px-1.5 py-0.5 rounded">
+                            Salvo em {salvoData}
+                          </span>
+                        )}
+                      </div>
+                      <p className="font-bold text-foreground text-xs truncate" title={item.orgao}>
+                        {item.orgao}
+                      </p>
+                      <p className="text-[11px] text-foreground/90 leading-relaxed">
+                        <strong className="text-foreground font-bold">Objeto: </strong>
+                        {item.objeto}
+                      </p>
+                      <div className="flex items-center gap-3 flex-wrap text-[9px] font-mono text-muted-foreground">
+                        <span>{item.modalidade}</span>
+                        {item.fonteNome && <span>• {item.fonteNome}</span>}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-stretch sm:items-end justify-between gap-2 sm:w-56 shrink-0 border-t sm:border-t-0 sm:border-l border-border pt-2 sm:pt-0 sm:pl-3">
+                      <div className="text-left sm:text-right">
+                        <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-bold block">
+                          Preço da Disputa
+                        </span>
+                        <span className="font-extrabold font-mono text-xs text-success block mt-0.5">
+                          {item.valorEstimado}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5 w-full">
+                        <div className="grid grid-cols-2 gap-2 w-full">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveItem(item);
+                            }}
+                            className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
+                          >
+                            <Eye className="w-3 h-3" />
+                            Ver detalhes
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={preparandoAnalise !== null}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              analisarEditalDaLista(item);
+                            }}
+                            className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5"
+                          >
+                            <Sparkles className="w-3 h-3 text-primary" />
+                            {preparandoAnalise === `lista:${item.numeroControlePNCP}`
+                              ? "Baixando..."
+                              : "Analisar com IA"}
+                          </Button>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          aria-pressed={true}
+                          onClick={(e) => handleToggleSalvarDisputa(item, e)}
+                          title="Remover disputa dos salvos"
+                          className="w-full h-auto py-1.5 text-[10px] font-bold gap-1.5 border bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border-amber-500/35"
+                        >
+                          <BookmarkCheck className="w-3 h-3 fill-current" />
+                          Salvo
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+              {disputasSalvasFiltradas.map((item) => {
+                const capagEnte = resolverCapagPorOrgaoOuLocal({
+                  uf: item.uf,
+                  municipio: item.municipio,
+                  orgao: item.orgao,
+                });
+                const capagEstilo = obterEstiloNotaCapag(capagEnte.notaCapag);
+                const salvoData = item.salvoEm
+                  ? new Date(item.salvoEm).toLocaleDateString("pt-BR")
+                  : "";
+                return (
+                  <Card
+                    key={chaveDisputaSalva(item)}
+                    onClick={() => setActiveItem(item)}
+                    className="p-3.5 rounded-xl transition-all cursor-pointer text-left flex flex-col justify-between space-y-2.5 gap-2 shadow-none hover:border-primary/40 hover:bg-muted/50"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-1 flex-wrap">
+                        <Badge variant="outline" className="font-bold text-[9px] px-1.5 py-0.5 bg-primary/10 text-primary border-primary/20 rounded font-mono truncate max-w-[165px]">
+                          {item.tituloPncp}
+                        </Badge>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span
+                            className={`text-[9px] font-mono font-extrabold px-1.5 py-0.5 rounded border ${capagEstilo.badgeBg} ${capagEstilo.badgeText} ${capagEstilo.badgeBorder}`}
+                          >
+                            {capagEstilo.labelCurto}
+                          </span>
+                          <span className="text-[9px] font-mono text-muted-foreground flex items-center gap-1 font-bold shrink-0 bg-muted px-1.5 py-0.5 rounded border border-border">
+                            <MapPin className="w-3 h-3 text-primary" />
+                            {item.municipio}/{item.uf}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="font-bold text-foreground text-[11px] truncate" title={item.orgao}>
+                        {item.orgao}
+                      </p>
+
+                      <p className="text-[11px] text-foreground/90 leading-relaxed">
+                        <strong className="text-foreground font-bold">Objeto: </strong>
+                        {item.objeto}
+                      </p>
+
+                      {salvoData && (
+                        <div className="text-[9px] font-mono text-amber-700 dark:text-amber-300">
+                          Salvo em {salvoData}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 pt-1.5 border-t border-border">
+                      <div className="flex items-center justify-between gap-2 bg-success/10 border border-success/25 rounded-lg px-2.5 py-1.5">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                          <Coins className="w-3 h-3 text-success shrink-0" />
+                          Preço da Disputa:
+                        </span>
+                        <span className="font-extrabold font-mono text-[11px] text-success">
+                          {item.valorEstimado}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveItem(item);
+                          }}
+                          className="flex-1 h-auto py-1.5 text-[10px] font-bold gap-1 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20"
+                        >
+                          <Eye className="w-3 h-3 shrink-0" />
+                          Ver detalhes
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={preparandoAnalise !== null}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            analisarEditalDaLista(item);
+                          }}
+                          className="flex-1 h-auto py-1.5 text-[10px] font-bold gap-1"
+                        >
+                          <Sparkles className="w-3 h-3 text-primary shrink-0" />
+                          {preparandoAnalise === `lista:${item.numeroControlePNCP}`
+                            ? "Baixando..."
+                            : "Analisar com IA"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          aria-pressed={true}
+                          onClick={(e) => handleToggleSalvarDisputa(item, e)}
+                          title="Remover dos salvos"
+                          className="shrink-0 h-auto px-2.5 py-1.5 text-[10px] font-bold gap-1 bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border border-amber-500/35"
+                        >
+                          <BookmarkCheck className="w-3 h-3 fill-current shrink-0" />
+                          Salvo
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* Popup Modal: Ficha Oficial do Edital (abre somente quando o usuário clica em uma licitação ou em "Ver detalhes") */}
       {activeItem && (
         <div
@@ -1913,16 +2537,49 @@ export default function RadarOportunidadesTab({
                 <p className="text-muted-foreground text-[11px] font-mono">{activeItem.modalidade}</p>
               </div>
 
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setActiveItem(null)}
-                className="h-8 w-8 p-0 rounded-lg shrink-0"
-                title="Fechar detalhes"
-              >
-                <X className="w-4 h-4" />
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                {(() => {
+                  const salva = disputaEstaSalva(activeItem);
+                  return (
+                    <Button
+                      type="button"
+                      variant={salva ? "secondary" : "outline"}
+                      size="sm"
+                      aria-pressed={salva}
+                      onClick={(e) => handleToggleSalvarDisputa(activeItem, e)}
+                      title={salva ? "Remover disputa dos salvos" : "Salvar disputa para analisar depois"}
+                      className={`h-8 px-3 rounded-lg text-[11px] font-bold gap-1.5 ${
+                        salva
+                          ? "bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border-amber-500/35"
+                          : ""
+                      }`}
+                    >
+                      {salva ? (
+                        <>
+                          <BookmarkCheck className="w-3.5 h-3.5 fill-current" />
+                          <span>Salvo</span>
+                        </>
+                      ) : (
+                        <>
+                          <Bookmark className="w-3.5 h-3.5" />
+                          <span>Salvar disputa</span>
+                        </>
+                      )}
+                    </Button>
+                  );
+                })()}
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setActiveItem(null)}
+                  className="h-8 w-8 p-0 rounded-lg shrink-0"
+                  title="Fechar detalhes"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
 
             {/* Popup Scrollable Content */}
@@ -2156,7 +2813,7 @@ export default function RadarOportunidadesTab({
                     <h5 className="font-bold text-foreground text-[11px] uppercase tracking-wide">Documentos do Edital</h5>
                     {arquivos.length > 0 && (
                       <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 rounded-full">
-                        {selectedDocIds.length} de {arquivos.length} selecionado{selectedDocIds.length === 1 ? "" : "s"}
+                        {selectedDocKeys.length} de {arquivos.length} selecionado{selectedDocKeys.length === 1 ? "" : "s"}
                       </Badge>
                     )}
                   </div>
@@ -2167,7 +2824,7 @@ export default function RadarOportunidadesTab({
                       disabled={preparandoAnalise !== null}
                       className="text-[10px] font-semibold text-primary hover:underline disabled:opacity-50 cursor-pointer"
                     >
-                      {selectedDocIds.length === arquivos.length ? "Desmarcar todos" : "Selecionar todos"}
+                      {selectedDocKeys.length === arquivos.length ? "Desmarcar todos" : "Selecionar todos"}
                     </button>
                   )}
                 </div>
@@ -2187,15 +2844,19 @@ export default function RadarOportunidadesTab({
                 )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {arquivos.map((arq) => {
-                    const isSelected = selectedDocIds.includes(arq.sequencialDocumento);
-                    const checkboxId = `pncp-doc-select-${arq.sequencialDocumento}`;
+                  {arquivos.map((arq, idx) => {
+                    const docKey = obterChaveDocumento(arq, idx);
+                    const isSelected = selectedDocKeys.includes(docKey);
+                    const checkboxId = `pncp-doc-select-${idx}-${arq.sequencialDocumento}`;
+                    const formatoDoc = classificarFormatoDocumentoPncp(arq);
                     return (
                       <div
-                        key={arq.sequencialDocumento}
+                        key={docKey}
                         className={`p-2.5 rounded-xl border space-y-2 flex flex-col justify-between transition-colors ${
                           isSelected
-                            ? "border-primary/40 bg-primary/5"
+                            ? formatoDoc.suportado
+                              ? "border-primary/40 bg-primary/5"
+                              : "border-amber-500/40 bg-amber-500/5"
                             : "border-border bg-muted/30 opacity-75"
                         }`}
                       >
@@ -2204,7 +2865,7 @@ export default function RadarOportunidadesTab({
                             id={checkboxId}
                             checked={isSelected}
                             disabled={preparandoAnalise !== null}
-                            onCheckedChange={() => handleToggleDocSelection(arq.sequencialDocumento)}
+                            onCheckedChange={() => handleToggleDocSelection(docKey)}
                             aria-label={`Selecionar ${arq.titulo} para análise com IA`}
                             className="mt-0.5 shrink-0 cursor-pointer"
                           />
@@ -2215,7 +2876,17 @@ export default function RadarOportunidadesTab({
                             <p className="font-semibold text-foreground text-[11px] truncate" title={arq.titulo}>
                               {arq.titulo}
                             </p>
-                            <p className="text-muted-foreground text-[10px]">{arq.tipo}</p>
+                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                              <p className="text-muted-foreground text-[10px]">{arq.tipo}</p>
+                              {!formatoDoc.suportado && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] font-semibold px-1.5 py-0 border-amber-500/50 text-amber-700 dark:text-amber-400 bg-amber-500/10"
+                                >
+                                  Não é PDF{formatoDoc.extensao ? ` (${formatoDoc.extensao.replace(".", "").toUpperCase()})` : ""}
+                                </Badge>
+                              )}
+                            </div>
                           </label>
                         </div>
                         <div className="flex gap-2">
@@ -2264,11 +2935,38 @@ export default function RadarOportunidadesTab({
                 </div>
               )}
 
+              {resumoSelecaoDocs.naoPdfsMarcados.length > 0 && (
+                <div className="p-2.5 bg-amber-500/10 rounded-xl border border-amber-500/30 text-amber-900 dark:text-amber-200 text-[10px] leading-normal flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>
+                        {resumoSelecaoDocs.naoPdfsMarcados.length === 1
+                          ? "1 arquivo marcado não é PDF:"
+                          : `${resumoSelecaoDocs.naoPdfsMarcados.length} arquivos marcados não são PDF:`}
+                      </strong>{" "}
+                      {resumoSelecaoDocs.naoPdfsMarcados.map((e) => e.arq.titulo).join(", ")}.{" "}
+                      {resumoSelecaoDocs.compativeisMarcados.length > 0
+                        ? "Apenas os arquivos marcados em PDF/TXT serão enviados à IA."
+                        : "Marque ao menos um arquivo em PDF para conseguir analisar."}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDesmarcarNaoPdfs}
+                    disabled={preparandoAnalise !== null}
+                    className="shrink-0 font-semibold text-amber-800 dark:text-amber-300 underline hover:opacity-80 disabled:opacity-50 cursor-pointer"
+                  >
+                    Desmarcar não-PDFs
+                  </button>
+                </div>
+              )}
+
               <div className="p-2.5 bg-primary/10 rounded-xl border border-primary/20 text-foreground text-[10px] leading-normal flex items-start gap-2">
                 <Sparkles className="w-4 h-4 text-primary shrink-0 mt-0.5" />
                 <span>
                   {arquivos.length > 0 ? (
-                    selectedDocIds.length === 0 ? (
+                    selectedDocKeys.length === 0 ? (
                       <>
                         Nenhum documento está marcado. Marque ao menos <strong>1 documento</strong> em <em>Documentos do Edital</em> para habilitar a análise com IA.
                       </>
@@ -2276,11 +2974,11 @@ export default function RadarOportunidadesTab({
                       <>
                         A IA analisará{" "}
                         <strong>
-                          {selectedDocIds.length === arquivos.length
+                          {selectedDocKeys.length === arquivos.length
                             ? arquivos.length === 1
                               ? "o documento selecionado"
                               : `todos os ${arquivos.length} documentos selecionados`
-                            : `${selectedDocIds.length} de ${arquivos.length} documento${selectedDocIds.length === 1 ? "" : "s"} selecionado${selectedDocIds.length === 1 ? "" : "s"}`}
+                            : `${selectedDocKeys.length} de ${arquivos.length} documento${selectedDocKeys.length === 1 ? "" : "s"} selecionado${selectedDocKeys.length === 1 ? "" : "s"}`}
                         </strong>{" "}
                         junto com os <strong>Itens Oficiais do PNCP</strong>. Desmarque acima qualquer anexo que não queira incluir.
                       </>
@@ -2308,7 +3006,7 @@ export default function RadarOportunidadesTab({
                   disabled={
                     preparandoAnalise !== null ||
                     arquivosLoading ||
-                    (arquivos.length > 0 && selectedDocIds.length === 0)
+                    (arquivos.length > 0 && selectedDocKeys.length === 0)
                   }
                   className="flex-1 h-auto py-2.5 font-bold text-xs gap-2"
                 >
@@ -2317,14 +3015,14 @@ export default function RadarOportunidadesTab({
                     ? `Baixando documentos (${downloadProgress.done}/${downloadProgress.total})...`
                     : arquivosLoading
                       ? "Carregando documentos do PNCP..."
-                      : arquivos.length > 0 && selectedDocIds.length === 0
+                      : arquivos.length > 0 && selectedDocKeys.length === 0
                         ? "Selecione ao menos 1 documento acima"
                         : arquivos.length > 0
-                          ? selectedDocIds.length === arquivos.length
+                          ? selectedDocKeys.length === arquivos.length
                             ? arquivos.length === 1
                               ? "Analisar 1 documento + Itens com IA"
                               : `Analisar todos os ${arquivos.length} documentos + Itens com IA`
-                            : `Analisar ${selectedDocIds.length} de ${arquivos.length} documento${selectedDocIds.length === 1 ? "" : "s"} + Itens com IA`
+                            : `Analisar ${selectedDocKeys.length} de ${arquivos.length} documento${selectedDocKeys.length === 1 ? "" : "s"} + Itens com IA`
                           : "Analisar Ficha Oficial + Itens com IA"}
                 </Button>
               </div>

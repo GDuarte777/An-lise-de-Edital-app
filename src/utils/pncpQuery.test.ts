@@ -17,7 +17,8 @@ import {
   PNCP_TIMEOUT_PADRAO_MS,
   PNCP_ORCAMENTO_PADRAO_MS,
   PNCP_MAX_DURACAO_PADRAO_S,
-  classificarStatusPncp
+  classificarStatusPncp,
+  classificarFormatoDocumentoPncp,
 } from "./pncpQuery";
 
 describe("tamanho de página", () => {
@@ -505,4 +506,84 @@ describe("buscarContratacoesPncp (cliente híbrido navegador + fallback)", () =>
       globalThis.fetch = origFetch;
     }
   });
+
+  it("interpreta links do PNCP com CNPJ formatado e classifica formatos não-PDF corretamente", () => {
+    expect(
+      parseNumeroControlePNCP("https://pncp.gov.br/app/editais/00.394.460/0001-41/2026/123?tab=arquivos")
+    ).toEqual({
+      cnpj: "00394460000141",
+      ano: "2026",
+      sequencial: "123",
+    });
+
+    expect(classificarFormatoDocumentoPncp({ titulo: "Edital_01.pdf" }).suportado).toBe(true);
+    expect(classificarFormatoDocumentoPncp({ titulo: "Edital sem extensao" }).suportado).toBe(true);
+    expect(classificarFormatoDocumentoPncp({ titulo: "Planilha_Itens.xlsx" }).suportado).toBe(false);
+    expect(classificarFormatoDocumentoPncp({ titulo: "Projetos.zip" }).suportado).toBe(false);
+    expect(classificarFormatoDocumentoPncp({ titulo: "Minuta.docx" }).suportado).toBe(false);
+  });
+
+  it("rejeita arquivo ZIP disfarçado sem extensão ao baixar do PNCP e usa fallback /api/pncp/contratacao", async () => {
+    const { baixarArquivoPncpDetalhado, buscarContratacaoPorLinkOuIdPncp } = await import("./pncpClient");
+    const origFetch = globalThis.fetch;
+
+    // 1. Testa rejeição de ZIP disfarçado como "Anexo I" sem extensão
+    const zipBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
+    globalThis.fetch = (async () =>
+      new Response(zipBytes, {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      })) as any;
+
+    try {
+      const resDownload = await baixarArquivoPncpDetalhado({
+        uri: "https://pncp.gov.br/api/pncp/v1/orgaos/00394460000141/compras/2026/123/arquivos/2",
+        titulo: "Anexo I",
+      });
+      expect(resDownload.arquivo).toBeNull();
+      expect(resDownload.naoSuportado).toBe(true);
+      expect(resDownload.erro).toContain("Não é um PDF");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+
+    // 2. Testa fallback /api/pncp/contratacao quando chamada direta no navegador falha
+    let chamouProxyContratacao = false;
+    globalThis.fetch = (async (url: string) => {
+      const s = String(url);
+      if (s.includes("pncp.gov.br")) {
+        throw new Error("CORS blocked");
+      }
+      if (s.includes("/api/pncp/contratacao")) {
+        chamouProxyContratacao = true;
+        return new Response(
+          JSON.stringify({
+            contratacao: {
+              numeroControlePNCP: "00394460000141-1-000123/2026",
+              anoCompra: 2026,
+              sequencialCompra: 123,
+              objetoCompra: "Aquisição de servidores",
+              valorTotalEstimado: 89000,
+              orgaoEntidade: { cnpj: "00394460000141", razaoSocial: "Órgão Teste" },
+            },
+            itens: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("{}", { status: 404 });
+    }) as any;
+
+    try {
+      const resLink = await buscarContratacaoPorLinkOuIdPncp(
+        "https://pncp.gov.br/app/editais/00394460000141/2026/123"
+      );
+      expect(chamouProxyContratacao).toBe(true);
+      expect(resLink?.data).toHaveLength(1);
+      expect(resLink?.data[0].numeroControlePNCP).toBe("00394460000141-1-000123/2026");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });
+

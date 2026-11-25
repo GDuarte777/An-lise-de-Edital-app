@@ -1,22 +1,203 @@
-// Campo "Data / Hora da disputa" é texto livre (aceita formatos vindos de import
-// e digitação manual), então o calendário inteligente tenta os dois formatos
-// usados pelo próprio app: ISO "AAAA-MM-DD HH:MM" e BR "DD/MM/AAAA HH:MM".
-export function parseDisputaDate(value: string): Date | null {
-  if (!value) return null;
-  const trimmed = value.trim();
+// Campo "Data / Hora da disputa" é texto livre (aceita formatos vindos de import,
+// extração por IA, PNCP e digitação manual). Este módulo centraliza o parser
+// tolerante para formatos brasileiros/ISO e a seleção da data oficial do PNCP.
 
-  let m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
-  if (m) {
-    const [, y, mo, d, h, mi] = m;
-    const date = new Date(Number(y), Number(mo) - 1, Number(d), h ? Number(h) : 0, mi ? Number(mi) : 0);
-    return isNaN(date.getTime()) ? null : date;
+const MESES_PT: Record<string, number> = {
+  janeiro: 1,
+  jan: 1,
+  fevereiro: 2,
+  fev: 2,
+  marco: 3,
+  mar: 3,
+  abril: 4,
+  abr: 4,
+  maio: 5,
+  mai: 5,
+  junho: 6,
+  jun: 6,
+  julho: 7,
+  jul: 7,
+  agosto: 8,
+  ago: 8,
+  setembro: 9,
+  set: 9,
+  outubro: 10,
+  out: 10,
+  novembro: 11,
+  nov: 11,
+  dezembro: 12,
+  dez: 12,
+};
+
+function criarDataValidada(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0
+): Date | null {
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    year < 1990 ||
+    year > 2100 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return null;
+  }
+  const date = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (
+    isNaN(date.getTime()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function extrairHoraNoTrecho(trecho: string): { hour: number; minute: number; found: boolean } {
+  if (!trecho) return { hour: 0, minute: 0, found: false };
+  // Aceita: "09:30", "9:30", "09h30", "09h", "às 09:30", "as 14h00min", ", 09:00:00"
+  const m = trecho.match(
+    /(?:^|[\s,\-–—]|(?:[àa]s?\s+)|(?:em\s+))(\d{1,2})\s*(?:[:hH]\s*(\d{2})|[hH](?:\b|\s|$))/
+  );
+  if (!m) return { hour: 0, minute: 0, found: false };
+  const hour = Number(m[1]);
+  const minute = m[2] !== undefined ? Number(m[2]) : 0;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return { hour: 0, minute: 0, found: false };
+  }
+  return { hour, minute, found: true };
+}
+
+function parseComInfoHora(value: string): { date: Date; hasTime: boolean } | null {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+
+  // 1. ISO com fuso explícito (ex: "2026-11-25T12:00:00Z" ou "2026-11-25T09:00:00-03:00")
+  const isoTz = trimmed.match(
+    /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})/i
+  );
+  if (isoTz) {
+    const dt = new Date(isoTz[0]);
+    if (!isNaN(dt.getTime())) {
+      return { date: dt, hasTime: true };
+    }
   }
 
-  m = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:[, ]+(\d{2}):(\d{2}))?/);
-  if (m) {
-    const [, d, mo, y, h, mi] = m;
-    const date = new Date(Number(y), Number(mo) - 1, Number(d), h ? Number(h) : 0, mi ? Number(mi) : 0);
-    return isNaN(date.getTime()) ? null : date;
+  // 2. ISO local (ex: "2026-03-15 09:30", "2026-03-15T09:30:00", "2026-03-15")
+  const isoLocal = trimmed.match(
+    /(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::\d{2})?)?/
+  );
+  if (isoLocal) {
+    const [, y, mo, d, h, mi] = isoLocal;
+    const rest = h === undefined ? trimmed.slice((isoLocal.index ?? 0) + isoLocal[0].length, (isoLocal.index ?? 0) + isoLocal[0].length + 28) : "";
+    const extraHora = h === undefined ? extrairHoraNoTrecho(rest) : { hour: Number(h), minute: Number(mi), found: true };
+    const dt = criarDataValidada(Number(y), Number(mo), Number(d), extraHora.hour, extraHora.minute);
+    if (dt) return { date: dt, hasTime: extraHora.found };
+  }
+
+  // 3. Formato brasileiro numérico em qualquer posição da frase
+  // Ex: "15/03/2026 09:30", "15/03/2026, 09:30:00", "Dia 15/03/2026 às 09h30 (Horário de Brasília)"
+  const brNum = trimmed.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (brNum) {
+    const [, d, mo, y] = brNum;
+    const afterStart = (brNum.index ?? 0) + brNum[0].length;
+    const afterSlice = trimmed.slice(afterStart, afterStart + 32);
+    const beforeSlice = trimmed.slice(Math.max(0, (brNum.index ?? 0) - 24), brNum.index ?? 0);
+    let hora = extrairHoraNoTrecho(afterSlice);
+    if (!hora.found) {
+      hora = extrairHoraNoTrecho(beforeSlice);
+    }
+    const dt = criarDataValidada(Number(y), Number(mo), Number(d), hora.hour, hora.minute);
+    if (dt) return { date: dt, hasTime: hora.found };
+  }
+
+  // 4. Formato brasileiro por extenso (ex: "25 de novembro de 2026 às 09:00")
+  const semAcento = trimmed
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const brExtenso = semAcento.match(
+    /(\d{1,2})\s+de\s+([a-z]{3,12})\s+de\s+(\d{4})/
+  );
+  if (brExtenso) {
+    const [, d, mesTxt, y] = brExtenso;
+    const mo = MESES_PT[mesTxt];
+    if (mo) {
+      const afterStart = (brExtenso.index ?? 0) + brExtenso[0].length;
+      const afterSlice = semAcento.slice(afterStart, afterStart + 32);
+      const hora = extrairHoraNoTrecho(afterSlice);
+      const dt = criarDataValidada(Number(y), mo, Number(d), hora.hour, hora.minute);
+      if (dt) return { date: dt, hasTime: hora.found };
+    }
+  }
+
+  return null;
+}
+
+export function parseDisputaDate(value: string): Date | null {
+  const parsed = parseComInfoHora(value);
+  return parsed ? parsed.date : null;
+}
+
+/** Formata uma Date válida no padrão canônico brasileiro aceito por toda a plataforma. */
+export function formatarDataDisputaBR(date: Date, incluirHora = true): string {
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  if (!incluirHora) return `${dd}/${mm}/${yyyy}`;
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mi = String(date.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+}
+
+/**
+ * Normaliza qualquer string de data/hora para "DD/MM/AAAA HH:MM" (ou "DD/MM/AAAA").
+ * Devolve "" quando o texto não contém nenhuma data reconhecível.
+ */
+export function normalizarDataHoraDisputa(value?: string | null): string {
+  if (!value) return "";
+  const parsed = parseComInfoHora(value);
+  if (!parsed) return "";
+  return formatarDataDisputaBR(parsed.date, parsed.hasTime);
+}
+
+/**
+ * Seleciona a data oficial do PNCP para o Calendário quando o documento não trouxe data:
+ * prioridade para o encerramento das propostas (início da disputa), caindo para abertura.
+ */
+export function extrairDataPncpPreferencial(
+  detalhe?: {
+    dataEncerramentoProposta?: string | null;
+    dataAberturaProposta?: string | null;
+  } | null
+): { dataFormatada: string; origem: "encerramento" | "abertura" } | null {
+  if (!detalhe) return null;
+
+  if (detalhe.dataEncerramentoProposta) {
+    const normalizada = normalizarDataHoraDisputa(detalhe.dataEncerramentoProposta);
+    if (normalizada) {
+      return { dataFormatada: normalizada, origem: "encerramento" };
+    }
+  }
+
+  if (detalhe.dataAberturaProposta) {
+    const normalizada = normalizarDataHoraDisputa(detalhe.dataAberturaProposta);
+    if (normalizada) {
+      return { dataFormatada: normalizada, origem: "abertura" };
+    }
   }
 
   return null;

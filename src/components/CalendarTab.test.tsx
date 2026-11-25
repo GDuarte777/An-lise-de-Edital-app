@@ -261,4 +261,44 @@ describe("CalendarTab — disputa existente", () => {
       expect(JSON.parse(localStorage.getItem("aip_disputas_sheet") || "[]").length).toBe(1);
     });
   });
+
+  it("exibe disputas sem data na lista de pendências com atalho Definir data", async () => {
+    const semData = {
+      ...existente,
+      id: "sem-data-1",
+      orgao: "Secretaria Sem Data",
+      dataHoraDisputa: "",
+      noCalendario: true,
+    };
+    banco.linhas = [semData];
+
+    render(<CalendarTab />);
+
+    expect(await screen.findByText(/Disputas sem data \(1\)/i)).toBeDefined();
+    expect(screen.getByText("Secretaria Sem Data")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: /Definir data/i }));
+    const form = await screen.findByRole("dialog");
+    expect(within(form).getByDisplayValue("Secretaria Sem Data")).toBeDefined();
+  });
+
+  it("preserva disputa recém-inserida pendente de sync mesmo quando o banco retorna lista antiga", async () => {
+    const pendente = {
+      ...existente,
+      id: "pendente-local-1",
+      orgao: "Prefeitura Recém Inserida",
+      noCalendario: true,
+    };
+    localStorage.setItem("aip_disputas_sheet", JSON.stringify([pendente]));
+    localStorage.setItem("aip_disputas_pendentes_sync", JSON.stringify(["pendente-local-1"]));
+    banco.ok = true;
+    banco.linhas = [];
+
+    render(<CalendarTab />);
+
+    expect(await screen.findByTitle(/Ver disputas deste dia/i)).toBeDefined();
+    await waitFor(() => {
+      expect(banco.salvas.some((s) => s.id === "pendente-local-1")).toBe(true);
+    });
+  });
 });

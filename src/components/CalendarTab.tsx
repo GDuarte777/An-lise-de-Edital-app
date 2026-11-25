@@ -26,6 +26,11 @@ import {
   ErrosDisputaManual
 } from "../utils/disputaManual";
 import { parseDisputaDate, getContrastTextColor } from "../utils/disputaDates";
+import {
+  marcarDisputaPendenteSync,
+  limparDisputaPendenteSync,
+  mesclarDisputasComPendentesLocais,
+} from "../utils/disputaSync";
 import { baixarIcsDeDisputas, contarDisputasExportaveis } from "../utils/icsExport";
 import { useEditalHistory } from "../utils/editalHistory";
 import { extrairNumeroEdital } from "../utils/identificacaoEdital";
@@ -194,8 +199,32 @@ export default function CalendarTab({
       // vazia e apagava o cache local — uma disputa marcada à mão aparecia e
       // desaparecia no refresh seguinte.
       if (resultado.ok) {
-        setDisputas(resultado.rows);
-        localStorage.setItem("aip_disputas_sheet", JSON.stringify(resultado.rows));
+        let localRows: DisputaRow[] = [];
+        try {
+          const savedLocal = localStorage.getItem("aip_disputas_sheet");
+          if (savedLocal) {
+            const parsedLocal = JSON.parse(savedLocal);
+            if (Array.isArray(parsedLocal)) localRows = parsedLocal;
+          }
+        } catch {
+          // ignore
+        }
+        const { rows: mescladas, pendentesReenviar } = mesclarDisputasComPendentesLocais(
+          resultado.rows,
+          localRows
+        );
+        setDisputas(mescladas);
+        localStorage.setItem("aip_disputas_sheet", JSON.stringify(mescladas));
+
+        if (pendentesReenviar.length > 0) {
+          pendentesReenviar.forEach((p) => {
+            saveDisputaToSupabase(p)
+              .then((res) => {
+                if (res?.success) limparDisputaPendenteSync(p.id);
+              })
+              .catch(() => {});
+          });
+        }
       }
       if (Array.isArray(dbTypes) && dbTypes.length > 0) {
         setStatusTypes(dbTypes);
@@ -499,9 +528,13 @@ export default function CalendarTab({
             statusPadrao: sortedStatusTypes[0]?.label
           });
 
+      marcarDisputaPendenteSync(row.id);
       aplicarLocalmente(row);
 
       const res = await saveDisputaToSupabase(row);
+      if (res.success) {
+        limparDisputaPendenteSync(row.id);
+      }
       // A Planilha de Disputas escuta este evento: a linha criada aqui aparece
       // lá sem precisar recarregar a página.
       window.dispatchEvent(new Event("aip_sync_disputas"));
@@ -524,6 +557,7 @@ export default function CalendarTab({
   const excluirDisputa = async (row: DisputaRow) => {
     if (!window.confirm(`Remover "${row.orgao || "esta disputa"}" do calendário e da Planilha?`)) return;
 
+    limparDisputaPendenteSync(row.id);
     setDisputas(prev => {
       const nova = prev.filter(r => r.id !== row.id);
       localStorage.setItem("aip_disputas_sheet", JSON.stringify(nova));
@@ -587,18 +621,68 @@ export default function CalendarTab({
         </div>
       </div>
 
-      {/* Aviso de disputas sem data reconhecível */}
+      {/* Lista interativa de disputas sem data reconhecível */}
       {disputasSemData.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs">
-          <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
-          <span className="text-foreground">
-            {disputasSemData.length} disputa{disputasSemData.length === 1 ? "" : "s"} sem data de sessão reconhecível não aparece{disputasSemData.length === 1 ? "" : "m"} no calendário.
-          </span>
-          {onNavigateToDisputas && (
-            <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={onNavigateToDisputas}>
-              Ver na Planilha
-            </Button>
-          )}
+        <div className="flex flex-col gap-2.5 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+              <span className="font-semibold text-foreground">
+                Disputas sem data ({disputasSemData.length}) — defina a data para posicioná-las na grade mensal.
+              </span>
+            </div>
+            {onNavigateToDisputas && (
+              <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={onNavigateToDisputas}>
+                Ver na Planilha
+              </Button>
+            )}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {disputasSemData.map((row) => (
+              <div
+                key={row.id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card px-2.5 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: getStatusColor(row.status) }}
+                    />
+                    <span className="truncate font-semibold text-foreground">
+                      {row.orgao || "Órgão não informado"}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5 pl-3.5 text-[10px] text-muted-foreground">
+                    {row.numeroLicitacao && <span className="font-mono font-semibold text-primary">{row.numeroLicitacao}</span>}
+                    {row.status && <span>• {row.status}</span>}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[11px] font-semibold"
+                    onClick={() => abrirEdicao(row)}
+                  >
+                    <Pencil className="h-3 w-3" />
+                    Definir data
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    title="Remover do Calendário"
+                    onClick={() => handleRemoverDoCalendario(row.id)}
+                  >
+                    <CalendarX className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

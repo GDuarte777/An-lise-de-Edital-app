@@ -472,12 +472,16 @@ export async function apiFetch(
   }
 }
 
-// Chunked file upload helper for large files (> 2MB) to prevent HTTP 413 Payload Too Large
-export async function prepareAttachmentForServer(fileObj: any): Promise<any> {
+// Chunked file upload helper for large files (> 2MB) or large multi-file batches to prevent HTTP 413 Payload Too Large
+export async function prepareAttachmentForServer(
+  fileObj: any,
+  options?: { forceChunk?: boolean }
+): Promise<any> {
   if (!fileObj) return fileObj;
 
   const base64Str = fileObj.base64 || fileObj.fileBase64 || fileObj.data || "";
-  if (fileObj.uploadId || !base64Str || base64Str.length < 3 * 1024 * 1024) {
+  const minThreshold = options?.forceChunk ? 256 * 1024 : 3 * 1024 * 1024;
+  if (fileObj.uploadId || !base64Str || base64Str.length < minThreshold) {
     return fileObj;
   }
 
@@ -532,9 +536,17 @@ export async function prepareAttachmentForServer(fileObj: any): Promise<any> {
 
 export async function prepareAttachmentsForServer(attachments: any[]): Promise<any[]> {
   if (!Array.isArray(attachments)) return [];
+  const totalBase64Length = attachments.reduce((sum, att) => {
+    if (!att || att.uploadId) return sum;
+    const b64 = att.base64 || att.fileBase64 || att.data || "";
+    return sum + (typeof b64 === "string" ? b64.length : 0);
+  }, 0);
+  const forceBatchChunk = totalBase64Length >= 3 * 1024 * 1024;
+
   const processed = [];
   for (const att of attachments) {
-    processed.push(await prepareAttachmentForServer(att));
+    processed.push(await prepareAttachmentForServer(att, { forceChunk: forceBatchChunk }));
   }
   return processed;
 }
+

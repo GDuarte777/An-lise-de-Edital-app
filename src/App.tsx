@@ -131,7 +131,14 @@ const AI_PROVIDERS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("analyzer");
+  const [radarMontado, setRadarMontado] = useState<boolean>(false);
   const [docsSubView, setDocsSubView] = useState<"certs" | "checklist">("certs");
+
+  useEffect(() => {
+    if (activeTab === "radar") {
+      setRadarMontado(true);
+    }
+  }, [activeTab]);
   const [calcSubView, setCalcSubView] = useState<"pricing" | "comparator">("pricing");
   const [capagFocusQuery, setCapagFocusQuery] = useState<{
     uf?: string;
@@ -658,6 +665,28 @@ export default function App() {
                   </div>
                 }
               >
+                {radarMontado && (
+                  <div
+                    className={activeTab === "radar" ? "block" : "hidden"}
+                    aria-hidden={activeTab !== "radar"}
+                  >
+                    <RadarOportunidadesTab
+                      isActive={activeTab === "radar"}
+                      onSelectForAnalysis={(text) => {
+                        localStorage.setItem("aip_auto_analyze_text", text);
+                        setActiveTab("analyzer");
+                        setTimeout(() => {
+                          window.dispatchEvent(new Event("aip_trigger_external_text"));
+                        }, 50);
+                      }}
+                      onNavigateToCapag={(focus) => {
+                        setCapagFocusQuery(focus);
+                        setActiveTab("capag");
+                      }}
+                    />
+                  </div>
+                )}
+
                 {activeTab === "analyzer" ? (
                   <EditalAnalyzerTab
                     companyData={companyData}
@@ -679,21 +708,7 @@ export default function App() {
                       setActiveTab("capag");
                     }}
                   />
-                ) : activeTab === "radar" ? (
-                  <RadarOportunidadesTab
-                    onSelectForAnalysis={(text) => {
-                      localStorage.setItem("aip_auto_analyze_text", text);
-                      setActiveTab("analyzer");
-                      setTimeout(() => {
-                        window.dispatchEvent(new Event("aip_trigger_external_text"));
-                      }, 50);
-                    }}
-                    onNavigateToCapag={(focus) => {
-                      setCapagFocusQuery(focus);
-                      setActiveTab("capag");
-                    }}
-                  />
-                ) : activeTab === "capag" ? (
+                ) : activeTab === "radar" ? null : activeTab === "capag" ? (
                   <CapagSearchTab
                     initialFocusQuery={capagFocusQuery}
                     onClearInitialFocus={() => setCapagFocusQuery(null)}

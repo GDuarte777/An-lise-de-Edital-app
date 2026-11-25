@@ -1,4 +1,5 @@
 import { DisputaRow } from "../types";
+import { parseDisputaDate } from "./disputaDates";
 
 // ═══════════════════════════════════════════════════════════════════════
 // DISPUTA MARCADA À MÃO NO CALENDÁRIO
@@ -65,11 +66,26 @@ export function separarDataHora(dataHoraDisputa: string): { data: string; hora: 
   }
 
   // Formato brasileiro (ex: "05/11/2026", "05/11/2026 14:00", "05/11/2026 às 10:00h").
-  m = texto.match(/(\d{2})\/(\d{2})\/(\d{4})(?:[^0-9]+(\d{1,2})[:h](\d{2}))?/i);
+  m = texto.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[^0-9]+(\d{1,2})[:hH](\d{2}))?/i);
   if (m) {
+    const dd = m[1].padStart(2, "0");
+    const mo = m[2].padStart(2, "0");
     const hh = m[4] ? m[4].padStart(2, "0") : "";
     const mm = m[5] || "00";
-    return { data: `${m[3]}-${m[2]}-${m[1]}`, hora: hh ? `${hh}:${mm}` : "" };
+    return { data: `${m[3]}-${mo}-${dd}`, hora: hh ? `${hh}:${mm}` : "" };
+  }
+
+  const parsed = parseDisputaDate(texto);
+  if (parsed) {
+    const yyyy = parsed.getFullYear();
+    const mo = String(parsed.getMonth() + 1).padStart(2, "0");
+    const dd = String(parsed.getDate()).padStart(2, "0");
+    const hh = String(parsed.getHours()).padStart(2, "0");
+    const mi = String(parsed.getMinutes()).padStart(2, "0");
+    return {
+      data: `${yyyy}-${mo}-${dd}`,
+      hora: hh !== "00" || mi !== "00" ? `${hh}:${mi}` : "",
+    };
   }
 
   return { data: "", hora: "" };

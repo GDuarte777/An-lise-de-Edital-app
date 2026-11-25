@@ -2549,3 +2549,109 @@ export async function saveCompanyDataToSupabase(companyData: any): Promise<{ suc
   }
 }
 
+// Disputas salvas no Radar de Oportunidades (para analisar depois)
+export async function fetchDisputasSalvasRadarFromSupabase(): Promise<{ ok: boolean; rows: any[] }> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("disputas_salvas_radar")) return { ok: false, rows: [] };
+  try {
+    const user = await getActiveUser();
+    if (!user) return { ok: false, rows: [] };
+    const { data, error } = await client
+      .from("disputas_salvas_radar")
+      .select("numero_controle_pncp, dados, salvo_em")
+      .eq("user_id", user.id)
+      .order("salvo_em", { ascending: false });
+
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("disputas_salvas_radar");
+      }
+      return { ok: false, rows: [] };
+    }
+
+    const rows = (data || [])
+      .map((row: any) => {
+        const dados = row?.dados && typeof row.dados === "object" ? row.dados : null;
+        if (!dados) return null;
+        return {
+          ...dados,
+          numeroControlePNCP: dados.numeroControlePNCP || row.numero_controle_pncp,
+          salvoEm: row.salvo_em || dados.salvoEm || new Date().toISOString(),
+        };
+      })
+      .filter(Boolean);
+
+    return { ok: true, rows };
+  } catch (err: any) {
+    if (isTableMissingError(err)) {
+      markTableMissing("disputas_salvas_radar");
+    }
+    return { ok: false, rows: [] };
+  }
+}
+
+export async function saveDisputaSalvaRadarToSupabase(
+  numeroControlePNCP: string,
+  dados: Record<string, any>,
+  salvoEm: string
+): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("disputas_salvas_radar")) return false;
+  try {
+    const user = await getActiveUser();
+    if (!user) return false;
+    const { error } = await client
+      .from("disputas_salvas_radar")
+      .upsert(
+        [
+          {
+            user_id: user.id,
+            numero_controle_pncp: numeroControlePNCP,
+            dados,
+            salvo_em: salvoEm,
+          },
+        ],
+        { onConflict: "user_id,numero_controle_pncp" }
+      );
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("disputas_salvas_radar");
+      }
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    if (isTableMissingError(err)) {
+      markTableMissing("disputas_salvas_radar");
+    }
+    return false;
+  }
+}
+
+export async function deleteDisputaSalvaRadarFromSupabase(numeroControlePNCP: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client || isTableMissing("disputas_salvas_radar")) return false;
+  try {
+    const user = await getActiveUser();
+    if (!user) return false;
+    const { error } = await client
+      .from("disputas_salvas_radar")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("numero_controle_pncp", numeroControlePNCP);
+    if (error) {
+      if (isTableMissingError(error)) {
+        markTableMissing("disputas_salvas_radar");
+      }
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    if (isTableMissingError(err)) {
+      markTableMissing("disputas_salvas_radar");
+    }
+    return false;
+  }
+}
+
+

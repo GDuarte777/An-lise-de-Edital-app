@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { normalizarCodigoUasg, extrairCodigoUasg } from "../utils/identificacaoEdital";
 import { parseNumeroControlePNCP, PNCP_MODALIDADES } from "../utils/pncpQuery";
-import { buscarPacoteOficialPncp, type PacoteOficialPncp } from "../utils/pncpClient";
+import { buscarDataOficialPncp, buscarPacoteOficialPncp, type PacoteOficialPncp } from "../utils/pncpClient";
 import { resolverCapagPorOrgaoOuLocal, obterEstiloNotaCapag } from "../utils/capagData";
 import { EditalAnalysis, CompanyData, SyncItem, Certificate, DisputaRow, DisputaStatus, DisputaStatusType } from "../types";
 import { 
@@ -36,7 +36,16 @@ import {
   lerDisputasForaDoCalendario,
   generateUUID
 } from "../utils/supabaseClient";
-import { getContrastTextColor } from "../utils/disputaDates";
+import {
+  getContrastTextColor,
+  parseDisputaDate,
+  normalizarDataHoraDisputa,
+  extrairDataPncpPreferencial,
+} from "../utils/disputaDates";
+import {
+  marcarDisputaPendenteSync,
+  limparDisputaPendenteSync,
+} from "../utils/disputaSync";
 import {
   useEditalHistory,
   addEditalToHistory,
@@ -416,6 +425,7 @@ export default function EditalAnalyzerTab({
   const [editalDisputaStatus, setEditalDisputaStatus] = useState<DisputaStatus>("Agendada");
   const [editalNoCalendario, setEditalNoCalendario] = useState<boolean>(false);
   const [calendarFeedback, setCalendarFeedback] = useState<string | null>(null);
+  const [buscandoDataCalendario, setBuscandoDataCalendario] = useState<boolean>(false);
 
   useEffect(() => {
     fetchStatusDisputasFromSupabase()
@@ -428,12 +438,50 @@ export default function EditalAnalyzerTab({
       .catch(() => {});
   }, []);
 
+  const resolverDataLocalDoEdital = (editalObj: EditalAnalysis): string => {
+    const iden: any = editalObj.identificacaoCertame || {};
+    const candidatos = [
+      iden.dataHoraSessao,
+      iden.dataAbertura,
+      iden.dataSessao,
+      (editalObj as any).dataHoraSessao,
+    ];
+    for (const c of candidatos) {
+      const normalizada = normalizarDataHoraDisputa(c);
+      if (normalizada) return normalizada;
+    }
+    return "";
+  };
+
+  const extrairIdentificadorPncpDoEdital = (editalObj: EditalAnalysis): string | null => {
+    const iden: any = editalObj.identificacaoCertame || {};
+    const candidatos = [
+      iden.idContratacaoPNCP,
+      editalObj.idContratacaoPNCP,
+      iden.linkPNCP,
+      editalObj.linkPNCP,
+      (editalObj as any).dadosOficiaisPNCP?.numeroControlePNCP,
+      pncpNumeroControle,
+      pncpDirectInput,
+      editalObj.rawText,
+      editalObj.reportMarkdown,
+    ];
+    for (const c of candidatos) {
+      if (!c) continue;
+      const texto = String(c).trim();
+      if (!texto) continue;
+      if (parseNumeroControlePNCP(texto)) return texto;
+    }
+    return null;
+  };
+
   // Build a DisputaRow payload from an EditalAnalysis
   const montarDisputaDoEdital = (
     editalObj: EditalAnalysis,
     customId?: string,
     customStatus?: DisputaStatus,
-    customNoCalendario?: boolean
+    customNoCalendario?: boolean,
+    overrides?: { dataHoraDisputa?: string; linkPNCP?: string }
   ): DisputaRow => {
     const iden: any = editalObj.identificacaoCertame || {};
     const fin: any = editalObj.viabilidadeFinanceira || {};
@@ -458,6 +506,11 @@ export default function EditalAnalyzerTab({
         ? Math.max(...todosValores)
         : (typeof fin.valorEstimado === "number" ? fin.valorEstimado : 0);
 
+    const dataNormalizada =
+      overrides?.dataHoraDisputa !== undefined
+        ? overrides.dataHoraDisputa
+        : resolverDataLocalDoEdital(editalObj);
+
     return {
       id: customId || editalDisputaId || generateUUID(),
       orgao: iden.orgaoComprador || (editalObj.descricaoProduto ? editalObj.descricaoProduto.slice(0, 50) : "Órgão do Edital"),
@@ -470,10 +523,10 @@ export default function EditalAnalyzerTab({
       valorEstimadoItem: numVal,
       nossoValorAlvo: numVal > 0 ? Number((numVal * 0.90).toFixed(2)) : 0,
       valorMinimoPiso: numVal > 0 ? Number((numVal * 0.82).toFixed(2)) : 0,
-      dataHoraDisputa: iden.dataHoraSessao || "",
+      dataHoraDisputa: dataNormalizada,
       status: customStatus || editalDisputaStatus || "Agendada",
       observacoes: "Extraído da análise do edital.",
-      linkPNCP: iden.linkPNCP || editalObj.linkPNCP || "",
+      linkPNCP: overrides?.linkPNCP || iden.linkPNCP || editalObj.linkPNCP || "",
       noCalendario: customNoCalendario ?? editalNoCalendario
     };
   };
@@ -536,13 +589,26 @@ export default function EditalAnalyzerTab({
     }
   }, [activeEdital]);
 
-  const persistirDisputaDoEdital = (novoStatus: DisputaStatus, inserirNoCalendario: boolean) => {
-    if (!activeEdital) return;
-    const row = montarDisputaDoEdital(activeEdital, editalDisputaId || undefined, novoStatus, inserirNoCalendario);
+  const persistirDisputaDoEdital = async (
+    novoStatus: DisputaStatus,
+    inserirNoCalendario: boolean,
+    editalFonte?: EditalAnalysis,
+    overrides?: { dataHoraDisputa?: string; linkPNCP?: string }
+  ): Promise<{ row: DisputaRow; syncOk: boolean } | null> => {
+    const alvo = editalFonte || activeEdital;
+    if (!alvo) return null;
+    const row = montarDisputaDoEdital(
+      alvo,
+      editalDisputaId || undefined,
+      novoStatus,
+      inserirNoCalendario,
+      overrides
+    );
     setEditalDisputaId(row.id);
     setEditalDisputaStatus(novoStatus);
     setEditalNoCalendario(inserirNoCalendario);
     definirDisputaNoCalendarioLocal(row.id, inserirNoCalendario);
+    marcarDisputaPendenteSync(row.id);
 
     try {
       const saved = localStorage.getItem("aip_disputas_sheet");
@@ -556,13 +622,19 @@ export default function EditalAnalyzerTab({
       // ignore
     }
 
-    saveDisputaToSupabase(row)
-      .then(() => {
-        window.dispatchEvent(new Event("aip_sync_disputas"));
-      })
-      .catch(() => {
-        window.dispatchEvent(new Event("aip_sync_disputas"));
-      });
+    let syncOk = false;
+    try {
+      const res = await saveDisputaToSupabase(row);
+      syncOk = Boolean(res?.success);
+      if (syncOk) {
+        limparDisputaPendenteSync(row.id);
+      }
+    } catch {
+      syncOk = false;
+    }
+
+    window.dispatchEvent(new Event("aip_sync_disputas"));
+    return { row, syncOk };
   };
 
   const handleEditalStatusSelectChange = (novoStatus: DisputaStatus) => {
@@ -575,16 +647,102 @@ export default function EditalAnalyzerTab({
     }
   };
 
-  const handleToggleEditalNoCalendario = () => {
+  const handleToggleEditalNoCalendario = async () => {
+    if (!activeEdital || buscandoDataCalendario) return;
     const proximoValor = !editalNoCalendario;
-    persistirDisputaDoEdital(editalDisputaStatus, proximoValor);
-    if (proximoValor) {
-      confetti({ particleCount: 45, spread: 55 });
-      setCalendarFeedback(`Disputa inserida no Calendário com status "${editalDisputaStatus}"!`);
-    } else {
+
+    if (!proximoValor) {
+      await persistirDisputaDoEdital(editalDisputaStatus, false);
       setCalendarFeedback("Disputa removida do Calendário.");
+      setTimeout(() => setCalendarFeedback(null), 4000);
+      return;
     }
-    setTimeout(() => setCalendarFeedback(null), 4000);
+
+    let editalAtualizado: EditalAnalysis = activeEdital;
+    let dataResolvida = resolverDataLocalDoEdital(activeEdital);
+    let origemData: "edital" | "pncp_encerramento" | "pncp_abertura" | "sem_data" = dataResolvida
+      ? "edital"
+      : "sem_data";
+    let linkPncpResolvido =
+      activeEdital.identificacaoCertame?.linkPNCP || activeEdital.linkPNCP || "";
+
+    if (!dataResolvida) {
+      const identificadorPncp = extrairIdentificadorPncpDoEdital(activeEdital);
+      if (identificadorPncp) {
+        setBuscandoDataCalendario(true);
+        try {
+          const datasPncp = await buscarDataOficialPncp(identificadorPncp);
+          if (datasPncp?.linkPNCP && !linkPncpResolvido) {
+            linkPncpResolvido = datasPncp.linkPNCP;
+          }
+          const escolhida = extrairDataPncpPreferencial(datasPncp);
+          if (escolhida) {
+            dataResolvida = escolhida.dataFormatada;
+            origemData = escolhida.origem === "encerramento" ? "pncp_encerramento" : "pncp_abertura";
+            editalAtualizado = {
+              ...activeEdital,
+              linkPNCP: linkPncpResolvido || activeEdital.linkPNCP,
+              idContratacaoPNCP: datasPncp?.numeroControlePNCP || activeEdital.idContratacaoPNCP,
+              identificacaoCertame: {
+                orgaoComprador: activeEdital.identificacaoCertame?.orgaoComprador || "",
+                modalidade: activeEdital.identificacaoCertame?.modalidade || "",
+                identificacaoNumerica: activeEdital.identificacaoCertame?.identificacaoNumerica || "",
+                ...activeEdital.identificacaoCertame,
+                dataHoraSessao: dataResolvida,
+                linkPNCP: linkPncpResolvido || activeEdital.identificacaoCertame?.linkPNCP,
+                idContratacaoPNCP:
+                  datasPncp?.numeroControlePNCP || activeEdital.identificacaoCertame?.idContratacaoPNCP,
+              },
+            };
+            setActiveEdital(editalAtualizado);
+            try {
+              localStorage.setItem("aip_active_edital", JSON.stringify(editalAtualizado));
+            } catch {
+              // ignore storage errors
+            }
+          }
+        } catch {
+          // segue para salvar na lista de disputas sem data do Calendário
+        } finally {
+          setBuscandoDataCalendario(false);
+        }
+      }
+    }
+
+    const resultado = await persistirDisputaDoEdital(
+      editalDisputaStatus,
+      true,
+      editalAtualizado,
+      {
+        dataHoraDisputa: dataResolvida,
+        linkPNCP: linkPncpResolvido || undefined,
+      }
+    );
+
+    confetti({ particleCount: 45, spread: 55 });
+    const sufixoSync =
+      resultado && !resultado.syncOk
+        ? " (salva neste navegador; sincronização com o banco pendente)"
+        : "";
+
+    if (origemData === "pncp_encerramento") {
+      setCalendarFeedback(
+        `Disputa inserida no Calendário com a data de encerramento do PNCP (${dataResolvida}) e status "${editalDisputaStatus}"!${sufixoSync}`
+      );
+    } else if (origemData === "pncp_abertura") {
+      setCalendarFeedback(
+        `Disputa inserida no Calendário com a data oficial do PNCP (${dataResolvida}) e status "${editalDisputaStatus}"!${sufixoSync}`
+      );
+    } else if (origemData === "edital") {
+      setCalendarFeedback(
+        `Disputa inserida no Calendário (${dataResolvida}) com status "${editalDisputaStatus}"!${sufixoSync}`
+      );
+    } else {
+      setCalendarFeedback(
+        `Disputa salva na lista "Sem data" do Calendário (nenhuma data foi encontrada no edital nem no PNCP — defina a data diretamente no Calendário).${sufixoSync}`
+      );
+    }
+    setTimeout(() => setCalendarFeedback(null), 6500);
   };
 
   const getEditalStatusColor = (status: DisputaStatus): string => {
@@ -1059,6 +1217,19 @@ export default function EditalAnalyzerTab({
   const [clearingHistory, setClearingHistory] = useState(false);
   const [historyActionError, setHistoryActionError] = useState<string | null>(null);
 
+  const inFlightAnalyzeRef = useRef<boolean>(false);
+  const handleAnalyzeRef = useRef<
+    (
+      overridePncpRef?: string,
+      directPayload?: {
+        textInput?: string;
+        files?: Array<{ id: string; name: string; size: string; type: string; base64: string }>;
+        pncpControl?: string;
+        explicitSelection?: boolean;
+      }
+    ) => Promise<void>
+  >(async () => {});
+
   useEffect(() => {
     const handleExternalText = () => {
       const extText = localStorage.getItem("aip_auto_analyze_text");
@@ -1075,20 +1246,27 @@ export default function EditalAnalyzerTab({
           : [];
 
       if (extText || pendingFiles.length > 0 || pendente?.numeroControlePNCP) {
-        setTextInput(extText || "");
+        const nextText = extText || "";
+        const nextPncp = String(pendente?.numeroControlePNCP || "").trim();
+        const isExplicitSelection = Boolean(pendente?.explicitSelection) || pendingFiles.length > 0;
+
+        setTextInput(nextText);
         setAttachedFiles(pendingFiles);
-        setPncpNumeroControle(pendente?.numeroControlePNCP || "");
-        if (pendente?.numeroControlePNCP) {
-          setPncpDirectInput(pendente.numeroControlePNCP);
-        }
+        setPncpNumeroControle(nextPncp);
+        setPncpDirectInput(nextPncp);
+
         localStorage.removeItem("aip_auto_analyze_text");
         delete (window as any).__aipPendingEdital;
 
-        // Trigger auto analysis after a tiny delay so the state update is processed
+        // Dispara a análise passando o pacote diretamente (sem corrida de estado ou clique sintético no DOM)
         setTimeout(() => {
-          const btn = document.getElementById("trigger-analyze-btn");
-          if (btn) btn.click();
-        }, 150);
+          void handleAnalyzeRef.current(undefined, {
+            textInput: nextText,
+            files: pendingFiles,
+            pncpControl: nextPncp,
+            explicitSelection: isExplicitSelection,
+          });
+        }, 0);
       }
     };
 
@@ -1204,14 +1382,34 @@ export default function EditalAnalyzerTab({
     setAttachedFiles(prev => prev.filter(f => f.id !== id));
   };
 
-  const handleAnalyze = async (overridePncpRef?: string) => {
-    const pncpCandidate = (overridePncpRef ?? pncpDirectInput ?? pncpNumeroControle ?? "").trim();
-    const parsedFromDirect = parseNumeroControlePNCP(pncpCandidate || textInput);
+  const handleAnalyze = async (
+    overridePncpRef?: string,
+    directPayload?: {
+      textInput?: string;
+      files?: Array<{ id: string; name: string; size: string; type: string; base64: string }>;
+      pncpControl?: string;
+      explicitSelection?: boolean;
+    }
+  ) => {
+    if (inFlightAnalyzeRef.current) return;
+
+    const effectiveTextInput = directPayload?.textInput !== undefined ? directPayload.textInput : textInput;
+    const effectiveFiles = directPayload?.files !== undefined ? directPayload.files : attachedFiles;
+    const explicitSelection = Boolean(directPayload?.explicitSelection);
+
+    const pncpCandidate = (
+      overridePncpRef ||
+      directPayload?.pncpControl ||
+      pncpDirectInput ||
+      pncpNumeroControle ||
+      ""
+    ).trim();
+    const parsedFromDirect = parseNumeroControlePNCP(pncpCandidate || effectiveTextInput);
     const resolvedPncpControl = parsedFromDirect
       ? `${parsedFromDirect.cnpj}-1-${String(parsedFromDirect.sequencial).padStart(6, "0")}/${parsedFromDirect.ano}`
-      : pncpNumeroControle.trim();
+      : (directPayload?.pncpControl || pncpNumeroControle || "").trim();
 
-    if (!textInput.trim() && attachedFiles.length === 0 && !resolvedPncpControl) {
+    if (!effectiveTextInput.trim() && effectiveFiles.length === 0 && !resolvedPncpControl) {
       alert("Por favor, faça upload do PDF, cole o link/ID do PNCP ou cole o texto do edital primeiro.");
       return;
     }
@@ -1224,25 +1422,27 @@ export default function EditalAnalyzerTab({
       return;
     }
 
+    inFlightAnalyzeRef.current = true;
     setLoading(true);
-    // AbortController for 120s timeout
+    // AbortController for 240s timeout
     const abortCtrl = new AbortController();
     const timeoutId = setTimeout(() => abortCtrl.abort(), 240_000);
 
     try {
       let data: any;
       let pacotePncp: PacoteOficialPncp | null = null;
-      let filesToUse = attachedFiles;
-      let textToUse = textInput;
+      let filesToUse = effectiveFiles;
+      let textToUse = effectiveTextInput;
 
-      // Se a análise tem vínculo com o PNCP, busca direto do navegador a ficha oficial,
-      // todos os itens (/itens) e baixa automaticamente o Edital + Termo de Referência.
+      // Se a análise tem vínculo com o PNCP, busca direto do navegador a ficha oficial e os itens (/itens).
+      // Só baixa arquivos automaticamente quando o usuário NÃO escolheu documentos específicos no modal.
       if (resolvedPncpControl) {
+        const deveBaixarArquivosAutomaticamente = !explicitSelection && filesToUse.length === 0;
         pacotePncp = await buscarPacoteOficialPncp(resolvedPncpControl, {
-          baixarArquivos: filesToUse.length === 0,
+          baixarArquivos: deveBaixarArquivosAutomaticamente,
         }).catch(() => null);
         if (pacotePncp) {
-          if (filesToUse.length === 0 && pacotePncp.anexosBaixados.length > 0) {
+          if (deveBaixarArquivosAutomaticamente && pacotePncp.anexosBaixados.length > 0) {
             filesToUse = pacotePncp.anexosBaixados;
             setAttachedFiles(pacotePncp.anexosBaixados);
           }
@@ -1252,7 +1452,7 @@ export default function EditalAnalyzerTab({
         }
       }
 
-      console.log(`[Analyzer] Processing edital analysis with ${filesToUse.length} file attachments (PNCP: ${resolvedPncpControl || "none"})...`);
+      console.log(`[Analyzer] Processing edital analysis with ${filesToUse.length} file attachments (PNCP: ${resolvedPncpControl || "none"}, explicitSelection: ${explicitSelection})...`);
 
       const preparedAttachments = await prepareAttachmentsForServer(filesToUse);
 
@@ -1262,7 +1462,8 @@ export default function EditalAnalyzerTab({
         body: {
           textInput: textToUse || (resolvedPncpControl ? `Contratação Oficial PNCP ${resolvedPncpControl}` : ""),
           attachments: preparedAttachments,
-          numeroControlePNCP: resolvedPncpControl || undefined
+          numeroControlePNCP: resolvedPncpControl || undefined,
+          explicitSelection,
         }
       });
 
@@ -1321,8 +1522,11 @@ export default function EditalAnalyzerTab({
             }
             const uasgOficial = normalizarCodigoUasg(det.unidadeOrgao?.codigoUnidade);
             if (uasgOficial) ident.codigoUASG = uasgOficial;
-            if (det.dataAberturaProposta) {
-              ident.dataHoraSessao = new Date(det.dataAberturaProposta).toLocaleString("pt-BR");
+            if (!parseDisputaDate(String(ident.dataHoraSessao || ""))) {
+              const dataPncp = extrairDataPncpPreferencial(det);
+              if (dataPncp) {
+                ident.dataHoraSessao = dataPncp.dataFormatada;
+              }
             }
             if (typeof det.valorTotalEstimado === "number" && det.valorTotalEstimado > 0) {
               if (!analysisResult.viabilidadeFinanceira) {
@@ -1407,9 +1611,11 @@ export default function EditalAnalyzerTab({
       console.error("[handleAnalyze] Error:", e);
     } finally {
       clearTimeout(timeoutId);
+      inFlightAnalyzeRef.current = false;
       setLoading(false);
     }
   };
+  handleAnalyzeRef.current = handleAnalyze;
 
   // Helper for dynamic filtering of points & documents based on selectedItemNumbers
   const getFilteredArray = (array: string[] | undefined) => {
@@ -2022,19 +2228,25 @@ export default function EditalAnalyzerTab({
 
                 <button
                   type="button"
+                  disabled={buscandoDataCalendario}
                   onClick={handleToggleEditalNoCalendario}
                   title={
                     editalNoCalendario
                       ? "Esta disputa está no Calendário — clique para remover do Calendário"
                       : "Clique para inserir esta disputa analisada no Calendário com o status escolhido"
                   }
-                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-bold transition ${
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-bold transition disabled:opacity-70 ${
                     editalNoCalendario
                       ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-300"
                       : "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
                   }`}
                 >
-                  {editalNoCalendario ? (
+                  {buscandoDataCalendario ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+                      <span>Buscando data no PNCP...</span>
+                    </>
+                  ) : editalNoCalendario ? (
                     <>
                       <CalendarCheck className="w-3.5 h-3.5 shrink-0" />
                       <span>No Calendário (Remover)</span>

@@ -2,6 +2,7 @@ import { urlDaApi, cabecalhosDaApi } from "./apiBase";
 import {
   PNCP_MODALIDADES,
   chaveContratacao,
+  classificarFormatoDocumentoPncp,
   escolherArquivosPrincipaisEdital,
   formatarDataPncp,
   montarQueryBuscaIndexadaPncp,
@@ -440,6 +441,56 @@ export async function buscarContratacaoPorLinkOuIdPncp(
       console.warn("[pncpClient] Falha ao consultar endpoint direto da compra por link/ID:", err);
     }
 
+    // 1b. Fallback via proxy do servidor (/api/pncp/contratacao) caso o navegador sofra CORS/instabilidade
+    try {
+      const respProxy = await fetchComTimeout(
+        urlDaApi(`/api/pncp/contratacao?numeroControle=${encodeURIComponent(numeroControle)}`),
+        { headers: cabecalhosDaApi() },
+        15_000
+      );
+      if (respProxy.ok) {
+        const payload = await respProxy.json().catch(() => null);
+        const det = payload?.contratacao || payload;
+        if (det && typeof det === "object" && (det.numeroControlePNCP || det.objetoCompra || det.orgaoEntidade)) {
+          let normalizado = normalizarItemConsultaDireta({
+            ...det,
+            numeroControlePNCP: det.numeroControlePNCP || numeroControle,
+            cnpjOrgao: alvo.cnpj,
+            anoCompra: Number(alvo.ano),
+            sequencialCompra: seqNum,
+          });
+          const itensProxy = Array.isArray(payload?.itens) ? payload.itens : [];
+          if (
+            (!normalizado.valorTotalEstimado || Number(normalizado.valorTotalEstimado) <= 0) &&
+            !normalizado.orcamentoSigiloso &&
+            itensProxy.length > 0
+          ) {
+            const soma = itensProxy.reduce((acc: number, it: any) => {
+              const qtd = Number(it?.quantidade) || 1;
+              const vUnit = Number(it?.valorUnitarioEstimado) || 0;
+              const vTot = Number(it?.valorTotal) > 0 ? Number(it.valorTotal) : vUnit * qtd;
+              return acc + (vTot > 0 ? vTot : 0);
+            }, 0);
+            if (soma > 0) {
+              normalizado = { ...normalizado, valorTotalEstimado: soma, precoPendente: false };
+            }
+          }
+          const enriquecidos = aplicarCachePrecosContratacoesPncp([normalizado]);
+          return {
+            data: enriquecidos,
+            totalRegistros: 1,
+            totalPaginas: 1,
+            numeroPagina: 1,
+            resultadoParcial: false,
+            avisosPNCP: [],
+            source: "pncp_api_real",
+          };
+        }
+      }
+    } catch {
+      // prossegue para fallback no índice /api/search/
+    }
+
     // Fallback no índice /api/search/ procurando pelo número de controle exato
     try {
       const qSearch = montarQueryBuscaIndexadaPncp({
@@ -779,6 +830,32 @@ export async function buscarContratacoesPncp(
   };
 }
 
+function normalizarListaArquivosPncp(
+  lista: any[],
+  alvo: { cnpj: string; ano: string; sequencial: string }
+): Array<{ sequencialDocumento: number; titulo: string; tipo: string; uri: string; dataPublicacao?: string }> {
+  const sequenciaisUsados = new Set<number>();
+  return lista.map((doc: any, idx: number) => {
+    const seqBruto = Number(doc?.sequencialDocumento);
+    let sequencialDocumento = Number.isFinite(seqBruto) && seqBruto > 0 ? seqBruto : idx + 1;
+    while (sequenciaisUsados.has(sequencialDocumento)) {
+      sequencialDocumento += 1;
+    }
+    sequenciaisUsados.add(sequencialDocumento);
+
+    return {
+      sequencialDocumento,
+      titulo: String(doc?.titulo || doc?.nomeArquivo || `Documento ${sequencialDocumento}`).trim(),
+      tipo: String(doc?.tipo || doc?.tipoDocumentoNome || doc?.tipoDocumentoDescricao || "Documento").trim(),
+      dataPublicacao: doc?.dataPublicacaoPncp || doc?.dataPublicacao || "",
+      uri:
+        doc?.uri ||
+        doc?.url ||
+        `${PNCP_INTEGRACAO_URL}/${alvo.cnpj}/compras/${alvo.ano}/${Number(alvo.sequencial)}/arquivos/${seqBruto || idx + 1}`,
+    };
+  });
+}
+
 /**
  * Lista os arquivos oficiais publicados para uma contratação no PNCP,
  * tentando primeiro diretamente na API do PNCP e usando o proxy como fallback.
@@ -794,19 +871,7 @@ export async function listarArquivosPncp(numeroControleOuUrl: string): Promise<A
       const json = await resp.json().catch(() => null);
       const lista = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
       if (lista.length > 0) {
-        return lista.map((doc: any, idx: number) => {
-          const sequencialDocumento = doc?.sequencialDocumento ?? idx + 1;
-          return {
-            sequencialDocumento,
-            titulo: doc?.titulo || doc?.nomeArquivo || `Documento ${sequencialDocumento}`,
-            tipo: doc?.tipoDocumentoNome || doc?.tipoDocumentoDescricao || "Documento",
-            dataPublicacao: doc?.dataPublicacaoPncp || doc?.dataPublicacao || "",
-            uri:
-              doc?.uri ||
-              doc?.url ||
-              `${PNCP_INTEGRACAO_URL}/${alvo.cnpj}/compras/${alvo.ano}/${Number(alvo.sequencial)}/arquivos/${sequencialDocumento}`,
-          };
-        });
+        return normalizarListaArquivosPncp(lista, alvo);
       }
     }
   } catch {
@@ -822,23 +887,199 @@ export async function listarArquivosPncp(numeroControleOuUrl: string): Promise<A
   if (!res.ok) {
     throw new Error(json?.error || "Não foi possível listar os arquivos deste edital no PNCP.");
   }
-  return Array.isArray(json?.arquivos) ? json.arquivos : [];
+  return Array.isArray(json?.arquivos) ? normalizarListaArquivosPncp(json.arquivos, alvo) : [];
+}
+
+export interface ResultadoDownloadArquivoPncp {
+  arquivo: ArquivoAnexoPronto | null;
+  erro?: string;
+  naoSuportado?: boolean;
+  formatoDetectado?: string;
+}
+
+function extrairNomeDeContentDisposition(headerVal: string | null): string {
+  if (!headerVal) return "";
+  const utf8Match = headerVal.match(/filename\*\s*=\s*UTF-8''([^;\r\n]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      return utf8Match[1].trim().replace(/^"|"$/g, "");
+    }
+  }
+  const plainMatch = headerVal.match(/filename\s*=\s*"?([^";\r\n]+)"?/i);
+  return plainMatch?.[1] ? plainMatch[1].trim() : "";
+}
+
+async function lerBytesIniciaisBlob(blob: Blob, tamanho = 512): Promise<Uint8Array | null> {
+  try {
+    const slice = blob.slice(0, tamanho);
+    if (typeof slice.arrayBuffer === "function") {
+      return new Uint8Array(await slice.arrayBuffer());
+    }
+  } catch {
+    // fallback abaixo
+  }
+  return null;
+}
+
+function inspecionarFormatoArquivoBaixado(params: {
+  bytes: Uint8Array | null;
+  contentType: string;
+  nomeArquivo: string;
+}): { valido: boolean; mimeType: "application/pdf" | "text/plain"; formatoDetectado?: string; motivoErro?: string } {
+  const ct = String(params.contentType || "").toLowerCase().split(";")[0].trim();
+  const nomeLower = String(params.nomeArquivo || "").toLowerCase();
+  const bytes = params.bytes;
+
+  // 1. Inspeção de assinatura binária (magic bytes) — mais confiável que headers do PNCP
+  if (bytes && bytes.length >= 4) {
+    const asciiHead = Array.from(bytes.slice(0, Math.min(bytes.length, 256)))
+      .map((b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : " "))
+      .join("");
+    const trimmedHead = asciiHead.trimStart().toLowerCase();
+
+    // PDF válido: "%PDF-" nos primeiros bytes
+    if (asciiHead.includes("%PDF-")) {
+      return { valido: true, mimeType: "application/pdf", formatoDetectado: "PDF" };
+    }
+
+    // ZIP / DOCX / XLSX / ODT / ODS (assinatura PK\x03\x04 ou PK\x05\x06)
+    if (bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)) {
+      const extReal = nomeLower.endsWith(".xlsx") || nomeLower.endsWith(".xlsm")
+        ? "planilha Excel (XLSX)"
+        : nomeLower.endsWith(".docx")
+          ? "documento Word (DOCX)"
+          : nomeLower.endsWith(".odt") || nomeLower.endsWith(".ods")
+            ? "documento OpenDocument (ODT/ODS)"
+            : "arquivo compactado ZIP ou Office (DOCX/XLSX)";
+      return {
+        valido: false,
+        mimeType: "application/pdf",
+        formatoDetectado: extReal,
+        motivoErro: `Não é um PDF — o arquivo baixado é um ${extReal}.`,
+      };
+    }
+
+    // RAR ("Rar!")
+    if (bytes[0] === 0x52 && bytes[1] === 0x61 && bytes[2] === 0x72 && bytes[3] === 0x21) {
+      return {
+        valido: false,
+        mimeType: "application/pdf",
+        formatoDetectado: "RAR",
+        motivoErro: "Não é um PDF — o arquivo baixado é um pacote compactado RAR.",
+      };
+    }
+
+    // 7z
+    if (bytes[0] === 0x37 && bytes[1] === 0x7a && bytes[2] === 0xbc && bytes[3] === 0xaf) {
+      return {
+        valido: false,
+        mimeType: "application/pdf",
+        formatoDetectado: "7Z",
+        motivoErro: "Não é um PDF — o arquivo baixado é um pacote compactado 7Z.",
+      };
+    }
+
+    // Legado Office OLE2 (.doc / .xls / .ppt)
+    if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
+      return {
+        valido: false,
+        mimeType: "application/pdf",
+        formatoDetectado: "DOC/XLS",
+        motivoErro: "Não é um PDF — o arquivo baixado é um documento Office antigo (DOC/XLS).",
+      };
+    }
+
+    // Imagens (PNG / JPEG / GIF / BMP)
+    if (
+      (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) ||
+      (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) ||
+      (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38)
+    ) {
+      return {
+        valido: false,
+        mimeType: "application/pdf",
+        formatoDetectado: "Imagem",
+        motivoErro: "Não é um PDF — o arquivo baixado é uma imagem (PNG/JPG/GIF).",
+      };
+    }
+
+    // Página HTML de erro/redirecionamento retornada pelo portal
+    if (trimmedHead.startsWith("<!doctype html") || trimmedHead.startsWith("<html")) {
+      return {
+        valido: false,
+        mimeType: "application/pdf",
+        formatoDetectado: "HTML",
+        motivoErro: "O portal PNCP retornou uma página HTML de erro em vez do documento PDF.",
+      };
+    }
+  }
+
+  // 2. Checagem por Content-Type explícito quando não-PDF
+  if (ct === "text/html") {
+    return {
+      valido: false,
+      mimeType: "application/pdf",
+      formatoDetectado: "HTML",
+      motivoErro: "O portal PNCP retornou uma página HTML em vez do documento PDF.",
+    };
+  }
+  if (
+    ct.includes("zip") ||
+    ct.includes("rar") ||
+    ct.includes("spreadsheet") ||
+    ct.includes("excel") ||
+    ct.includes("wordprocessing") ||
+    ct.includes("msword") ||
+    ct.startsWith("image/")
+  ) {
+    return {
+      valido: false,
+      mimeType: "application/pdf",
+      formatoDetectado: ct,
+      motivoErro: `Não é um PDF (tipo retornado pelo PNCP: ${ct}).`,
+    };
+  }
+
+  // 3. Checagem por extensão revelada no nome final
+  const classificacaoNome = classificarFormatoDocumentoPncp({ titulo: params.nomeArquivo });
+  if (!classificacaoNome.suportado) {
+    return {
+      valido: false,
+      mimeType: "application/pdf",
+      formatoDetectado: classificacaoNome.extensao?.replace(".", "").toUpperCase(),
+      motivoErro: classificacaoNome.motivoNaoSuportado || "Formato de arquivo não é PDF.",
+    };
+  }
+
+  if (ct === "text/plain" || ct === "text/csv" || ct === "text/markdown" || nomeLower.endsWith(".txt") || nomeLower.endsWith(".csv") || nomeLower.endsWith(".md")) {
+    return { valido: true, mimeType: "text/plain", formatoDetectado: "TXT" };
+  }
+
+  return { valido: true, mimeType: "application/pdf", formatoDetectado: "PDF" };
 }
 
 /**
- * Baixa um arquivo do PNCP convertendo para base64, tentando primeiro direto
- * e usando o proxy `/api/pncp/arquivo` com cabeçalhos como fallback.
+ * Baixa um arquivo do PNCP validando cabeçalho e assinatura binária para impedir
+ * que arquivos ZIP, planilhas, Word ou páginas HTML sejam enviados como PDF para a IA.
  */
-export async function baixarArquivoPncpComoBase64(arq: { uri: string; titulo?: string }): Promise<ArquivoAnexoPronto | null> {
-  if (!arq?.uri) return null;
-  const rawTitle = arq.titulo || "Documento_PNCP.pdf";
-  const nome = /\.\w{2,5}$/.test(rawTitle) ? rawTitle : `${rawTitle}.pdf`;
+export async function baixarArquivoPncpDetalhado(arq: { uri: string; titulo?: string }): Promise<ResultadoDownloadArquivoPncp> {
+  if (!arq?.uri) {
+    return { arquivo: null, erro: "Endereço do documento ausente no PNCP." };
+  }
+  const rawTitle = String(arq.titulo || "Documento_PNCP").trim() || "Documento_PNCP";
+  const nomeInicial = /\.\w{2,5}$/.test(rawTitle) ? rawTitle : `${rawTitle}.pdf`;
 
   let blob: Blob | null = null;
+  let contentType = "";
+  let nomeHeader = "";
 
   try {
     const respDireta = await fetchComTimeout(arq.uri, {}, 20_000);
     if (respDireta.ok) {
+      contentType = respDireta.headers.get("content-type") || "";
+      nomeHeader = extrairNomeDeContentDisposition(respDireta.headers.get("content-disposition"));
       blob = await respDireta.blob();
     }
   } catch {
@@ -848,19 +1089,51 @@ export async function baixarArquivoPncpComoBase64(arq: { uri: string; titulo?: s
   if (!blob) {
     try {
       const respProxy = await fetchComTimeout(
-        urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`),
+        urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nomeInicial)}`),
         { headers: cabecalhosDaApi() },
         25_000
       );
       if (respProxy.ok) {
+        contentType = respProxy.headers.get("content-type") || "";
+        nomeHeader = extrairNomeDeContentDisposition(respProxy.headers.get("content-disposition"));
         blob = await respProxy.blob();
       }
     } catch {
-      return null;
+      return {
+        arquivo: null,
+        erro: `Não foi possível baixar "${rawTitle}" do PNCP (falha de conexão).`,
+      };
     }
   }
 
-  if (!blob || blob.size === 0 || blob.size > 25 * 1024 * 1024) return null;
+  if (!blob || blob.size === 0) {
+    return { arquivo: null, erro: `"${rawTitle}" veio vazio ou indisponível no PNCP.` };
+  }
+
+  if (blob.size > 25 * 1024 * 1024) {
+    const mb = (blob.size / (1024 * 1024)).toFixed(1);
+    return {
+      arquivo: null,
+      erro: `"${rawTitle}" excede o limite de 25 MB (${mb} MB). Baixe-o e envie apenas as páginas principais.`,
+    };
+  }
+
+  const nomeFinal = nomeHeader && /\.\w{2,5}$/.test(nomeHeader) ? nomeHeader : nomeInicial;
+  const bytesIniciais = await lerBytesIniciaisBlob(blob);
+  const inspecao = inspecionarFormatoArquivoBaixado({
+    bytes: bytesIniciais,
+    contentType: contentType || blob.type || "",
+    nomeArquivo: nomeFinal,
+  });
+
+  if (!inspecao.valido) {
+    return {
+      arquivo: null,
+      naoSuportado: true,
+      formatoDetectado: inspecao.formatoDetectado,
+      erro: `"${rawTitle}": ${inspecao.motivoErro}`,
+    };
+  }
 
   const base64: string = await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -869,15 +1142,29 @@ export async function baixarArquivoPncpComoBase64(arq: { uri: string; titulo?: s
     reader.readAsDataURL(blob!);
   });
 
-  if (!base64) return null;
+  if (!base64) {
+    return { arquivo: null, erro: `Não foi possível ler o conteúdo de "${rawTitle}".` };
+  }
 
   return {
-    id: `pncp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    name: nome,
-    size: `${(blob.size / 1024).toFixed(1)} KB`,
-    type: blob.type && blob.type.includes("text") ? "text/plain" : "application/pdf",
-    base64,
+    arquivo: {
+      id: `pncp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: nomeFinal,
+      size: `${(blob.size / 1024).toFixed(1)} KB`,
+      type: inspecao.mimeType,
+      base64,
+    },
+    formatoDetectado: inspecao.formatoDetectado,
   };
+}
+
+/**
+ * Baixa um arquivo do PNCP convertendo para base64, tentando primeiro direto
+ * e usando o proxy `/api/pncp/arquivo` com cabeçalhos como fallback.
+ */
+export async function baixarArquivoPncpComoBase64(arq: { uri: string; titulo?: string }): Promise<ArquivoAnexoPronto | null> {
+  const resultado = await baixarArquivoPncpDetalhado(arq);
+  return resultado.arquivo;
 }
 
 /**
@@ -898,7 +1185,7 @@ export async function buscarPacoteOficialPncp(
   const linkPNCP = `https://pncp.gov.br/app/editais/${alvo.cnpj}/${alvo.ano}/${seqPadded}`;
   const baseCompraUrl = `${PNCP_INTEGRACAO_URL}/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
 
-  const [detalhe, itensRaw, arquivos] = await Promise.all([
+  const [detalheDireto, itensRawDireto, arquivos] = await Promise.all([
     fetchComTimeout(baseCompraUrl, { headers: { Accept: "application/json" } }, 10_000)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null),
@@ -908,15 +1195,35 @@ export async function buscarPacoteOficialPncp(
     baixarArquivos ? listarArquivosPncp(numeroControleFormatado).catch(() => []) : Promise.resolve([]),
   ]);
 
-  const itens = Array.isArray(itensRaw)
-    ? itensRaw
-    : Array.isArray(itensRaw?.data)
-      ? itensRaw.data
+  let detalhe = detalheDireto;
+  let itens = Array.isArray(itensRawDireto)
+    ? itensRawDireto
+    : Array.isArray(itensRawDireto?.data)
+      ? itensRawDireto.data
       : [];
+
+  // Fallback via servidor se o navegador não conseguiu consultar o cabeçalho/itens do PNCP
+  if (!detalhe && itens.length === 0) {
+    try {
+      const respProxy = await fetchComTimeout(
+        urlDaApi(`/api/pncp/contratacao?numeroControle=${encodeURIComponent(numeroControleFormatado)}`),
+        { headers: cabecalhosDaApi() },
+        15_000
+      );
+      if (respProxy.ok) {
+        const payload = await respProxy.json().catch(() => null);
+        if (payload?.contratacao) detalhe = payload.contratacao;
+        if (Array.isArray(payload?.itens)) itens = payload.itens;
+      }
+    } catch {
+      // mantém dados disponíveis
+    }
+  }
 
   let anexosBaixados: ArquivoAnexoPronto[] = [];
   if (baixarArquivos) {
-    const principais = escolherArquivosPrincipaisEdital(arquivos, 2);
+    const compativeis = arquivos.filter((arq) => classificarFormatoDocumentoPncp(arq).suportado);
+    const principais = escolherArquivosPrincipaisEdital(compativeis.length > 0 ? compativeis : arquivos, 2);
     const baixados = await Promise.all(
       principais.map((arq) =>
         baixarArquivoPncpComoBase64({ uri: arq.uri || "", titulo: arq.titulo }).catch(() => null)
@@ -955,8 +1262,15 @@ export async function buscarPacoteOficialPncp(
         })}`
       );
     }
+    if (detalhe.dataEncerramentoProposta) {
+      linhasTexto.push(
+        `Data de Encerramento das Propostas / Início da Disputa (PNCP): ${new Date(detalhe.dataEncerramentoProposta).toLocaleString("pt-BR")}`
+      );
+    }
     if (detalhe.dataAberturaProposta) {
-      linhasTexto.push(`Data de Abertura / Sessão: ${new Date(detalhe.dataAberturaProposta).toLocaleString("pt-BR")}`);
+      linhasTexto.push(
+        `Data de Abertura do Recebimento de Propostas (PNCP): ${new Date(detalhe.dataAberturaProposta).toLocaleString("pt-BR")}`
+      );
     }
   }
 
@@ -990,4 +1304,67 @@ export async function buscarPacoteOficialPncp(
     nomesArquivosLidos,
     textoOficialEstruturado: linhasTexto.join("\n"),
   };
+}
+
+export interface DatasOficiaisPncp {
+  dataEncerramentoProposta?: string;
+  dataAberturaProposta?: string;
+  linkPNCP?: string;
+  numeroControlePNCP?: string;
+}
+
+/**
+ * Consulta sob demanda os dados oficiais de uma contratação no PNCP para obter
+ * as datas de encerramento/abertura das propostas (usado no agendamento do Calendário
+ * quando a análise da IA não encontrou data nos documentos).
+ */
+export async function buscarDataOficialPncp(linkOuNumeroControle: string): Promise<DatasOficiaisPncp | null> {
+  const alvo = parseNumeroControlePNCP(linkOuNumeroControle);
+  if (!alvo) return null;
+
+  const seqNum = Number(alvo.sequencial) || 0;
+  const baseUrl = `${PNCP_INTEGRACAO_URL}/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
+  const numeroControlePNCP = `${alvo.cnpj}-1-${String(seqNum).padStart(6, "0")}/${alvo.ano}`;
+  const linkPNCP = `https://pncp.gov.br/app/editais/${alvo.cnpj}/${alvo.ano}/${seqNum}`;
+
+  const extrairCampos = (raw: any): DatasOficiaisPncp | null => {
+    if (!raw || typeof raw !== "object") return null;
+    const dataEncerramentoProposta = raw.dataEncerramentoProposta || raw.data_encerramento_proposta || undefined;
+    const dataAberturaProposta = raw.dataAberturaProposta || raw.data_abertura_proposta || undefined;
+    if (!dataEncerramentoProposta && !dataAberturaProposta) return null;
+    return {
+      dataEncerramentoProposta: dataEncerramentoProposta ? String(dataEncerramentoProposta) : undefined,
+      dataAberturaProposta: dataAberturaProposta ? String(dataAberturaProposta) : undefined,
+      linkPNCP,
+      numeroControlePNCP,
+    };
+  };
+
+  try {
+    const resp = await fetchComTimeout(baseUrl, { headers: { Accept: "application/json" } }, 9_000);
+    if (resp.ok) {
+      const dados = extrairCampos(await resp.json().catch(() => null));
+      if (dados) return dados;
+    }
+  } catch {
+    // tenta proxy do servidor logo abaixo
+  }
+
+  try {
+    const respProxy = await fetchComTimeout(
+      urlDaApi(`/api/pncp/contratacao?id=${encodeURIComponent(numeroControlePNCP)}`),
+      { headers: cabecalhosDaApi() },
+      12_000
+    );
+    if (respProxy.ok) {
+      const payload = await respProxy.json().catch(() => null);
+      const dados = extrairCampos(payload?.contratacao || payload);
+      if (dados) return dados;
+    }
+  } catch {
+    // tenta fallback genérico de busca por link
+  }
+
+  const contratacao = await buscarContratacaoPorLinkOuIdPncp(linkOuNumeroControle).catch(() => null);
+  return extrairCampos(contratacao);
 }
