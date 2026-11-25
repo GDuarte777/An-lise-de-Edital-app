@@ -7,6 +7,7 @@ import {
   montarQueryBuscaIndexadaPncp,
   montarQueryContratacoes,
   normalizarItemBuscaIndexadaPncp,
+  normalizarTextoBuscaPncp,
   parseNumeroControlePNCP,
   type StatusBuscaPncp,
 } from "./pncpQuery";
@@ -574,13 +575,40 @@ export async function buscarContratacoesPncp(
         const total = Number(json.total) || json.items.length;
         let normalizados = json.items.map((it: any) => normalizarItemBuscaIndexadaPncp(it));
 
+        if (selectedUfs.length > 0) {
+          const ufsPermitidas = new Set(selectedUfs.map((u) => u.trim().toUpperCase()).filter(Boolean));
+          normalizados = normalizados.filter((i: any) => {
+            const ufItem = String(i.unidadeOrgao?.ufSigla || i.uf || "").trim().toUpperCase();
+            return !ufItem || ufItem === "BR" || ufsPermitidas.has(ufItem);
+          });
+        }
+
+        if (selectedFontes.length > 0) {
+          const fontesPermitidas = new Set(selectedFontes.map((f) => String(f).trim()).filter(Boolean));
+          normalizados = normalizados.filter((i: any) => {
+            const fId = String(i.fonteId || "").trim();
+            return !fId || fontesPermitidas.has(fId);
+          });
+        }
+
         if (municipio && !/^\d+$/.test(municipio)) {
-          const munLower = municipio.toLowerCase();
+          const munNorm = normalizarTextoBuscaPncp(municipio);
           normalizados = normalizados.filter((i: any) =>
-            `${i.unidadeOrgao?.municipioNome || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.objetoCompra || ""}`
-              .toLowerCase()
-              .includes(munLower)
+            normalizarTextoBuscaPncp(
+              `${i.unidadeOrgao?.municipioNome || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.objetoCompra || ""}`
+            ).includes(munNorm)
           );
+        }
+
+        if (params.periodDays && params.periodDays > 0) {
+          const corteMs = Date.now() - params.periodDays * 86_400_000;
+          normalizados = normalizados.filter((i: any) => {
+            const rawDate = i.dataPublicacaoPncp || i.dataAtualizacaoPncp;
+            if (!rawDate) return true;
+            const parsed = Date.parse(String(rawDate));
+            if (!Number.isFinite(parsed)) return true;
+            return parsed >= corteMs;
+          });
         }
 
         // Aplica imediatamente preços já em cache e marca os pendentes para a fila progressiva
@@ -657,22 +685,29 @@ export async function buscarContratacoesPncp(
 
     if (agregados.length > 0) {
       if (selectedUfs.length > 1) {
+        const ufsPermitidas = new Set(selectedUfs.map((u) => u.trim().toUpperCase()).filter(Boolean));
         agregados = agregados.filter((i) =>
-          selectedUfs.includes(String(i.unidadeOrgao?.ufSigla || i.uf || "").toUpperCase())
+          ufsPermitidas.has(String(i.unidadeOrgao?.ufSigla || i.uf || "").toUpperCase())
         );
       }
+      if (selectedFontes.length > 0) {
+        const fontesPermitidas = new Set(selectedFontes.map((f) => String(f).trim()).filter(Boolean));
+        agregados = agregados.filter((i) => !i.fonteId || fontesPermitidas.has(String(i.fonteId).trim()));
+      }
       if (q) {
-        const termo = q.toLowerCase();
+        const termo = normalizarTextoBuscaPncp(q);
         agregados = agregados.filter((i) =>
-          `${i.objetoCompra || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.unidadeOrgao?.nomeUnidade || ""} ${i.unidadeOrgao?.municipioNome || ""}`
-            .toLowerCase()
-            .includes(termo)
+          normalizarTextoBuscaPncp(
+            `${i.objetoCompra || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.unidadeOrgao?.nomeUnidade || ""} ${i.unidadeOrgao?.municipioNome || ""}`
+          ).includes(termo)
         );
       }
       if (municipio && !/^\d+$/.test(municipio)) {
-        const munLower = municipio.toLowerCase();
+        const munNorm = normalizarTextoBuscaPncp(municipio);
         agregados = agregados.filter((i) =>
-          String(i.unidadeOrgao?.municipioNome || "").toLowerCase().includes(munLower)
+          normalizarTextoBuscaPncp(
+            `${i.unidadeOrgao?.municipioNome || ""} ${i.orgaoEntidade?.razaoSocial || ""}`
+          ).includes(munNorm)
         );
       }
 
@@ -680,7 +715,10 @@ export async function buscarContratacoesPncp(
         String(b.dataPublicacaoPncp || "").localeCompare(String(a.dataPublicacaoPncp || ""))
       );
 
-      const totalFinal = q || municipio || selectedUfs.length > 1 ? agregados.length : Math.max(agregados.length, totalEstimado);
+      const totalFinal =
+        q || municipio || selectedUfs.length > 1 || selectedFontes.length > 0
+          ? agregados.length
+          : Math.max(agregados.length, totalEstimado);
       const fatia = aplicarCachePrecosContratacoesPncp(agregados.slice(0, pageSize));
       return {
         data: fatia,
@@ -700,6 +738,7 @@ export async function buscarContratacoesPncp(
   const queryParams = new URLSearchParams();
   if (selectedUfs.length > 0) queryParams.set("ufs", selectedUfs.join(","));
   if (selectedModalidades.length > 0) queryParams.set("modalidades", selectedModalidades.join(","));
+  if (selectedFontes.length > 0) queryParams.set("fontes", selectedFontes.join(","));
   if (q) queryParams.set("q", q);
   if (municipio) queryParams.set("municipio", municipio);
   queryParams.set("status", params.status);
@@ -845,10 +884,14 @@ export async function baixarArquivoPncpComoBase64(arq: { uri: string; titulo?: s
  * Busca o pacote completo de uma contratação no PNCP (Ficha Oficial + Todos os Itens
  * + Download automático do Edital e do Termo de Referência).
  */
-export async function buscarPacoteOficialPncp(numeroControleOuUrl: string): Promise<PacoteOficialPncp | null> {
+export async function buscarPacoteOficialPncp(
+  numeroControleOuUrl: string,
+  options?: { baixarArquivos?: boolean }
+): Promise<PacoteOficialPncp | null> {
   const alvo = parseNumeroControlePNCP(numeroControleOuUrl);
   if (!alvo) return null;
 
+  const baixarArquivos = options?.baixarArquivos !== false;
   const seqNum = Number(alvo.sequencial);
   const seqPadded = String(seqNum).padStart(6, "0");
   const numeroControleFormatado = `${alvo.cnpj}-1-${seqPadded}/${alvo.ano}`;
@@ -862,7 +905,7 @@ export async function buscarPacoteOficialPncp(numeroControleOuUrl: string): Prom
     fetchComTimeout(`${baseCompraUrl}/itens?pagina=1&tamanhoPagina=500`, { headers: { Accept: "application/json" } }, 12_000)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null),
-    listarArquivosPncp(numeroControleFormatado).catch(() => []),
+    baixarArquivos ? listarArquivosPncp(numeroControleFormatado).catch(() => []) : Promise.resolve([]),
   ]);
 
   const itens = Array.isArray(itensRaw)
@@ -871,14 +914,16 @@ export async function buscarPacoteOficialPncp(numeroControleOuUrl: string): Prom
       ? itensRaw.data
       : [];
 
-  const principais = escolherArquivosPrincipaisEdital(arquivos, 2);
-  const baixados = await Promise.all(
-    principais.map((arq) =>
-      baixarArquivoPncpComoBase64({ uri: arq.uri || "", titulo: arq.titulo }).catch(() => null)
-    )
-  );
-
-  const anexosBaixados = baixados.filter((a): a is ArquivoAnexoPronto => Boolean(a));
+  let anexosBaixados: ArquivoAnexoPronto[] = [];
+  if (baixarArquivos) {
+    const principais = escolherArquivosPrincipaisEdital(arquivos, 2);
+    const baixados = await Promise.all(
+      principais.map((arq) =>
+        baixarArquivoPncpComoBase64({ uri: arq.uri || "", titulo: arq.titulo }).catch(() => null)
+      )
+    );
+    anexosBaixados = baixados.filter((a): a is ArquivoAnexoPronto => Boolean(a));
+  }
   const nomesArquivosLidos = anexosBaixados.map((a) => a.name);
 
   const linhasTexto: string[] = [

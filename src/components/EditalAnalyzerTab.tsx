@@ -1068,9 +1068,15 @@ export default function EditalAnalyzerTab({
       // factuais com o dado publicado pelo órgão.
       const pendente = (window as any).__aipPendingEdital;
 
-      if (extText || pendente?.file || pendente?.numeroControlePNCP) {
+      const pendingFiles = Array.isArray(pendente?.files) && pendente.files.length > 0
+        ? pendente.files
+        : pendente?.file
+          ? [pendente.file]
+          : [];
+
+      if (extText || pendingFiles.length > 0 || pendente?.numeroControlePNCP) {
         setTextInput(extText || "");
-        setAttachedFiles(pendente?.file ? [pendente.file] : []);
+        setAttachedFiles(pendingFiles);
         setPncpNumeroControle(pendente?.numeroControlePNCP || "");
         if (pendente?.numeroControlePNCP) {
           setPncpDirectInput(pendente.numeroControlePNCP);
@@ -1232,7 +1238,9 @@ export default function EditalAnalyzerTab({
       // Se a análise tem vínculo com o PNCP, busca direto do navegador a ficha oficial,
       // todos os itens (/itens) e baixa automaticamente o Edital + Termo de Referência.
       if (resolvedPncpControl) {
-        pacotePncp = await buscarPacoteOficialPncp(resolvedPncpControl).catch(() => null);
+        pacotePncp = await buscarPacoteOficialPncp(resolvedPncpControl, {
+          baixarArquivos: filesToUse.length === 0,
+        }).catch(() => null);
         if (pacotePncp) {
           if (filesToUse.length === 0 && pacotePncp.anexosBaixados.length > 0) {
             filesToUse = pacotePncp.anexosBaixados;

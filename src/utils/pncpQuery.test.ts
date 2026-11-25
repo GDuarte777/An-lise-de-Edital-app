@@ -387,4 +387,122 @@ describe("buscarContratacoesPncp (cliente híbrido navegador + fallback)", () =>
       globalThis.fetch = origFetch;
     }
   });
+
+  it("envia ufs no plural (nunca uf), aceita propostas_encerradas e fontes na busca indexada", () => {
+    const p = new URLSearchParams(
+      montarQueryBuscaIndexadaPncp({
+        ufs: ["sp", "rj"],
+        modalidades: ["6", "8"],
+        fontes: ["3", "5"],
+        status: "propostas_encerradas",
+      })
+    );
+    expect(p.get("ufs")).toBe("SP|RJ");
+    expect(p.get("uf")).toBeNull();
+    expect(p.get("modalidades")).toBe("6|8");
+    expect(p.get("fontes")).toBe("3|5");
+    expect(p.get("status")).toBe("propostas_encerradas");
+  });
+
+  it("filtra defensivamente por UF, município sem acento e período de publicação na Camada 1", async () => {
+    const { buscarContratacoesPncp } = await import("./pncpClient");
+    const origFetch = globalThis.fetch;
+    let urlChamada = "";
+    const hojeIso = new Date().toISOString();
+    const antigoIso = new Date(Date.now() - 200 * 86_400_000).toISOString();
+
+    globalThis.fetch = (async (url: string) => {
+      urlChamada = String(url);
+      return new Response(
+        JSON.stringify({
+          total: 3,
+          items: [
+            {
+              numero_controle_pncp: "11111111000111-1-000001/2026",
+              orgao_cnpj: "11111111000111",
+              orgao_nome: "Prefeitura de São Paulo",
+              municipio_nome: "São Paulo",
+              uf: "SP",
+              ano: "2026",
+              numero_sequencial: "1",
+              data_publicacao_pncp: hojeIso,
+              description: "Compra recente SP",
+            },
+            {
+              numero_controle_pncp: "22222222000122-1-000002/2026",
+              orgao_cnpj: "22222222000122",
+              orgao_nome: "Prefeitura de Maceió",
+              municipio_nome: "São Paulo",
+              uf: "AL",
+              ano: "2026",
+              numero_sequencial: "2",
+              data_publicacao_pncp: hojeIso,
+              description: "Item de outro estado",
+            },
+            {
+              numero_controle_pncp: "33333333000133-1-000003/2025",
+              orgao_cnpj: "33333333000133",
+              orgao_nome: "Prefeitura de São Paulo",
+              municipio_nome: "São Paulo",
+              uf: "SP",
+              ano: "2025",
+              numero_sequencial: "3",
+              data_publicacao_pncp: antigoIso,
+              description: "Compra antiga fora do período",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const res = await buscarContratacoesPncp({
+        pagina: 1,
+        tamanhoPagina: 15,
+        status: "todos",
+        ufs: ["SP"],
+        municipio: "Sao Paulo",
+        periodDays: 30,
+      });
+      expect(urlChamada).toContain("ufs=SP");
+      expect(urlChamada).not.toMatch(/[?&]uf=/);
+      expect(res.data).toHaveLength(1);
+      expect(res.data[0].numeroControlePNCP).toBe("11111111000111-1-000001/2026");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  it("repassa fontes e status=propostas_encerradas ao proxy na Camada 3", async () => {
+    const { buscarContratacoesPncp } = await import("./pncpClient");
+    const origFetch = globalThis.fetch;
+    let proxyUrl = "";
+
+    globalThis.fetch = (async (url: string) => {
+      if (String(url).includes("pncp.gov.br")) {
+        throw new Error("CORS blocked in test");
+      }
+      proxyUrl = String(url);
+      return new Response(
+        JSON.stringify({ data: [], totalRegistros: 0, totalPaginas: 1, source: "pncp_api_real" }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      await buscarContratacoesPncp({
+        pagina: 1,
+        tamanhoPagina: 15,
+        status: "propostas_encerradas",
+        ufs: ["SP", "MG"],
+        fontes: ["3", "5"],
+      });
+      expect(proxyUrl).toContain("ufs=SP%2CMG");
+      expect(proxyUrl).toContain("fontes=3%2C5");
+      expect(proxyUrl).toContain("status=propostas_encerradas");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });

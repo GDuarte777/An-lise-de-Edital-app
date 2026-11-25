@@ -100,7 +100,16 @@ export function formatarDataPncp(date: Date): string {
 
 export type EndpointContratacao = "publicacao" | "proposta";
 
-export type StatusBuscaPncp = "todos" | "recebendo_proposta" | "encerradas";
+export type StatusBuscaPncp = "todos" | "recebendo_proposta" | "propostas_encerradas" | "encerradas";
+
+/** Normaliza texto para comparação sem diferenciar acentos ou maiúsculas. */
+export function normalizarTextoBuscaPncp(valor: string | null | undefined): string {
+  return String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
 
 export interface ParametrosConsulta {
   endpoint: EndpointContratacao;
@@ -166,7 +175,11 @@ export function montarQueryBuscaIndexadaPncp(p: ParametrosBuscaIndexadaPncp): st
   const pagina = Math.max(1, p.pagina ?? 1);
   const tamPagina = Math.min(100, Math.max(10, p.tamanhoPagina ?? 20));
   const status: StatusBuscaPncp =
-    p.status === "recebendo_proposta" || p.status === "encerradas" ? p.status : "todos";
+    p.status === "recebendo_proposta" ||
+    p.status === "propostas_encerradas" ||
+    p.status === "encerradas"
+      ? p.status
+      : "todos";
 
   const query = new URLSearchParams({
     tipos_documento: "edital",
@@ -184,8 +197,10 @@ export function montarQueryBuscaIndexadaPncp(p: ParametrosBuscaIndexadaPncp): st
     query.set("q", termos);
   }
 
+  // O motor /api/search/ do PNCP exige o parâmetro no plural `ufs` (separado por `|`).
+  // Enviar `uf` no singular é ignorado silenciosamente pelo portal.
   if (Array.isArray(p.ufs) && p.ufs.length > 0) {
-    query.set("uf", p.ufs.map(u => u.trim().toUpperCase()).filter(Boolean).join("|"));
+    query.set("ufs", p.ufs.map(u => u.trim().toUpperCase()).filter(Boolean).join("|"));
   }
 
   if (Array.isArray(p.modalidades) && p.modalidades.length > 0) {

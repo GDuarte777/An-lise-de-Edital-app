@@ -52,6 +52,7 @@ import {
   montarQueryBuscaIndexadaPncp,
   montarQueryContratacoes,
   normalizarItemBuscaIndexadaPncp,
+  normalizarTextoBuscaPncp,
   parseNumeroControlePNCP,
   temProximaPagina
 } from "./pncpQuery.ts";
@@ -742,6 +743,7 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         ufs,
         modalidade,
         modalidades,
+        fontes,
         pagina = "1",
         tamanhoPagina = "20",
         q = "",
@@ -770,15 +772,24 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         return [];
       })();
 
+      const selectedFontes: string[] = (() => {
+        if (fontes && typeof fontes === "string" && fontes.trim()) {
+          return fontes.split(",").map(s => s.trim()).filter(Boolean);
+        }
+        return [];
+      })();
+
       const pageNum = Math.max(1, parseInt(String(pagina), 10) || 1);
       const pageSize = Math.min(200, Math.max(1, parseInt(String(tamanhoPagina), 10) || 20));
+      const daysBackParam = parseInt(String(req.query.periodDays || ""), 10);
 
-      // Define o status da consulta: por padrão traz TODAS as licitações publicadas
-      // (abertas e encerradas), permitindo filtrar por "recebendo_proposta" ou "encerradas".
+      // Define o status da consulta: suporta as 4 situações oficiais do PNCP
+      // (`todos`, `recebendo_proposta`, `propostas_encerradas`, `encerradas`).
       const statusBusca: StatusBuscaPncp = (() => {
         const s = String(reqStatus || "").trim().toLowerCase();
         if (s === "recebendo_proposta" || s === "proposta" || s === "abertas") return "recebendo_proposta";
-        if (s === "encerradas" || s === "encerrada" || s === "julgamento") return "encerradas";
+        if (s === "propostas_encerradas" || s === "julgamento" || s === "em_julgamento") return "propostas_encerradas";
+        if (s === "encerradas" || s === "encerrada") return "encerradas";
         if (s === "todos" || s === "todas" || s === "publicacao") return "todos";
         if (fonte === "proposta") return "recebendo_proposta";
         return "todos";
@@ -790,7 +801,7 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
       // 1. Consulta prioritária no índice unificado do PNCP (/api/search/):
       // Responde em ~1s cobrindo todas as 13 modalidades e 27 UFs simultaneamente,
       // suporta busca textual nativa no servidor (`q`) e paginação real sobre todo o acervo.
-      const searchCacheKey = `search_v1|${statusBusca}|${selectedUfs.join(",")}|${selectedModalidades.join(",")}|${q}|${municipio}|${pageNum}|${pageSize}`;
+      const searchCacheKey = `search_v2|${statusBusca}|${selectedUfs.join(",")}|${selectedModalidades.join(",")}|${selectedFontes.join(",")}|${q}|${municipio}|${daysBackParam || ""}|${pageNum}|${pageSize}`;
       const cachedSearch = pncpCache.get(searchCacheKey);
       if (cachedSearch && Date.now() - cachedSearch.timestamp < 300_000) {
         return res.json(cachedSearch.data);
@@ -807,7 +818,8 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         status: statusBusca,
         q: queryCombinada || undefined,
         ufs: selectedUfs,
-        modalidades: selectedModalidades
+        modalidades: selectedModalidades,
+        fontes: selectedFontes
       });
 
       const searchRes = await pncpFetchRaw(`https://pncp.gov.br/api/search/?${searchQuery}`, 15_000);
@@ -816,13 +828,37 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         const total = Number(searchRes.json.total) || rawItems.length;
         let normalizados = rawItems.map((it: any) => normalizarItemBuscaIndexadaPncp(it));
 
-        const municipioTermo = String(municipio || "").trim().toLowerCase();
+        if (selectedUfs.length > 0) {
+          const ufsPermitidas = new Set(selectedUfs);
+          normalizados = normalizados.filter((i: any) => {
+            const ufItem = String(i.unidadeOrgao?.ufSigla || i.uf || "").trim().toUpperCase();
+            return !ufItem || ufItem === "BR" || ufsPermitidas.has(ufItem);
+          });
+        }
+
+        if (selectedFontes.length > 0) {
+          const fontesPermitidas = new Set(selectedFontes);
+          normalizados = normalizados.filter((i: any) => !i.fonteId || fontesPermitidas.has(String(i.fonteId).trim()));
+        }
+
+        const municipioTermo = normalizarTextoBuscaPncp(String(municipio || ""));
         if (municipioTermo && !/^\d+$/.test(municipioTermo)) {
           normalizados = normalizados.filter((i: any) =>
-            `${i.unidadeOrgao?.municipioNome || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.objetoCompra || ""}`
-              .toLowerCase()
-              .includes(municipioTermo)
+            normalizarTextoBuscaPncp(
+              `${i.unidadeOrgao?.municipioNome || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.objetoCompra || ""}`
+            ).includes(municipioTermo)
           );
+        }
+
+        if (Number.isFinite(daysBackParam) && daysBackParam > 0) {
+          const corteMs = Date.now() - daysBackParam * 86_400_000;
+          normalizados = normalizados.filter((i: any) => {
+            const rawDate = i.dataPublicacaoPncp || i.dataAtualizacaoPncp;
+            if (!rawDate) return true;
+            const parsed = Date.parse(String(rawDate));
+            if (!Number.isFinite(parsed)) return true;
+            return parsed >= corteMs;
+          });
         }
 
         const totalPaginas = Math.max(1, Math.ceil(total / pageSize));
@@ -941,22 +977,28 @@ async function pncpFetchContratacao(cnpj: string, ano: string | number, sequenci
         });
       }
 
-      // Filtro por palavra-chave sobre o conjunto agregado (a API do PNCP não
-      // oferece busca textual).
+      // Filtro por palavra-chave, município (sem acento) e fonte sobre o conjunto agregado.
       let filtrados = agregado.items;
-      const termo = String(q || "").trim().toLowerCase();
+      if (selectedFontes.length > 0) {
+        const fontesPermitidas = new Set(selectedFontes);
+        filtrados = filtrados.filter(i => !i.fonteId || fontesPermitidas.has(String(i.fonteId).trim()));
+      }
+
+      const termo = normalizarTextoBuscaPncp(String(q || ""));
       if (termo) {
         filtrados = filtrados.filter(i =>
-          `${i.objetoCompra || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.unidadeOrgao?.nomeUnidade || ""} ${i.unidadeOrgao?.municipioNome || ""}`
-            .toLowerCase()
-            .includes(termo)
+          normalizarTextoBuscaPncp(
+            `${i.objetoCompra || ""} ${i.orgaoEntidade?.razaoSocial || ""} ${i.unidadeOrgao?.nomeUnidade || ""} ${i.unidadeOrgao?.municipioNome || ""}`
+          ).includes(termo)
         );
       }
 
-      const municipioTermo = String(municipio || "").trim().toLowerCase();
+      const municipioTermo = normalizarTextoBuscaPncp(String(municipio || ""));
       if (municipioTermo && !/^\d+$/.test(municipioTermo)) {
         filtrados = filtrados.filter(i =>
-          String(i.unidadeOrgao?.municipioNome || "").toLowerCase().includes(municipioTermo)
+          normalizarTextoBuscaPncp(
+            `${i.unidadeOrgao?.municipioNome || ""} ${i.orgaoEntidade?.razaoSocial || ""}`
+          ).includes(municipioTermo)
         );
       }
 

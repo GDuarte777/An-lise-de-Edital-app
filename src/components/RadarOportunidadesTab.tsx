@@ -7,7 +7,8 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { type StatusBuscaPncp } from "../utils/pncpQuery";
+import { Checkbox } from "./ui/checkbox";
+import { normalizarTextoBuscaPncp, type StatusBuscaPncp } from "../utils/pncpQuery";
 import {
   buscarContratacoesPncp,
   enriquecerPrecosEmSegundoPlano,
@@ -175,11 +176,14 @@ export default function RadarOportunidadesTab({
   // Arquivos oficiais (edital, anexos, termo de referência) da contratação
   // selecionada, buscados sob demanda no PNCP.
   const [arquivos, setArquivos] = useState<Array<{ sequencialDocumento: number; titulo: string; tipo: string; uri: string }>>([]);
+  const [selectedDocIds, setSelectedDocIds] = useState<number[]>([]);
   const [arquivosLoading, setArquivosLoading] = useState(false);
   const [arquivosError, setArquivosError] = useState<string | null>(null);
   const [itensDisputa, setItensDisputa] = useState<ItemPrecoPncp[]>([]);
   const [itensLoading, setItensLoading] = useState(false);
   const [preparandoAnalise, setPreparandoAnalise] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [analisePrepError, setAnalisePrepError] = useState<string | null>(null);
   const [resultadoParcial, setResultadoParcial] = useState(false);
   // Modalidades que o PNCP recusou nesta busca: o usuário precisa saber que o
   // que está vendo não é o portal inteiro, senão conclui que a licitação não existe.
@@ -192,8 +196,39 @@ export default function RadarOportunidadesTab({
   const [ufSearchQuery, setUfSearchQuery] = useState<string>("");
   const [fonteSearchQuery, setFonteSearchQuery] = useState<string>("");
   const fetchGenerationRef = useRef<number>(0);
+  const filtersGridRef = useRef<HTMLDivElement>(null);
+  const skipNextAutoFetchRef = useRef<boolean>(false);
 
-  // Toggle UF Selection
+  const fecharTodosOsSeletores = () => {
+    setShowStatePicker(false);
+    setShowModalidadesPicker(false);
+    setShowFontesPicker(false);
+  };
+
+  // Fecha seletores abertos ao clicar fora ou pressionar ESC
+  useEffect(() => {
+    if (!showStatePicker && !showModalidadesPicker && !showFontesPicker) return;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (filtersGridRef.current && !filtersGridRef.current.contains(e.target as Node)) {
+        fecharTodosOsSeletores();
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !activeItem) {
+        fecharTodosOsSeletores();
+      }
+    };
+
+    document.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showStatePicker, showModalidadesPicker, showFontesPicker, activeItem]);
+
+  // Toggle UF Selection (aguarda Concluir ou Buscar Licitações para aplicar)
   const handleToggleUf = (sigla: string) => {
     setSelectedUfs(prev => {
       if (prev.includes(sigla)) {
@@ -202,10 +237,9 @@ export default function RadarOportunidadesTab({
         return [...prev, sigla];
       }
     });
-    setPage(1);
   };
 
-  // Toggle Fonte/Plataforma Selection
+  // Toggle Fonte/Plataforma Selection (aguarda Concluir ou Buscar Licitações para aplicar)
   const handleToggleFonte = (id: string) => {
     setSelectedFontes(prev => {
       if (prev.includes(id)) {
@@ -214,15 +248,13 @@ export default function RadarOportunidadesTab({
         return [...prev, id];
       }
     });
-    setPage(1);
   };
 
   const handleSelectAllUfs = () => {
     setSelectedUfs([]);
-    setPage(1);
   };
 
-  // Toggle Modalidade Selection
+  // Toggle Modalidade Selection (aguarda Concluir ou Buscar Licitações para aplicar)
   const handleToggleModalidade = (id: string) => {
     setSelectedModalidades(prev => {
       if (prev.includes(id)) {
@@ -231,25 +263,45 @@ export default function RadarOportunidadesTab({
         return [...prev, id];
       }
     });
-    setPage(1);
   };
 
-  // Filter UFs list by search query
+  // Filter UFs list by search query (ignora acentos: "Sao Paulo", "Goias", "Ceara"...)
   const filteredUfs = useMemo(() => {
-    if (!ufSearchQuery.trim()) return ALL_UFS;
-    const q = ufSearchQuery.toLowerCase();
-    return ALL_UFS.filter(uf => uf.sigla.toLowerCase().includes(q) || uf.nome.toLowerCase().includes(q));
+    const q = normalizarTextoBuscaPncp(ufSearchQuery);
+    if (!q) return ALL_UFS;
+    return ALL_UFS.filter(
+      uf => normalizarTextoBuscaPncp(uf.sigla).includes(q) || normalizarTextoBuscaPncp(uf.nome).includes(q)
+    );
   }, [ufSearchQuery]);
 
-  // Filter Fontes/Plataformas list by search query
+  // Filter Fontes/Plataformas list by search query (ignora acentos)
   const filteredFontes = useMemo(() => {
-    if (!fonteSearchQuery.trim()) return ALL_FONTES_PNCP;
-    const q = fonteSearchQuery.toLowerCase();
-    return ALL_FONTES_PNCP.filter(f => f.nome.toLowerCase().includes(q) || f.id.includes(q));
+    const q = normalizarTextoBuscaPncp(fonteSearchQuery);
+    if (!q) return ALL_FONTES_PNCP;
+    return ALL_FONTES_PNCP.filter(
+      f => normalizarTextoBuscaPncp(f.nome).includes(q) || f.id.includes(q)
+    );
   }, [fonteSearchQuery]);
 
-  // Clear all filters
+  type FiltrosBuscaOverrides = {
+    keyword?: string;
+    pncpLinkFilter?: string;
+    cityQuery?: string;
+    selectedUfs?: string[];
+    selectedModalidades?: string[];
+    selectedFontes?: string[];
+    statusFiltro?: StatusBuscaPncp;
+    valorMin?: string;
+    valorMax?: string;
+    periodDays?: number;
+  };
+
+  // Clear all filters (envia snapshot zerado diretamente, sem depender de closure antiga)
   const handleResetFilters = () => {
+    fecharTodosOsSeletores();
+    if (statusFiltro !== "todos" || periodDays !== 90) {
+      skipNextAutoFetchRef.current = true;
+    }
     setKeyword("");
     setPncpLinkFilter("");
     setCityQuery("");
@@ -263,32 +315,54 @@ export default function RadarOportunidadesTab({
     setUfSearchQuery("");
     setFonteSearchQuery("");
     setPage(1);
-    handleFetchPNCP(1, "");
+    handleFetchPNCP(1, {
+      keyword: "",
+      pncpLinkFilter: "",
+      cityQuery: "",
+      selectedUfs: [],
+      selectedModalidades: [],
+      selectedFontes: [],
+      statusFiltro: "todos",
+      valorMin: "",
+      valorMax: "",
+      periodDays: 90,
+    });
   };
 
   // Fetch from PNCP (Direct Browser Search + Automatic Progressive Price Resolution)
-  const handleFetchPNCP = async (targetPage = page, overridePncpLink?: string) => {
+  const handleFetchPNCP = async (targetPage = page, overrides?: string | FiltrosBuscaOverrides) => {
     const currentGeneration = ++fetchGenerationRef.current;
     setLoading(true);
     setError(null);
     setResultadoParcial(false);
     setAvisosPNCP([]);
 
-    const linkFiltroAtivo =
-      overridePncpLink !== undefined ? overridePncpLink.trim() : pncpLinkFilter.trim();
+    const opts: FiltrosBuscaOverrides =
+      typeof overrides === "string" ? { pncpLinkFilter: overrides } : (overrides || {});
+
+    const keywordAtivo = (opts.keyword !== undefined ? opts.keyword : keyword).trim();
+    const linkFiltroAtivo = (opts.pncpLinkFilter !== undefined ? opts.pncpLinkFilter : pncpLinkFilter).trim();
+    const cityAtivo = (opts.cityQuery !== undefined ? opts.cityQuery : cityQuery).trim();
+    const ufsAtivas = opts.selectedUfs !== undefined ? opts.selectedUfs : selectedUfs;
+    const modsAtivas = opts.selectedModalidades !== undefined ? opts.selectedModalidades : selectedModalidades;
+    const fontesAtivas = opts.selectedFontes !== undefined ? opts.selectedFontes : selectedFontes;
+    const statusAtivo = opts.statusFiltro !== undefined ? opts.statusFiltro : statusFiltro;
+    const valorMinAtivo = opts.valorMin !== undefined ? opts.valorMin : valorMin;
+    const valorMaxAtivo = opts.valorMax !== undefined ? opts.valorMax : valorMax;
+    const periodDaysAtivo = opts.periodDays !== undefined ? opts.periodDays : periodDays;
 
     try {
       const json = await buscarContratacoesPncp({
         pagina: targetPage,
         tamanhoPagina: pageSize,
-        status: statusFiltro,
-        q: keyword.trim() || undefined,
+        status: statusAtivo,
+        q: keywordAtivo || undefined,
         pncpLinkOrId: linkFiltroAtivo || undefined,
-        municipio: cityQuery.trim() || undefined,
-        ufs: selectedUfs,
-        modalidades: selectedModalidades,
-        fontes: selectedFontes,
-        periodDays,
+        municipio: cityAtivo || undefined,
+        ufs: ufsAtivas,
+        modalidades: modsAtivas,
+        fontes: fontesAtivas,
+        periodDays: periodDaysAtivo,
       });
 
       if (currentGeneration !== fetchGenerationRef.current) return;
@@ -302,7 +376,7 @@ export default function RadarOportunidadesTab({
           const linkDirect = item.linkPNCP || (cnpj ? `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}` : `https://pncp.gov.br/app/editais?q=${encodeURIComponent(numControle)}`);
 
           const orgaoNome = item.orgaoEntidade?.razaoSocial || "Órgão Público Proponente";
-          const ufSigla = item.unidadeOrgao?.ufSigla || item.uf || (selectedUfs.length === 1 ? selectedUfs[0] : "BR");
+          const ufSigla = item.unidadeOrgao?.ufSigla || item.uf || (ufsAtivas.length === 1 ? ufsAtivas[0] : "BR");
           const municipioNome = item.unidadeOrgao?.municipioNome || "Município Atendido";
           const unidadeNome = item.unidadeOrgao?.nomeUnidade || "Setor de Licitações e Compras";
           const uasgFormatted = item.uasg || (item.unidadeOrgao?.codigoUnidade ? `UASG ${item.unidadeOrgao.codigoUnidade}` : "");
@@ -387,8 +461,8 @@ export default function RadarOportunidadesTab({
 
         // Client-side filtering for value ranges if provided (mantém itens cujo preço ainda está carregando)
         let filtered = mapped;
-        const minV = parseFloat(valorMin);
-        const maxV = parseFloat(valorMax);
+        const minV = parseFloat(valorMinAtivo);
+        const maxV = parseFloat(valorMaxAtivo);
 
         if (!isNaN(minV) && minV > 0) {
           filtered = filtered.filter(i => i.precoCarregando || i.valorEstimadoRaw >= minV);
@@ -505,10 +579,16 @@ export default function RadarOportunidadesTab({
     }
   };
 
+  // Dispara busca inicial e quando filtros simples (Status, Período, Itens/página) mudam.
+  // Os seletores múltiplos (Estados, Modalidades, Fontes) aplicam somente ao clicar em Concluir ou Buscar.
   useEffect(() => {
+    if (skipNextAutoFetchRef.current) {
+      skipNextAutoFetchRef.current = false;
+      return;
+    }
     setPage(1);
     handleFetchPNCP(1);
-  }, [selectedUfs, selectedModalidades, selectedFontes, statusFiltro, pageSize, periodDays]);
+  }, [statusFiltro, pageSize, periodDays]);
 
   // Fecha o popup de detalhes ao pressionar ESC
   useEffect(() => {
@@ -525,7 +605,10 @@ export default function RadarOportunidadesTab({
   // Busca os documentos oficiais e os itens com preços da contratação selecionada assim que ela muda.
   useEffect(() => {
     setArquivos([]);
+    setSelectedDocIds([]);
     setArquivosError(null);
+    setAnalisePrepError(null);
+    setDownloadProgress(null);
     setItensDisputa([]);
     if (!activeItem?.numeroControlePNCP) return;
 
@@ -536,7 +619,9 @@ export default function RadarOportunidadesTab({
     listarArquivosPncp(activeItem.numeroControlePNCP)
       .then((lista) => {
         if (cancelado) return;
-        setArquivos(Array.isArray(lista) ? lista : []);
+        const docs = Array.isArray(lista) ? lista : [];
+        setArquivos(docs);
+        setSelectedDocIds(docs.map((arq) => arq.sequencialDocumento));
       })
       .catch((err) => {
         if (!cancelado) setArquivosError(err?.message || "Não foi possível listar os arquivos deste edital.");
@@ -590,11 +675,30 @@ export default function RadarOportunidadesTab({
     window.open(urlDaApi(`/api/pncp/arquivo?uri=${encodeURIComponent(arq.uri)}&nome=${encodeURIComponent(nome)}`), "_blank");
   };
 
+  const handleToggleDocSelection = (sequencialDocumento: number) => {
+    setAnalisePrepError(null);
+    setSelectedDocIds((prev) =>
+      prev.includes(sequencialDocumento)
+        ? prev.filter((id) => id !== sequencialDocumento)
+        : [...prev, sequencialDocumento]
+    );
+  };
+
+  const handleToggleAllDocsSelection = () => {
+    setAnalisePrepError(null);
+    if (selectedDocIds.length === arquivos.length) {
+      setSelectedDocIds([]);
+    } else {
+      setSelectedDocIds(arquivos.map((arq) => arq.sequencialDocumento));
+    }
+  };
+
   /**
-   * Manda o ARQUIVO REAL do edital para a análise.
+   * Manda o ARQUIVO REAL do edital para a análise (ação individual do card).
    */
   const analisarArquivoComIA = async (item: LicitacaoDetailed, arq: { uri: string; titulo: string }) => {
     setPreparandoAnalise(arq.uri);
+    setAnalisePrepError(null);
     try {
       const arquivoPronto = await baixarArquivoPncpComoBase64(arq);
       if (!arquivoPronto) {
@@ -604,13 +708,73 @@ export default function RadarOportunidadesTab({
       (window as any).__aipPendingEdital = {
         numeroControlePNCP: item.numeroControlePNCP,
         file: arquivoPronto,
+        files: [arquivoPronto],
       };
 
       onSelectForAnalysis(`Edital oficial do PNCP ${item.numeroControlePNCP} — ${item.orgao}`);
     } catch (err: any) {
-      alert(err?.message || "Não foi possível preparar a análise deste edital.");
+      setAnalisePrepError(err?.message || "Não foi possível preparar a análise deste edital.");
     } finally {
       setPreparandoAnalise(null);
+    }
+  };
+
+  /**
+   * Baixa exclusivamente os documentos marcados nos checkboxes do modal
+   * e envia esse conjunto selecionado para a análise com IA.
+   */
+  const analisarDocumentosSelecionadosComIA = async (item: LicitacaoDetailed) => {
+    if (arquivos.length === 0) {
+      await analisarEditalDaLista(item);
+      return;
+    }
+
+    const selecionados = arquivos.filter((arq) => selectedDocIds.includes(arq.sequencialDocumento));
+    if (selecionados.length === 0) {
+      return;
+    }
+
+    const chave = `selecionados:${item.numeroControlePNCP}`;
+    setPreparandoAnalise(chave);
+    setAnalisePrepError(null);
+    setDownloadProgress({ done: 0, total: selecionados.length });
+
+    try {
+      let concluidos = 0;
+      const resultados = await Promise.all(
+        selecionados.map(async (arq) => {
+          const baixado = await baixarArquivoPncpComoBase64(arq).catch(() => null);
+          concluidos += 1;
+          setDownloadProgress({ done: concluidos, total: selecionados.length });
+          return { arq, baixado };
+        })
+      );
+
+      const arquivosProntos = resultados
+        .map((r) => r.baixado)
+        .filter((f): f is NonNullable<typeof f> => Boolean(f));
+
+      if (arquivosProntos.length === 0) {
+        throw new Error(
+          "Não foi possível baixar os documentos selecionados do PNCP (verifique se algum arquivo excede 25 MB ou tente selecionar outro documento)."
+        );
+      }
+
+      const nomesSelecionados = arquivosProntos.map((f) => f.name).join(", ");
+      (window as any).__aipPendingEdital = {
+        numeroControlePNCP: item.numeroControlePNCP,
+        file: arquivosProntos[0],
+        files: arquivosProntos,
+      };
+
+      onSelectForAnalysis(
+        `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nDocumentos selecionados (${arquivosProntos.length}): ${nomesSelecionados}\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}`
+      );
+    } catch (err: any) {
+      setAnalisePrepError(err?.message || "Não foi possível preparar os documentos selecionados para análise.");
+    } finally {
+      setPreparandoAnalise(null);
+      setDownloadProgress(null);
     }
   };
 
@@ -813,7 +977,7 @@ export default function RadarOportunidadesTab({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          <div ref={filtersGridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
             {/* Keyword Search */}
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-foreground uppercase tracking-wider block">Palavra-Chave / Produto / Objeto</label>
@@ -824,7 +988,13 @@ export default function RadarOportunidadesTab({
                   placeholder="Notebook, Medicamento, Reforma, Software..."
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleFetchPNCP(1)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      fecharTodosOsSeletores();
+                      setPage(1);
+                      handleFetchPNCP(1);
+                    }
+                  }}
                   className="w-full pl-9 text-xs font-medium"
                 />
               </div>
@@ -840,7 +1010,13 @@ export default function RadarOportunidadesTab({
                   placeholder="Mauá, Salvador, São Paulo, Campinas..."
                   value={cityQuery}
                   onChange={(e) => setCityQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleFetchPNCP(1)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      fecharTodosOsSeletores();
+                      setPage(1);
+                      handleFetchPNCP(1);
+                    }
+                  }}
                   className="w-full pl-9 text-xs font-medium"
                 />
               </div>
@@ -857,8 +1033,10 @@ export default function RadarOportunidadesTab({
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  setShowStatePicker(!showStatePicker);
+                  const proximo = !showStatePicker;
+                  setShowStatePicker(proximo);
                   setShowModalidadesPicker(false);
+                  setShowFontesPicker(false);
                 }}
                 className="w-full h-9 px-2.5 text-xs justify-between gap-2 font-normal"
               >
@@ -961,7 +1139,11 @@ export default function RadarOportunidadesTab({
                     <Button
                       type="button"
                       size="sm"
-                      onClick={() => setShowStatePicker(false)}
+                      onClick={() => {
+                        setShowStatePicker(false);
+                        setPage(1);
+                        handleFetchPNCP(1);
+                      }}
                       className="h-auto px-3 py-1 text-[10px] font-bold"
                     >
                       Concluir
@@ -982,8 +1164,10 @@ export default function RadarOportunidadesTab({
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  setShowModalidadesPicker(!showModalidadesPicker);
+                  const proximo = !showModalidadesPicker;
+                  setShowModalidadesPicker(proximo);
                   setShowStatePicker(false);
+                  setShowFontesPicker(false);
                 }}
                 className="w-full h-9 px-2.5 text-xs justify-between gap-2 font-normal"
               >
@@ -1060,7 +1244,11 @@ export default function RadarOportunidadesTab({
                     <Button
                       type="button"
                       size="sm"
-                      onClick={() => setShowModalidadesPicker(false)}
+                      onClick={() => {
+                        setShowModalidadesPicker(false);
+                        setPage(1);
+                        handleFetchPNCP(1);
+                      }}
                       className="h-auto px-3 py-1 text-[10px] font-bold"
                     >
                       Concluir
@@ -1080,7 +1268,8 @@ export default function RadarOportunidadesTab({
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  setShowFontesPicker(!showFontesPicker);
+                  const proximo = !showFontesPicker;
+                  setShowFontesPicker(proximo);
                   setShowStatePicker(false);
                   setShowModalidadesPicker(false);
                 }}
@@ -1133,10 +1322,7 @@ export default function RadarOportunidadesTab({
                   <div className="flex items-center justify-between border-b border-border pb-1.5 text-[10px]">
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedFontes([]);
-                        setPage(1);
-                      }}
+                      onClick={() => setSelectedFontes([])}
                       className={`font-bold transition-colors ${selectedFontes.length === 0 ? "text-primary" : "text-muted-foreground hover:text-primary"}`}
                     >
                       ✓ Todas as Fontes / Plataformas
@@ -1144,10 +1330,7 @@ export default function RadarOportunidadesTab({
                     {selectedFontes.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedFontes([]);
-                          setPage(1);
-                        }}
+                        onClick={() => setSelectedFontes([])}
                         className="text-destructive hover:underline font-medium"
                       >
                         Limpar seleção
@@ -1185,7 +1368,11 @@ export default function RadarOportunidadesTab({
                     <Button
                       type="button"
                       size="sm"
-                      onClick={() => setShowFontesPicker(false)}
+                      onClick={() => {
+                        setShowFontesPicker(false);
+                        setPage(1);
+                        handleFetchPNCP(1);
+                      }}
                       className="h-auto px-3 py-1 text-[10px] font-bold"
                     >
                       Concluir
@@ -1205,7 +1392,8 @@ export default function RadarOportunidadesTab({
                 <SelectContent>
                   <SelectItem value="todos">Todas as Publicadas (Abertas e Encerradas)</SelectItem>
                   <SelectItem value="recebendo_proposta">Recebendo Propostas (Em Aberto)</SelectItem>
-                  <SelectItem value="encerradas">Em Julgamento / Encerradas</SelectItem>
+                  <SelectItem value="propostas_encerradas">Em Julgamento / Propostas Encerradas</SelectItem>
+                  <SelectItem value="encerradas">Encerradas</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1236,6 +1424,13 @@ export default function RadarOportunidadesTab({
                   placeholder="Mínimo R$"
                   value={valorMin}
                   onChange={(e) => setValorMin(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      fecharTodosOsSeletores();
+                      setPage(1);
+                      handleFetchPNCP(1);
+                    }
+                  }}
                   className="w-full text-xs"
                 />
                 <Input
@@ -1243,6 +1438,13 @@ export default function RadarOportunidadesTab({
                   placeholder="Máximo R$"
                   value={valorMax}
                   onChange={(e) => setValorMax(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      fecharTodosOsSeletores();
+                      setPage(1);
+                      handleFetchPNCP(1);
+                    }
+                  }}
                   className="w-full text-xs"
                 />
               </div>
@@ -1252,7 +1454,11 @@ export default function RadarOportunidadesTab({
             <div className="sm:col-span-2 lg:col-span-1">
               <Button
                 type="button"
-                onClick={() => handleFetchPNCP(1)}
+                onClick={() => {
+                  fecharTodosOsSeletores();
+                  setPage(1);
+                  handleFetchPNCP(1);
+                }}
                 disabled={loading}
                 className="w-full h-9 font-bold text-xs gap-2"
               >
@@ -1945,12 +2151,24 @@ export default function RadarOportunidadesTab({
 
               {/* Documentos oficiais da contratação */}
               <div className="space-y-2 pt-2 border-t border-border">
-                <div className="flex items-center justify-between">
-                  <h5 className="font-bold text-foreground text-[11px] uppercase tracking-wide">Documentos do Edital</h5>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <h5 className="font-bold text-foreground text-[11px] uppercase tracking-wide">Documentos do Edital</h5>
+                    {arquivos.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 rounded-full">
+                        {selectedDocIds.length} de {arquivos.length} selecionado{selectedDocIds.length === 1 ? "" : "s"}
+                      </Badge>
+                    )}
+                  </div>
                   {arquivos.length > 0 && (
-                    <Badge variant="secondary" className="text-[10px] font-mono px-2 py-0.5 rounded-full">
-                      {arquivos.length} arquivo{arquivos.length > 1 ? "s" : ""}
-                    </Badge>
+                    <button
+                      type="button"
+                      onClick={handleToggleAllDocsSelection}
+                      disabled={preparandoAnalise !== null}
+                      className="text-[10px] font-semibold text-primary hover:underline disabled:opacity-50 cursor-pointer"
+                    >
+                      {selectedDocIds.length === arquivos.length ? "Desmarcar todos" : "Selecionar todos"}
+                    </button>
                   )}
                 </div>
 
@@ -1969,47 +2187,109 @@ export default function RadarOportunidadesTab({
                 )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {arquivos.map(arq => (
-                    <div
-                      key={arq.sequencialDocumento}
-                      className="p-2.5 rounded-xl border border-border bg-muted/40 space-y-2 flex flex-col justify-between"
-                    >
-                      <div className="min-w-0">
-                        <p className="font-semibold text-foreground text-[11px] truncate" title={arq.titulo}>{arq.titulo}</p>
-                        <p className="text-muted-foreground text-[10px]">{arq.tipo}</p>
+                  {arquivos.map((arq) => {
+                    const isSelected = selectedDocIds.includes(arq.sequencialDocumento);
+                    const checkboxId = `pncp-doc-select-${arq.sequencialDocumento}`;
+                    return (
+                      <div
+                        key={arq.sequencialDocumento}
+                        className={`p-2.5 rounded-xl border space-y-2 flex flex-col justify-between transition-colors ${
+                          isSelected
+                            ? "border-primary/40 bg-primary/5"
+                            : "border-border bg-muted/30 opacity-75"
+                        }`}
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <Checkbox
+                            id={checkboxId}
+                            checked={isSelected}
+                            disabled={preparandoAnalise !== null}
+                            onCheckedChange={() => handleToggleDocSelection(arq.sequencialDocumento)}
+                            aria-label={`Selecionar ${arq.titulo} para análise com IA`}
+                            className="mt-0.5 shrink-0 cursor-pointer"
+                          />
+                          <label
+                            htmlFor={checkboxId}
+                            className="min-w-0 flex-1 cursor-pointer select-none"
+                          >
+                            <p className="font-semibold text-foreground text-[11px] truncate" title={arq.titulo}>
+                              {arq.titulo}
+                            </p>
+                            <p className="text-muted-foreground text-[10px]">{arq.tipo}</p>
+                          </label>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => baixarArquivo(arq)}
+                            className="flex-1 h-auto py-1.5 text-[10px] gap-1.5"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Baixar
+                          </Button>
+                          <Button
+                            type="button"
+                            onClick={() => analisarArquivoComIA(activeItem, arq)}
+                            disabled={preparandoAnalise !== null}
+                            className="flex-1 h-auto py-1.5 text-[10px] gap-1.5"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            {preparandoAnalise === arq.uri ? "Preparando..." : "Analisar com IA"}
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => baixarArquivo(arq)}
-                          className="flex-1 h-auto py-1.5 text-[10px] gap-1.5"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          Baixar
-                        </Button>
-                        <Button
-                          type="button"
-                          onClick={() => analisarArquivoComIA(activeItem, arq)}
-                          disabled={preparandoAnalise === arq.uri}
-                          className="flex-1 h-auto py-1.5 text-[10px] gap-1.5"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          {preparandoAnalise === arq.uri ? "Preparando..." : "Analisar com IA"}
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
 
-            {/* Popup Footer: Análise Completa Automática + Fechar */}
+            {/* Popup Footer: Análise Completa com Documentos Selecionados + Fechar */}
             <div className="p-4 sm:p-5 border-t border-border bg-muted/60 space-y-2.5 shrink-0">
+              {analisePrepError && (
+                <div className="p-2.5 bg-destructive/10 rounded-xl border border-destructive/30 text-destructive text-[10px] leading-normal flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{analisePrepError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAnalisePrepError(null)}
+                    className="text-destructive/80 hover:text-destructive shrink-0 cursor-pointer"
+                    aria-label="Fechar aviso"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
               <div className="p-2.5 bg-primary/10 rounded-xl border border-primary/20 text-foreground text-[10px] leading-normal flex items-start gap-2">
                 <Sparkles className="w-4 h-4 text-primary shrink-0 mt-0.5" />
                 <span>
-                  Ao clicar abaixo, o servidor baixa e lê automaticamente o <strong>Edital + Termo de Referência + Itens Oficiais</strong> direto do PNCP, sem precisar baixar e enviar arquivos manualmente.
+                  {arquivos.length > 0 ? (
+                    selectedDocIds.length === 0 ? (
+                      <>
+                        Nenhum documento está marcado. Marque ao menos <strong>1 documento</strong> em <em>Documentos do Edital</em> para habilitar a análise com IA.
+                      </>
+                    ) : (
+                      <>
+                        A IA analisará{" "}
+                        <strong>
+                          {selectedDocIds.length === arquivos.length
+                            ? arquivos.length === 1
+                              ? "o documento selecionado"
+                              : `todos os ${arquivos.length} documentos selecionados`
+                            : `${selectedDocIds.length} de ${arquivos.length} documento${selectedDocIds.length === 1 ? "" : "s"} selecionado${selectedDocIds.length === 1 ? "" : "s"}`}
+                        </strong>{" "}
+                        junto com os <strong>Itens Oficiais do PNCP</strong>. Desmarque acima qualquer anexo que não queira incluir.
+                      </>
+                    )
+                  ) : (
+                    <>
+                      Ao clicar abaixo, a IA analisa os dados da <strong>Ficha Oficial + Itens Oficiais</strong> direto do PNCP.
+                    </>
+                  )}
                 </span>
               </div>
 
@@ -2024,12 +2304,28 @@ export default function RadarOportunidadesTab({
                 </Button>
                 <Button
                   type="button"
-                  onClick={() => analisarEditalDaLista(activeItem)}
-                  disabled={preparandoAnalise !== null}
+                  onClick={() => analisarDocumentosSelecionadosComIA(activeItem)}
+                  disabled={
+                    preparandoAnalise !== null ||
+                    arquivosLoading ||
+                    (arquivos.length > 0 && selectedDocIds.length === 0)
+                  }
                   className="flex-1 h-auto py-2.5 font-bold text-xs gap-2"
                 >
                   <Sparkles className="w-4 h-4" />
-                  Analisar Edital + TR + Itens com IA (Automático)
+                  {downloadProgress
+                    ? `Baixando documentos (${downloadProgress.done}/${downloadProgress.total})...`
+                    : arquivosLoading
+                      ? "Carregando documentos do PNCP..."
+                      : arquivos.length > 0 && selectedDocIds.length === 0
+                        ? "Selecione ao menos 1 documento acima"
+                        : arquivos.length > 0
+                          ? selectedDocIds.length === arquivos.length
+                            ? arquivos.length === 1
+                              ? "Analisar 1 documento + Itens com IA"
+                              : `Analisar todos os ${arquivos.length} documentos + Itens com IA`
+                            : `Analisar ${selectedDocIds.length} de ${arquivos.length} documento${selectedDocIds.length === 1 ? "" : "s"} + Itens com IA`
+                          : "Analisar Ficha Oficial + Itens com IA"}
                 </Button>
               </div>
             </div>
