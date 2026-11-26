@@ -5,9 +5,10 @@ import {
   Search, Check, FileEdit, ChevronsUpDown, ClipboardCheck,
   NotebookPen, MessageSquare, Loader2, Scale
 } from "lucide-react";
-import { CompanyData, EditalAnalysis } from "./types";
+import { CompanyData, DisputaRow, EditalAnalysis } from "./types";
 import EditalAnalyzerTab from "./components/EditalAnalyzerTab";
 import { resetEditalHistory } from "./utils/editalHistory";
+import { DossieNavigationIntent } from "./utils/disputaDossie";
 import FloatingAiChat from "./components/FloatingAiChat";
 import DocPreviewModal from "./components/DocPreviewModal";
 import {
@@ -145,6 +146,7 @@ export default function App() {
     municipio?: string;
     orgao?: string;
   } | null>(null);
+  const [dossieNavigationIntent, setDossieNavigationIntent] = useState<DossieNavigationIntent | null>(null);
 
   // App-wide state
   const [companyData, setCompanyData] = useState<CompanyData>(() => {
@@ -436,6 +438,27 @@ export default function App() {
     setPreviewModalOpen(true);
   };
 
+  const handleOpenDisputaDossie = (row: DisputaRow, matchedEdital: EditalAnalysis | null) => {
+    if (matchedEdital) {
+      setActiveEdital(matchedEdital);
+      setDossieNavigationIntent({
+        type: "found",
+        nonce: Date.now(),
+      });
+    } else {
+      setActiveEdital(null);
+      setDossieNavigationIntent({
+        type: "missing",
+        orgao: row.orgao,
+        numeroLicitacao: row.numeroLicitacao,
+        produtoItem: row.produtoItem,
+        linkPNCP: row.linkPNCP,
+        nonce: Date.now(),
+      });
+    }
+    setActiveTab("analyzer");
+  };
+
   if (!supabaseUser) {
     return (
       <SupabaseLoginScreen
@@ -707,6 +730,8 @@ export default function App() {
                       setCapagFocusQuery(focus);
                       setActiveTab("capag");
                     }}
+                    dossieNavigationIntent={dossieNavigationIntent}
+                    onConsumeDossieIntent={() => setDossieNavigationIntent(null)}
                   />
                 ) : activeTab === "radar" ? null : activeTab === "capag" ? (
                   <CapagSearchTab
@@ -717,6 +742,7 @@ export default function App() {
                   <DisputasSheetTab
                     activeEdital={activeEdital}
                     onNavigateToAnalyzer={() => setActiveTab("analyzer")}
+                    onOpenDisputaDossie={handleOpenDisputaDossie}
                   />
                 ) : activeTab === "documents" ? (
                   <div className="space-y-4">

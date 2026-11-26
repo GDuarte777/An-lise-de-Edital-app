@@ -780,6 +780,97 @@ async function fetchPncpJsonServer(url: string, timeoutMs = 12_000): Promise<any
   }
 }
 
+function formatarDataPncpServidorBrasilia(value?: string | null): string {
+  if (!value) return "";
+  const trimmed = String(value).trim();
+  if (!trimmed) return "";
+
+  // ISO com fuso explícito (Z ou ±HH:MM) -> converte para America/Sao_Paulo
+  const isoTz = trimmed.match(
+    /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})/i
+  );
+  if (isoTz) {
+    const dt = new Date(isoTz[0]);
+    if (!isNaN(dt.getTime())) {
+      try {
+        const parts = new Intl.DateTimeFormat("pt-BR", {
+          timeZone: "America/Sao_Paulo",
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).formatToParts(dt);
+        const get = (type: string) => parts.find((p) => p.type === type)?.value || "";
+        const dd = get("day");
+        const mo = get("month");
+        const yyyy = get("year");
+        const hh = get("hour") === "24" ? "00" : get("hour");
+        const mi = get("minute");
+        if (dd && mo && yyyy && hh && mi) {
+          return `${dd}/${mo}/${yyyy} ${hh}:${mi}`;
+        }
+      } catch {
+        // fallback abaixo
+      }
+    }
+  }
+
+  // ISO sem fuso (padrão PNCP já em horário local de Brasília) -> preserva hora exata
+  const isoLocal = trimmed.match(/(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  if (isoLocal) {
+    const [, yyyy, mo, dd, hh, mi] = isoLocal;
+    if (hh !== undefined && mi !== undefined) {
+      return `${dd}/${mo}/${yyyy} ${String(hh).padStart(2, "0")}:${mi}`;
+    }
+    return `${dd}/${mo}/${yyyy}`;
+  }
+
+  // Já está no formato DD/MM/AAAA (com ou sem hora)
+  const br = trimmed.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[\s,]+(?:às\s+)?(\d{1,2})[:hH](\d{2}))?/i);
+  if (br) {
+    const dd = String(br[1]).padStart(2, "0");
+    const mo = String(br[2]).padStart(2, "0");
+    const yyyy = br[3];
+    if (br[4] !== undefined && br[5] !== undefined) {
+      return `${dd}/${mo}/${yyyy} ${String(br[4]).padStart(2, "0")}:${br[5]}`;
+    }
+    return `${dd}/${mo}/${yyyy}`;
+  }
+
+  return "";
+}
+
+function extrairDatasPncpObjeto(raw: any): {
+  dataEncerramentoProposta?: string;
+  dataAberturaProposta?: string;
+} {
+  if (!raw || typeof raw !== "object") return {};
+  const enc =
+    raw.dataEncerramentoProposta ||
+    raw.data_encerramento_proposta ||
+    raw.dataFimRecebimentoProposta ||
+    raw.data_fim_recebimento_propostas ||
+    raw.dataLimiteRecebimentoProposta ||
+    raw.data_limite_recebimento_propostas ||
+    raw.dataFimVigencia ||
+    raw.data_fim_vigencia ||
+    undefined;
+  const ab =
+    raw.dataAberturaProposta ||
+    raw.data_abertura_proposta ||
+    raw.dataInicioRecebimentoProposta ||
+    raw.data_inicio_recebimento_propostas ||
+    raw.dataInicioVigencia ||
+    raw.data_inicio_vigencia ||
+    undefined;
+  return {
+    dataEncerramentoProposta: enc ? String(enc) : undefined,
+    dataAberturaProposta: ab ? String(ab) : undefined,
+  };
+}
+
 async function buscarPacotePncpNoServidor(
   alvo: { cnpj: string; ano: string; sequencial: string },
   options: { baixarArquivos: boolean }
@@ -796,12 +887,62 @@ async function buscarPacotePncpNoServidor(
   const numeroControle = `${alvo.cnpj}-1-${seqPadded}/${alvo.ano}`;
   const linkPNCP = `https://pncp.gov.br/app/editais/${alvo.cnpj}/${alvo.ano}/${seqPadded}`;
   const baseUrl = `https://pncp.gov.br/api/pncp/v1/orgaos/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
+  const consultaUrl = `https://pncp.gov.br/api/consulta/v1/orgaos/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
 
-  const [detalhe, itensRaw, arquivosRaw] = await Promise.all([
+  const [detalheIntegracao, itensRaw, arquivosRaw] = await Promise.all([
     fetchPncpJsonServer(baseUrl, 12_000),
     fetchPncpJsonServer(`${baseUrl}/itens?pagina=1&tamanhoPagina=500`, 14_000),
     options.baixarArquivos ? fetchPncpJsonServer(`${baseUrl}/arquivos`, 12_000) : Promise.resolve(null),
   ]);
+
+  let detalhe: any | null = detalheIntegracao;
+  let datas = extrairDatasPncpObjeto(detalhe);
+
+  // Fallback 1: endpoint /api/consulta/v1/orgaos/{cnpj}/compras/{ano}/{seq}
+  if (!detalhe || !datas.dataEncerramentoProposta) {
+    const detalheConsulta = await fetchPncpJsonServer(consultaUrl, 10_000);
+    if (detalheConsulta && typeof detalheConsulta === "object") {
+      const datasConsulta = extrairDatasPncpObjeto(detalheConsulta);
+      detalhe = detalhe
+        ? {
+            ...detalheConsulta,
+            ...detalhe,
+            dataEncerramentoProposta:
+              datas.dataEncerramentoProposta || datasConsulta.dataEncerramentoProposta,
+            dataAberturaProposta:
+              datas.dataAberturaProposta || datasConsulta.dataAberturaProposta,
+          }
+        : detalheConsulta;
+      datas = extrairDatasPncpObjeto(detalhe);
+    }
+  }
+
+  // Fallback 2: índice de busca /api/search/ pelo número de controle exato
+  if (!datas.dataEncerramentoProposta) {
+    const searchJson = await fetchPncpJsonServer(
+      `https://pncp.gov.br/api/search/?q=${encodeURIComponent(numeroControle)}&tipos_documento=edital&pagina=1&tam_pagina=5`,
+      10_000
+    );
+    const itemsSearch = Array.isArray(searchJson?.items) ? searchJson.items : [];
+    const matchSearch =
+      itemsSearch.find(
+        (it: any) =>
+          String(it?.numero_controle_pncp || "").trim().toLowerCase() === numeroControle.toLowerCase()
+      ) || itemsSearch[0];
+    if (matchSearch) {
+      const datasSearch = extrairDatasPncpObjeto(matchSearch);
+      if (datasSearch.dataEncerramentoProposta || datasSearch.dataAberturaProposta) {
+        detalhe = {
+          ...(detalhe || {}),
+          dataEncerramentoProposta:
+            datas.dataEncerramentoProposta || datasSearch.dataEncerramentoProposta,
+          dataAberturaProposta:
+            datas.dataAberturaProposta || datasSearch.dataAberturaProposta,
+        };
+        datas = extrairDatasPncpObjeto(detalhe);
+      }
+    }
+  }
 
   const itens = Array.isArray(itensRaw) ? itensRaw : Array.isArray(itensRaw?.data) ? itensRaw.data : [];
   const linhas: string[] = [
@@ -828,14 +969,14 @@ async function buscarPacotePncpNoServidor(
         })}`
       );
     }
-    if (detalhe.dataEncerramentoProposta) {
+    if (datas.dataEncerramentoProposta) {
       linhas.push(
-        `Data de Encerramento das Propostas / Início da Disputa (PNCP): ${new Date(detalhe.dataEncerramentoProposta).toLocaleString("pt-BR")}`
+        `Data de Encerramento das Propostas / Data Limite de Recebimento (PNCP): ${formatarDataPncpServidorBrasilia(datas.dataEncerramentoProposta) || datas.dataEncerramentoProposta}`
       );
     }
-    if (detalhe.dataAberturaProposta) {
+    if (datas.dataAberturaProposta) {
       linhas.push(
-        `Data de Abertura do Recebimento de Propostas (PNCP): ${new Date(detalhe.dataAberturaProposta).toLocaleString("pt-BR")}`
+        `Data de Abertura do Recebimento de Propostas (PNCP): ${formatarDataPncpServidorBrasilia(datas.dataAberturaProposta) || datas.dataAberturaProposta}`
       );
     }
   }
@@ -2238,7 +2379,7 @@ Retorne EXCLUSIVAMENTE um JSON válido com:
 // 8b. /api/pncp/contratacao (Fallback no servidor para busca por link direto/ID do PNCP)
 app.get("/api/pncp/contratacao", async (req, res) => {
   try {
-    const numeroControle = String(req.query.numeroControle || "");
+    const numeroControle = String(req.query.numeroControle || req.query.id || "");
     const cnpj = String(req.query.cnpj || "").replace(/\D/g, "");
     const ano = String(req.query.ano || "");
     const sequencial = String(req.query.sequencial || "");
@@ -2254,9 +2395,172 @@ app.get("/api/pncp/contratacao", async (req, res) => {
     if (!pacote.detalhe && pacote.itens.length === 0) {
       return res.status(404).json({ error: "Contratação não encontrada no PNCP." });
     }
-    return res.json({ contratacao: pacote.detalhe, itens: pacote.itens, alvo });
+    const datasOficiais = {
+      ...extrairDatasPncpObjeto(pacote.detalhe),
+      linkPNCP: pacote.linkPNCP,
+      numeroControlePNCP: pacote.numeroControle,
+    };
+    return res.json({ contratacao: pacote.detalhe, itens: pacote.itens, alvo, datasOficiais });
   } catch (err: any) {
     return res.status(502).json({ error: err?.message || "Erro ao consultar contratação no PNCP." });
+  }
+});
+
+// 8c. /api/pncp/buscar-data (Busca automática da Data limite de recebimento no PNCP por metadados de PDFs avulsos)
+app.get("/api/pncp/buscar-data", async (req, res) => {
+  try {
+    const numeroControle = String(req.query.numeroControle || req.query.id || "").trim();
+    const alvoDireto = parseNumeroControlePncpServer(numeroControle);
+    if (alvoDireto) {
+      const pacote = await buscarPacotePncpNoServidor(alvoDireto, { baixarArquivos: false });
+      const datas = extrairDatasPncpObjeto(pacote.detalhe);
+      return res.json({
+        numeroControlePNCP: pacote.numeroControle,
+        linkPNCP: pacote.linkPNCP,
+        datasOficiais: {
+          ...datas,
+          linkPNCP: pacote.linkPNCP,
+          numeroControlePNCP: pacote.numeroControle,
+        },
+      });
+    }
+
+    const orgao = String(req.query.orgao || "").trim();
+    const cnpj = String(req.query.cnpj || "").replace(/\D/g, "");
+    const numero = String(req.query.numero || "").replace(/\D/g, "");
+    const ano = String(req.query.ano || "").replace(/\D/g, "");
+    const uasg = String(req.query.uasg || "").replace(/\D/g, "");
+
+    if (!orgao && cnpj.length !== 14 && !(numero && ano)) {
+      return res.status(400).json({ error: "Metadados insuficientes para localizar a licitação no PNCP." });
+    }
+
+    const normTxt = (v: string) =>
+      String(v || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const stopOrgao = new Set([
+      "de", "da", "do", "das", "dos", "para", "com", "em", "no", "na", "e",
+      "prefeitura", "municipal", "secretaria", "estado", "governo", "ministerio",
+      "municipio", "fundo", "instituto", "camara", "autarquia",
+    ]);
+    const tokensOrgaoAlvo = new Set(
+      normTxt(orgao)
+        .split(" ")
+        .filter((t) => t.length >= 3 && !stopOrgao.has(t))
+    );
+
+    const consultas: string[] = [];
+    if (cnpj.length === 14 && numero && ano) consultas.push(`${cnpj} ${numero}/${ano}`);
+    if (orgao && numero && ano) consultas.push(`${orgao.split(/\s+/).slice(0, 5).join(" ")} ${numero}/${ano}`);
+    if (cnpj.length === 14 && consultas.length === 0) consultas.push(cnpj);
+    if (orgao && consultas.length === 0) consultas.push(orgao.split(/\s+/).slice(0, 6).join(" "));
+
+    const extrairNumAno = (t: string): { num: string; ano: string } | null => {
+      const m = String(t || "").match(/(\d{1,6})\s*\/\s*(20\d{2})/);
+      return m ? { num: String(parseInt(m[1], 10)), ano: m[2] } : null;
+    };
+
+    const numAlvoClean = numero ? String(parseInt(numero, 10)) : "";
+
+    let melhorCandidato: any = null;
+    let melhorScore = 0;
+
+    for (const termo of consultas) {
+      const json = await fetchPncpJsonServer(
+        `https://pncp.gov.br/api/search/?q=${encodeURIComponent(termo)}&tipos_documento=edital&pagina=1&tam_pagina=15`,
+        10_000
+      );
+      const items = Array.isArray(json?.items) ? json.items : [];
+      for (const it of items) {
+        const itCnpj = String(it?.orgao_cnpj || it?.cnpj || "").replace(/\D/g, "");
+        const itUasg = String(it?.unidade_codigo || it?.codigo_unidade || "").replace(/\D/g, "");
+        const itNumAno =
+          extrairNumAno(`${it?.numero_compra || it?.numero || ""}/${it?.ano || ""}`) ||
+          extrairNumAno(it?.title || "") ||
+          extrairNumAno(it?.numero_processo || "");
+        const itOrgaoTokens = new Set(
+          normTxt(it?.orgao_nome || "")
+            .split(" ")
+            .filter((t) => t.length >= 3 && !stopOrgao.has(t))
+        );
+
+        let comunsOrgao = 0;
+        for (const t of tokensOrgaoAlvo) {
+          if (itOrgaoTokens.has(t)) comunsOrgao++;
+        }
+        const orgaoCompat =
+          comunsOrgao >= 2 || (tokensOrgaoAlvo.size === 1 && comunsOrgao === 1);
+        const mesmoCnpj = cnpj.length === 14 && itCnpj === cnpj;
+        const mesmaUasg = Boolean(uasg && itUasg && uasg === itUasg);
+        const mesmoNumAno = Boolean(
+          numAlvoClean && ano && itNumAno && itNumAno.num === numAlvoClean && itNumAno.ano === ano
+        );
+
+        let score = 0;
+        if (mesmoCnpj && mesmoNumAno) score = 100;
+        else if (mesmaUasg && mesmoNumAno) score = 95;
+        else if (orgaoCompat && mesmoNumAno) score = 85;
+
+        if (score > melhorScore) {
+          melhorScore = score;
+          melhorCandidato = it;
+        }
+      }
+      if (melhorScore >= 95) break;
+    }
+
+    if (!melhorCandidato || melhorScore < 85) {
+      return res.json({ datasOficiais: null });
+    }
+
+    const ctrlCand = String(melhorCandidato?.numero_controle_pncp || "").trim();
+    const alvoCand =
+      parseNumeroControlePncpServer(ctrlCand) ||
+      (melhorCandidato?.orgao_cnpj && melhorCandidato?.ano && melhorCandidato?.numero_sequencial
+        ? {
+            cnpj: String(melhorCandidato.orgao_cnpj).replace(/\D/g, ""),
+            ano: String(melhorCandidato.ano),
+            sequencial: String(parseInt(String(melhorCandidato.numero_sequencial), 10)),
+          }
+        : null);
+
+    if (alvoCand) {
+      const pacote = await buscarPacotePncpNoServidor(alvoCand, { baixarArquivos: false });
+      const datasPacote = extrairDatasPncpObjeto(pacote.detalhe);
+      const datasIndice = extrairDatasPncpObjeto(melhorCandidato);
+      const datasFinais = {
+        dataEncerramentoProposta:
+          datasPacote.dataEncerramentoProposta || datasIndice.dataEncerramentoProposta,
+        dataAberturaProposta:
+          datasPacote.dataAberturaProposta || datasIndice.dataAberturaProposta,
+        linkPNCP: pacote.linkPNCP,
+        numeroControlePNCP: pacote.numeroControle,
+      };
+      return res.json({
+        numeroControlePNCP: pacote.numeroControle,
+        linkPNCP: pacote.linkPNCP,
+        datasOficiais:
+          datasFinais.dataEncerramentoProposta || datasFinais.dataAberturaProposta
+            ? datasFinais
+            : null,
+      });
+    }
+
+    const datasIndice = extrairDatasPncpObjeto(melhorCandidato);
+    return res.json({
+      datasOficiais:
+        datasIndice.dataEncerramentoProposta || datasIndice.dataAberturaProposta
+          ? datasIndice
+          : null,
+    });
+  } catch (err: any) {
+    return res.status(502).json({ error: err?.message || "Erro ao pesquisar data no PNCP." });
   }
 });
 
@@ -2297,7 +2601,9 @@ app.post("/api/analyze-edital", async (req, res) => {
     let pacoteServidorPncp: Awaited<ReturnType<typeof buscarPacotePncpNoServidor>> | null = null;
     if (pncpAlvo) {
       const precisaBaixarArquivos = allFiles.length === 0 && !selecaoExplicita;
-      const precisaDadosOficiais = !rawTextInput.includes("DADOS OFICIAIS DA CONTRATAÇÃO NO PNCP");
+      const jaTemDataEncerramentoNoTexto = /Data de Encerramento das Propostas|Data Limite de Recebimento/i.test(rawTextInput);
+      const precisaDadosOficiais =
+        !rawTextInput.includes("DADOS OFICIAIS DA CONTRATAÇÃO NO PNCP") || !jaTemDataEncerramentoNoTexto;
       if (precisaBaixarArquivos || precisaDadosOficiais) {
         const pacote = await buscarPacotePncpNoServidor(pncpAlvo, {
           baixarArquivos: precisaBaixarArquivos,
@@ -2307,8 +2613,24 @@ app.post("/api/analyze-edital", async (req, res) => {
           if (precisaBaixarArquivos && pacote.arquivosBaixados.length > 0) {
             allFiles.push(...pacote.arquivosBaixados);
           }
-          if (precisaDadosOficiais && pacote.textoOficial) {
+          if (!rawTextInput.includes("DADOS OFICIAIS DA CONTRATAÇÃO NO PNCP") && pacote.textoOficial) {
             rawTextInput = [rawTextInput.trim(), pacote.textoOficial].filter(Boolean).join("\n\n");
+          } else if (!jaTemDataEncerramentoNoTexto && pacote.detalhe) {
+            const datasSrv = extrairDatasPncpObjeto(pacote.detalhe);
+            const extras: string[] = [];
+            if (datasSrv.dataEncerramentoProposta) {
+              extras.push(
+                `Data de Encerramento das Propostas / Data Limite de Recebimento (PNCP): ${formatarDataPncpServidorBrasilia(datasSrv.dataEncerramentoProposta) || datasSrv.dataEncerramentoProposta}`
+              );
+            }
+            if (datasSrv.dataAberturaProposta) {
+              extras.push(
+                `Data de Abertura do Recebimento de Propostas (PNCP): ${formatarDataPncpServidorBrasilia(datasSrv.dataAberturaProposta) || datasSrv.dataAberturaProposta}`
+              );
+            }
+            if (extras.length > 0) {
+              rawTextInput = [rawTextInput.trim(), ...extras].filter(Boolean).join("\n");
+            }
           }
         }
       }
@@ -2348,24 +2670,21 @@ app.post("/api/analyze-edital", async (req, res) => {
     const normalized = normalizeEditalAnalysisObject(parsed, rawTextInput);
     if (pacoteServidorPncp?.detalhe) {
       const ident = normalized.identificacaoCertame || (normalized.identificacaoCertame = {});
-      const atual = String(ident.dataHoraSessao || "");
-      const temDataReconhecivel = /\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(atual);
-      if (!temDataReconhecivel) {
-        const rawPncpDate =
-          pacoteServidorPncp.detalhe.dataEncerramentoProposta ||
-          pacoteServidorPncp.detalhe.dataAberturaProposta;
-        if (rawPncpDate) {
-          const dt = new Date(rawPncpDate);
-          if (!isNaN(dt.getTime())) {
-            const dd = String(dt.getDate()).padStart(2, "0");
-            const mo = String(dt.getMonth() + 1).padStart(2, "0");
-            const yyyy = dt.getFullYear();
-            const hh = String(dt.getHours()).padStart(2, "0");
-            const mi = String(dt.getMinutes()).padStart(2, "0");
-            ident.dataHoraSessao = `${dd}/${mo}/${yyyy} ${hh}:${mi}`;
-          }
+      const datasSrv = extrairDatasPncpObjeto(pacoteServidorPncp.detalhe);
+      const encerramentoFmt = formatarDataPncpServidorBrasilia(datasSrv.dataEncerramentoProposta);
+      const aberturaFmt = formatarDataPncpServidorBrasilia(datasSrv.dataAberturaProposta);
+
+      // Prioridade absoluta: Data limite de recebimento (encerramento) do PNCP
+      if (encerramentoFmt) {
+        ident.dataHoraSessao = encerramentoFmt;
+      } else {
+        const atual = String(ident.dataHoraSessao || "");
+        const temDataReconhecivel = /\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(atual);
+        if (!temDataReconhecivel && aberturaFmt) {
+          ident.dataHoraSessao = aberturaFmt;
         }
       }
+
       if (pacoteServidorPncp.numeroControle) {
         ident.idContratacaoPNCP = ident.idContratacaoPNCP || pacoteServidorPncp.numeroControle;
         normalized.idContratacaoPNCP = normalized.idContratacaoPNCP || pacoteServidorPncp.numeroControle;
@@ -2374,6 +2693,12 @@ app.post("/api/analyze-edital", async (req, res) => {
         ident.linkPNCP = ident.linkPNCP || pacoteServidorPncp.linkPNCP;
         normalized.linkPNCP = normalized.linkPNCP || pacoteServidorPncp.linkPNCP;
       }
+      (normalized as any).dadosOficiaisPNCP = {
+        ...((normalized as any).dadosOficiaisPNCP || {}),
+        numeroControlePNCP: pacoteServidorPncp.numeroControle,
+        dataEncerramentoProposta: datasSrv.dataEncerramentoProposta || undefined,
+        dataAberturaProposta: datasSrv.dataAberturaProposta || undefined,
+      };
     }
     return res.json({ analysis: normalized });
   } catch (err: any) {

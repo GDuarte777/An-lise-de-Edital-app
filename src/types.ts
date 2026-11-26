@@ -41,6 +41,7 @@ export interface EditalAnalysis {
     modalidade: string;
     identificacaoNumerica: string;
     dataHoraSessao: string;
+    uasg?: string;
     idContratacaoPNCP?: string;
     linkPNCP?: string;
   };

@@ -585,5 +585,77 @@ describe("buscarContratacoesPncp (cliente híbrido navegador + fallback)", () =>
       globalThis.fetch = origFetch;
     }
   });
+
+  it("popula dataEncerramentoProposta na normalização do /api/search/ e busca data limite via proxy numeroControle", async () => {
+    const norm = normalizarItemBuscaIndexadaPncp({
+      numero_controle_pncp: "79151312000156-1-000501/2026",
+      orgao_cnpj: "79151312000156",
+      orgao_nome: "Município de Teste",
+      ano: "2026",
+      numero_sequencial: "501",
+      data_inicio_vigencia: "2026-12-01T08:00:00",
+      data_fim_recebimento_propostas: "2026-12-10T09:00:00",
+    });
+    expect(norm.dataEncerramentoProposta).toBe("2026-12-10T09:00:00");
+    expect(norm.dataAberturaProposta).toBe("2026-12-01T08:00:00");
+
+    const { buscarDataOficialPncp, buscarDataOficialPncpPorMetadados } = await import("./pncpClient");
+    const origFetch = globalThis.fetch;
+    let urlProxyUsada = "";
+
+    globalThis.fetch = (async (url: string) => {
+      const s = String(url);
+      if (s.includes("pncp.gov.br")) {
+        throw new Error("CORS blocked in test");
+      }
+      if (s.includes("/api/pncp/contratacao")) {
+        urlProxyUsada = s;
+        return new Response(
+          JSON.stringify({
+            contratacao: {
+              numeroControlePNCP: "00394460000141-1-000123/2026",
+              dataEncerramentoProposta: "2026-12-15T10:30:00",
+              dataAberturaProposta: "2026-12-01T08:00:00",
+            },
+            datasOficiais: {
+              dataEncerramentoProposta: "2026-12-15T10:30:00",
+              dataAberturaProposta: "2026-12-01T08:00:00",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (s.includes("/api/pncp/buscar-data")) {
+        return new Response(
+          JSON.stringify({
+            encontrado: true,
+            numeroControlePNCP: "00394460000141-1-000123/2026",
+            linkPNCP: "https://pncp.gov.br/app/editais/00394460000141/2026/000123",
+            dataEncerramentoProposta: "2026-12-18T09:00:00",
+            dataAberturaProposta: "2026-12-02T08:00:00",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response("{}", { status: 404 });
+    }) as any;
+
+    try {
+      const datas = await buscarDataOficialPncp("https://pncp.gov.br/app/editais/00394460000141/2026/000123");
+      expect(urlProxyUsada).toContain("numeroControle=00394460000141-1-000123%2F2026");
+      expect(datas?.dataEncerramentoProposta).toBe("2026-12-15T10:30:00");
+
+      const datasPdf = await buscarDataOficialPncpPorMetadados({
+        orgao: "Ministério da Fazenda",
+        cnpj: "00.394.460/0001-41",
+        numeroLicitacao: "Pregão Eletrônico 123/2026",
+      });
+      expect(datasPdf?.dataEncerramentoProposta).toBe("2026-12-18T09:00:00");
+      expect(datasPdf?.linkPNCP).toBe("https://pncp.gov.br/app/editais/00394460000141/2026/000123");
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
 });
+
 

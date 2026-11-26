@@ -175,28 +175,111 @@ export function normalizarDataHoraDisputa(value?: string | null): string {
 }
 
 /**
- * Seleciona a data oficial do PNCP para o Calendário quando o documento não trouxe data:
- * prioridade para o encerramento das propostas (início da disputa), caindo para abertura.
+ * Formata uma data vinda das APIs do PNCP para "DD/MM/AAAA HH:MM" em horário
+ * de Brasília (America/Sao_Paulo). Quando a string ISO não traz fuso explícito
+ * (padrão mais comum do PNCP, ex: "2026-12-05T09:00:00"), preserva o horário
+ * local exatamente como publicado pelo órgão, evitando deslocamentos de UTC.
+ */
+export function formatarDataPncpBrasilia(value?: string | null): string {
+  if (!value) return "";
+  const trimmed = String(value).trim();
+  if (!trimmed) return "";
+
+  // ISO com fuso explícito (Z ou ±HH:MM) -> converte para America/Sao_Paulo
+  const isoTz = trimmed.match(
+    /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})/i
+  );
+  if (isoTz) {
+    const dt = new Date(isoTz[0]);
+    if (!isNaN(dt.getTime())) {
+      try {
+        const parts = new Intl.DateTimeFormat("pt-BR", {
+          timeZone: "America/Sao_Paulo",
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).formatToParts(dt);
+        const get = (type: string) => parts.find((p) => p.type === type)?.value || "";
+        const dd = get("day");
+        const mo = get("month");
+        const yyyy = get("year");
+        const hh = get("hour") === "24" ? "00" : get("hour");
+        const mi = get("minute");
+        if (dd && mo && yyyy && hh && mi) {
+          return `${dd}/${mo}/${yyyy} ${hh}:${mi}`;
+        }
+      } catch {
+        // fallback abaixo
+      }
+      return formatarDataDisputaBR(dt, true);
+    }
+  }
+
+  return normalizarDataHoraDisputa(trimmed);
+}
+
+/**
+ * Seleciona a data oficial do PNCP para o Calendário:
+ * prioridade absoluta para a Data limite de recebimento / encerramento das
+ * propostas (início da disputa), caindo para abertura de propostas apenas se
+ * o encerramento não estiver publicado.
  */
 export function extrairDataPncpPreferencial(
   detalhe?: {
     dataEncerramentoProposta?: string | null;
+    data_encerramento_proposta?: string | null;
+    dataFimRecebimentoProposta?: string | null;
+    data_fim_recebimento_propostas?: string | null;
+    dataLimiteRecebimentoProposta?: string | null;
+    data_limite_recebimento_propostas?: string | null;
+    dataFimVigencia?: string | null;
+    data_fim_vigencia?: string | null;
     dataAberturaProposta?: string | null;
+    data_abertura_proposta?: string | null;
+    dataInicioRecebimentoProposta?: string | null;
+    data_inicio_recebimento_propostas?: string | null;
+    dataInicioVigencia?: string | null;
+    data_inicio_vigencia?: string | null;
   } | null
-): { dataFormatada: string; origem: "encerramento" | "abertura" } | null {
-  if (!detalhe) return null;
+): { dataFormatada: string; raw: string; origem: "encerramento" | "abertura" } | null {
+  if (!detalhe || typeof detalhe !== "object") return null;
 
-  if (detalhe.dataEncerramentoProposta) {
-    const normalizada = normalizarDataHoraDisputa(detalhe.dataEncerramentoProposta);
+  const candidatosEncerramento = [
+    detalhe.dataEncerramentoProposta,
+    detalhe.data_encerramento_proposta,
+    detalhe.dataFimRecebimentoProposta,
+    detalhe.data_fim_recebimento_propostas,
+    detalhe.dataLimiteRecebimentoProposta,
+    detalhe.data_limite_recebimento_propostas,
+    detalhe.dataFimVigencia,
+    detalhe.data_fim_vigencia,
+  ];
+
+  for (const bruto of candidatosEncerramento) {
+    if (!bruto) continue;
+    const normalizada = formatarDataPncpBrasilia(String(bruto));
     if (normalizada) {
-      return { dataFormatada: normalizada, origem: "encerramento" };
+      return { dataFormatada: normalizada, raw: String(bruto), origem: "encerramento" };
     }
   }
 
-  if (detalhe.dataAberturaProposta) {
-    const normalizada = normalizarDataHoraDisputa(detalhe.dataAberturaProposta);
+  const candidatosAbertura = [
+    detalhe.dataAberturaProposta,
+    detalhe.data_abertura_proposta,
+    detalhe.dataInicioRecebimentoProposta,
+    detalhe.data_inicio_recebimento_propostas,
+    detalhe.dataInicioVigencia,
+    detalhe.data_inicio_vigencia,
+  ];
+
+  for (const bruto of candidatosAbertura) {
+    if (!bruto) continue;
+    const normalizada = formatarDataPncpBrasilia(String(bruto));
     if (normalizada) {
-      return { dataFormatada: normalizada, origem: "abertura" };
+      return { dataFormatada: normalizada, raw: String(bruto), origem: "abertura" };
     }
   }
 

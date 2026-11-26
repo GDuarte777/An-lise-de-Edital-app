@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { normalizarCodigoUasg, extrairCodigoUasg } from "../utils/identificacaoEdital";
 import { parseNumeroControlePNCP, PNCP_MODALIDADES } from "../utils/pncpQuery";
-import { buscarDataOficialPncp, buscarPacoteOficialPncp, type PacoteOficialPncp } from "../utils/pncpClient";
+import {
+  buscarDataOficialPncp,
+  buscarDataOficialPncpPorMetadados,
+  buscarPacoteOficialPncp,
+  type DatasOficiaisPncp,
+  type PacoteOficialPncp,
+} from "../utils/pncpClient";
 import { resolverCapagPorOrgaoOuLocal, obterEstiloNotaCapag } from "../utils/capagData";
 import { EditalAnalysis, CompanyData, SyncItem, Certificate, DisputaRow, DisputaStatus, DisputaStatusType } from "../types";
 import { 
@@ -53,6 +59,10 @@ import {
   removeEditalFromHistory,
   clearEditalHistory
 } from "../utils/editalHistory";
+import {
+  DossieNavigationIntent,
+  rotuloDisputaResumido,
+} from "../utils/disputaDossie";
 import DossieExecutivoView from "./DossieExecutivoView";
 import confetti from "canvas-confetti";
 import { getActiveAiConfig, apiFetch, prepareAttachmentsForServer, validateApiKeyFormat, formatAiError, readJsonResponse, readJsonResponseSafe } from "../utils/aiClientHelper";
@@ -330,6 +340,8 @@ interface EditalAnalyzerTabProps {
   onNavigateToHabilitacao?: () => void;
   onNavigateToCalculator?: () => void;
   onNavigateToCapag?: (focus: { uf?: string; municipio?: string; orgao?: string }) => void;
+  dossieNavigationIntent?: DossieNavigationIntent | null;
+  onConsumeDossieIntent?: () => void;
 }
 
 interface AttachedFile {
@@ -350,6 +362,8 @@ export default function EditalAnalyzerTab({
   onNavigateToHabilitacao,
   onNavigateToCalculator,
   onNavigateToCapag,
+  dossieNavigationIntent,
+  onConsumeDossieIntent,
 }: EditalAnalyzerTabProps) {
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -473,6 +487,112 @@ export default function EditalAnalyzerTab({
       if (parseNumeroControlePNCP(texto)) return texto;
     }
     return null;
+  };
+
+  const extrairMetadadosPncpDoEdital = (editalObj: EditalAnalysis) => {
+    const iden: any = editalObj.identificacaoCertame || {};
+    const textoBusca = [
+      iden.orgaoComprador || "",
+      iden.cnpj || "",
+      editalObj.rawText ? String(editalObj.rawText).slice(0, 6000) : "",
+      editalObj.reportMarkdown ? String(editalObj.reportMarkdown).slice(0, 4000) : "",
+    ].join(" ");
+    const cnpjMatch = textoBusca.match(/\b(\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2})\b/);
+    const cnpj = cnpjMatch ? cnpjMatch[1].replace(/\D/g, "") : undefined;
+    const numeroLicitacao =
+      iden.numeroEdital ||
+      iden.numeroLicitacao ||
+      iden.identificacaoNumerica ||
+      editalObj.dossieExecutivo?.titulo ||
+      "";
+    const uasg =
+      normalizarCodigoUasg(iden.codigoUASG) ||
+      normalizarCodigoUasg(iden.uasg) ||
+      extrairCodigoUasg(textoBusca);
+
+    return {
+      orgao: iden.orgaoComprador || "",
+      cnpj,
+      numeroLicitacao,
+      uasg,
+      objeto: editalObj.descricaoProduto || "",
+    };
+  };
+
+  const aplicarDatasOficiaisPncpNoEdital = (
+    editalObj: EditalAnalysis,
+    datasPncp: DatasOficiaisPncp | null
+  ): {
+    editalAtualizado: EditalAnalysis;
+    dataResolvida: string;
+    origem: "pncp_encerramento" | "pncp_abertura" | "edital" | "sem_data";
+    linkPNCP: string;
+  } => {
+    const escolhida = extrairDataPncpPreferencial(datasPncp);
+    const dataLocal = resolverDataLocalDoEdital(editalObj);
+    const linkResolvido =
+      datasPncp?.linkPNCP ||
+      editalObj.identificacaoCertame?.linkPNCP ||
+      editalObj.linkPNCP ||
+      "";
+    const ctrlResolvido =
+      datasPncp?.numeroControlePNCP ||
+      editalObj.identificacaoCertame?.idContratacaoPNCP ||
+      editalObj.idContratacaoPNCP ||
+      "";
+
+    // Prioridade absoluta:
+    // 1º Data limite de recebimento (encerramento) do PNCP
+    // 2º Data de abertura do PNCP (se o PDF não tiver data, ou se o PNCP for a única fonte oficial)
+    // 3º Data extraída do documento PDF pela IA
+    let dataFinal = dataLocal;
+    let origem: "pncp_encerramento" | "pncp_abertura" | "edital" | "sem_data" = dataLocal
+      ? "edital"
+      : "sem_data";
+
+    if (escolhida?.origem === "encerramento") {
+      dataFinal = escolhida.dataFormatada;
+      origem = "pncp_encerramento";
+    } else if (escolhida?.origem === "abertura" && !dataLocal) {
+      dataFinal = escolhida.dataFormatada;
+      origem = "pncp_abertura";
+    }
+
+    const atualizado: EditalAnalysis = {
+      ...editalObj,
+      linkPNCP: linkResolvido || editalObj.linkPNCP,
+      idContratacaoPNCP: ctrlResolvido || editalObj.idContratacaoPNCP,
+      identificacaoCertame: {
+        orgaoComprador: editalObj.identificacaoCertame?.orgaoComprador || "",
+        modalidade: editalObj.identificacaoCertame?.modalidade || "",
+        identificacaoNumerica: editalObj.identificacaoCertame?.identificacaoNumerica || "",
+        ...editalObj.identificacaoCertame,
+        dataHoraSessao: dataFinal || editalObj.identificacaoCertame?.dataHoraSessao || "",
+        linkPNCP: linkResolvido || editalObj.identificacaoCertame?.linkPNCP,
+        idContratacaoPNCP: ctrlResolvido || editalObj.identificacaoCertame?.idContratacaoPNCP,
+      },
+      ...((datasPncp?.dataEncerramentoProposta || datasPncp?.dataAberturaProposta || ctrlResolvido)
+        ? {
+            dadosOficiaisPNCP: {
+              ...((editalObj as any).dadosOficiaisPNCP || {}),
+              ...(ctrlResolvido ? { numeroControlePNCP: ctrlResolvido } : {}),
+              ...(datasPncp?.dataEncerramentoProposta
+                ? { dataEncerramentoProposta: datasPncp.dataEncerramentoProposta }
+                : {}),
+              ...(datasPncp?.dataAberturaProposta
+                ? { dataAberturaProposta: datasPncp.dataAberturaProposta }
+                : {}),
+            },
+          }
+        : {}),
+    };
+
+    return {
+      editalAtualizado: atualizado,
+      dataResolvida: dataFinal,
+      origem,
+      linkPNCP: linkResolvido,
+    };
   };
 
   // Build a DisputaRow payload from an EditalAnalysis
@@ -658,54 +778,83 @@ export default function EditalAnalyzerTab({
       return;
     }
 
-    let editalAtualizado: EditalAnalysis = activeEdital;
-    let dataResolvida = resolverDataLocalDoEdital(activeEdital);
-    let origemData: "edital" | "pncp_encerramento" | "pncp_abertura" | "sem_data" = dataResolvida
-      ? "edital"
-      : "sem_data";
-    let linkPncpResolvido =
-      activeEdital.identificacaoCertame?.linkPNCP || activeEdital.linkPNCP || "";
-
-    if (!dataResolvida) {
-      const identificadorPncp = extrairIdentificadorPncpDoEdital(activeEdital);
-      if (identificadorPncp) {
-        setBuscandoDataCalendario(true);
-        try {
-          const datasPncp = await buscarDataOficialPncp(identificadorPncp);
-          if (datasPncp?.linkPNCP && !linkPncpResolvido) {
-            linkPncpResolvido = datasPncp.linkPNCP;
-          }
-          const escolhida = extrairDataPncpPreferencial(datasPncp);
-          if (escolhida) {
-            dataResolvida = escolhida.dataFormatada;
-            origemData = escolhida.origem === "encerramento" ? "pncp_encerramento" : "pncp_abertura";
-            editalAtualizado = {
-              ...activeEdital,
-              linkPNCP: linkPncpResolvido || activeEdital.linkPNCP,
-              idContratacaoPNCP: datasPncp?.numeroControlePNCP || activeEdital.idContratacaoPNCP,
-              identificacaoCertame: {
-                orgaoComprador: activeEdital.identificacaoCertame?.orgaoComprador || "",
-                modalidade: activeEdital.identificacaoCertame?.modalidade || "",
-                identificacaoNumerica: activeEdital.identificacaoCertame?.identificacaoNumerica || "",
-                ...activeEdital.identificacaoCertame,
-                dataHoraSessao: dataResolvida,
-                linkPNCP: linkPncpResolvido || activeEdital.identificacaoCertame?.linkPNCP,
-                idContratacaoPNCP:
-                  datasPncp?.numeroControlePNCP || activeEdital.identificacaoCertame?.idContratacaoPNCP,
-              },
-            };
-            setActiveEdital(editalAtualizado);
-            try {
-              localStorage.setItem("aip_active_edital", JSON.stringify(editalAtualizado));
-            } catch {
-              // ignore storage errors
-            }
-          }
-        } catch {
-          // segue para salvar na lista de disputas sem data do Calendário
-        } finally {
-          setBuscandoDataCalendario(false);
+    const dadosJaConhecidos: DatasOficiaisPncp | null = (activeEdital as any).dadosOficiaisPNCP
+      ? {
+          dataEncerramentoProposta: (activeEdital as any).dadosOficiaisPNCP.dataEncerramentoProposta,
+          dataAberturaProposta: (activeEdital as any).dadosOficiaisPNCP.dataAberturaProposta,
+          linkPNCP: activeEdital.identificacaoCertame?.linkPNCP || activeEdital.linkPNCP,
+          numeroControlePNCP:
+            (activeEdital as any).dadosOficiaisPNCP.numeroControlePNCP ||
+            activeEdital.identificacaoCertame?.idContratacaoPNCP ||
+            activeEdital.idContratacaoPNCP,
         }
+      : null;
+
+    let datasPncpResolvidas: DatasOficiaisPncp | null =
+      dadosJaConhecidos?.dataEncerramentoProposta ? dadosJaConhecidos : null;
+
+    // Sempre tenta obter a Data limite de recebimento oficial do PNCP se ainda não estiver confirmada
+    if (!datasPncpResolvidas?.dataEncerramentoProposta) {
+      const identificadorPncp = extrairIdentificadorPncpDoEdital(activeEdital);
+      setBuscandoDataCalendario(true);
+      try {
+        if (identificadorPncp) {
+          const consultada = await buscarDataOficialPncp(identificadorPncp);
+          if (consultada) {
+            datasPncpResolvidas = {
+              ...(dadosJaConhecidos || {}),
+              ...consultada,
+              dataEncerramentoProposta:
+                consultada.dataEncerramentoProposta || dadosJaConhecidos?.dataEncerramentoProposta,
+              dataAberturaProposta:
+                consultada.dataAberturaProposta || dadosJaConhecidos?.dataAberturaProposta,
+            };
+          }
+        } else {
+          // PDF avulso sem link PNCP: busca automaticamente no PNCP por órgão/CNPJ/número/UASG
+          const metadados = extrairMetadadosPncpDoEdital(activeEdital);
+          const encontrada = await buscarDataOficialPncpPorMetadados(metadados);
+          if (encontrada) {
+            datasPncpResolvidas = encontrada;
+          }
+        }
+      } catch {
+        // segue com os dados disponíveis ou lista "Sem data"
+      } finally {
+        setBuscandoDataCalendario(false);
+      }
+    }
+
+    const {
+      editalAtualizado,
+      dataResolvida,
+      origem: origemData,
+      linkPNCP: linkPncpResolvido,
+    } = aplicarDatasOficiaisPncpNoEdital(activeEdital, datasPncpResolvidas || dadosJaConhecidos);
+
+    if (
+      origemData === "pncp_encerramento" ||
+      origemData === "pncp_abertura" ||
+      (linkPncpResolvido && linkPncpResolvido !== (activeEdital.identificacaoCertame?.linkPNCP || activeEdital.linkPNCP))
+    ) {
+      setActiveEdital(editalAtualizado);
+      try {
+        localStorage.setItem("aip_active_edital", JSON.stringify(editalAtualizado));
+      } catch {
+        // ignore storage errors
+      }
+      const matchedHistory = history.find(
+        (h) =>
+          h.analysis === activeEdital ||
+          (h.analysis.identificacaoCertame?.identificacaoNumerica &&
+            h.analysis.identificacaoCertame?.identificacaoNumerica ===
+              activeEdital.identificacaoCertame?.identificacaoNumerica &&
+            h.analysis.identificacaoCertame?.orgaoComprador ===
+              activeEdital.identificacaoCertame?.orgaoComprador) ||
+          h.analysis.descricaoProduto === activeEdital.descricaoProduto
+      );
+      if (matchedHistory) {
+        updateEditalInHistory(matchedHistory.id, editalAtualizado, matchedHistory.title).catch(() => {});
       }
     }
 
@@ -727,7 +876,7 @@ export default function EditalAnalyzerTab({
 
     if (origemData === "pncp_encerramento") {
       setCalendarFeedback(
-        `Disputa inserida no Calendário com a data de encerramento do PNCP (${dataResolvida}) e status "${editalDisputaStatus}"!${sufixoSync}`
+        `Disputa inserida no Calendário com a data limite de recebimento do PNCP (${dataResolvida}) e status "${editalDisputaStatus}"!${sufixoSync}`
       );
     } else if (origemData === "pncp_abertura") {
       setCalendarFeedback(
@@ -739,7 +888,7 @@ export default function EditalAnalyzerTab({
       );
     } else {
       setCalendarFeedback(
-        `Disputa salva na lista "Sem data" do Calendário (nenhuma data foi encontrada no edital nem no PNCP — defina a data diretamente no Calendário).${sufixoSync}`
+        `Disputa salva na lista "Sem data" do Calendário (nenhuma data foi encontrada no PNCP nem no edital — defina a data diretamente no Calendário).${sufixoSync}`
       );
     }
     setTimeout(() => setCalendarFeedback(null), 6500);
@@ -1208,6 +1357,60 @@ export default function EditalAnalyzerTab({
 
   // Sub-tabs for edital analysis view (apenas Dossiê e Checklist)
   const [analysisActiveTab, setAnalysisActiveTab] = useState<"struc" | "checklist">("struc");
+  const dossieSectionRef = useRef<HTMLDivElement | null>(null);
+  const dossieScrollTimerRef = useRef<number | null>(null);
+  const [missingDossieNotice, setMissingDossieNotice] = useState<{
+    orgao?: string;
+    numeroLicitacao?: string;
+    produtoItem?: string;
+    linkPNCP?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (dossieScrollTimerRef.current !== null) {
+        window.clearTimeout(dossieScrollTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dossieNavigationIntent) return;
+
+    if (dossieNavigationIntent.type === "found") {
+      setMissingDossieNotice(null);
+      setAnalysisActiveTab("struc");
+      if (dossieScrollTimerRef.current !== null) {
+        window.clearTimeout(dossieScrollTimerRef.current);
+      }
+      dossieScrollTimerRef.current = window.setTimeout(() => {
+        dossieSectionRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+        dossieScrollTimerRef.current = null;
+      }, 120);
+      onConsumeDossieIntent?.();
+      return;
+    }
+
+    if (dossieNavigationIntent.type === "missing") {
+      setMissingDossieNotice({
+        orgao: dossieNavigationIntent.orgao,
+        numeroLicitacao: dossieNavigationIntent.numeroLicitacao,
+        produtoItem: dossieNavigationIntent.produtoItem,
+        linkPNCP: dossieNavigationIntent.linkPNCP,
+      });
+      if (dossieNavigationIntent.linkPNCP && dossieNavigationIntent.linkPNCP.trim()) {
+        setPncpDirectInput(dossieNavigationIntent.linkPNCP.trim());
+      }
+      window.scrollTo?.({ top: 0, behavior: "smooth" });
+      onConsumeDossieIntent?.();
+    }
+  }, [dossieNavigationIntent, onConsumeDossieIntent]);
+
+  useEffect(() => {
+    if (activeEdital && missingDossieNotice) {
+      setMissingDossieNotice(null);
+    }
+  }, [activeEdital, missingDossieNotice]);
 
   // Histórico de Editais — vem do store compartilhado, a mesma lista que todas
   // as outras ferramentas enxergam.
@@ -1225,6 +1428,9 @@ export default function EditalAnalyzerTab({
         textInput?: string;
         files?: Array<{ id: string; name: string; size: string; type: string; base64: string }>;
         pncpControl?: string;
+        linkPNCP?: string;
+        dataEncerramentoProposta?: string;
+        dataAberturaProposta?: string;
         explicitSelection?: boolean;
       }
     ) => Promise<void>
@@ -1233,10 +1439,8 @@ export default function EditalAnalyzerTab({
   useEffect(() => {
     const handleExternalText = () => {
       const extText = localStorage.getItem("aip_auto_analyze_text");
-      // O Radar pode repassar o PDF oficial do edital e o número de controle
-      // PNCP. O arquivo vem por variável de janela porque não caberia no
-      // localStorage; o número de controle faz o servidor completar os campos
-      // factuais com o dado publicado pelo órgão.
+      // O Radar pode repassar o PDF oficial do edital, o número de controle PNCP
+      // e a data limite oficial já carregada na lista/ficha.
       const pendente = (window as any).__aipPendingEdital;
 
       const pendingFiles = Array.isArray(pendente?.files) && pendente.files.length > 0
@@ -1249,6 +1453,13 @@ export default function EditalAnalyzerTab({
         const nextText = extText || "";
         const nextPncp = String(pendente?.numeroControlePNCP || "").trim();
         const isExplicitSelection = Boolean(pendente?.explicitSelection) || pendingFiles.length > 0;
+        const radarLink = pendente?.linkPNCP ? String(pendente.linkPNCP).trim() : undefined;
+        const radarEncerramento = pendente?.dataEncerramentoProposta
+          ? String(pendente.dataEncerramentoProposta).trim()
+          : undefined;
+        const radarAbertura = pendente?.dataAberturaProposta
+          ? String(pendente.dataAberturaProposta).trim()
+          : undefined;
 
         setTextInput(nextText);
         setAttachedFiles(pendingFiles);
@@ -1264,6 +1475,9 @@ export default function EditalAnalyzerTab({
             textInput: nextText,
             files: pendingFiles,
             pncpControl: nextPncp,
+            linkPNCP: radarLink,
+            dataEncerramentoProposta: radarEncerramento,
+            dataAberturaProposta: radarAbertura,
             explicitSelection: isExplicitSelection,
           });
         }, 0);
@@ -1388,6 +1602,9 @@ export default function EditalAnalyzerTab({
       textInput?: string;
       files?: Array<{ id: string; name: string; size: string; type: string; base64: string }>;
       pncpControl?: string;
+      linkPNCP?: string;
+      dataEncerramentoProposta?: string;
+      dataAberturaProposta?: string;
       explicitSelection?: boolean;
     }
   ) => {
@@ -1522,11 +1739,12 @@ export default function EditalAnalyzerTab({
             }
             const uasgOficial = normalizarCodigoUasg(det.unidadeOrgao?.codigoUnidade);
             if (uasgOficial) ident.codigoUASG = uasgOficial;
-            if (!parseDisputaDate(String(ident.dataHoraSessao || ""))) {
-              const dataPncp = extrairDataPncpPreferencial(det);
-              if (dataPncp) {
-                ident.dataHoraSessao = dataPncp.dataFormatada;
-              }
+            const dataPncp = extrairDataPncpPreferencial(det);
+            // Prioridade absoluta: Data limite de recebimento (encerramento) do PNCP
+            if (dataPncp?.origem === "encerramento") {
+              ident.dataHoraSessao = dataPncp.dataFormatada;
+            } else if (dataPncp && !parseDisputaDate(String(ident.dataHoraSessao || ""))) {
+              ident.dataHoraSessao = dataPncp.dataFormatada;
             }
             if (typeof det.valorTotalEstimado === "number" && det.valorTotalEstimado > 0) {
               if (!analysisResult.viabilidadeFinanceira) {
@@ -1564,13 +1782,72 @@ export default function EditalAnalyzerTab({
           (analysisResult as any).dadosOficiaisPNCP = {
             ...((analysisResult as any).dadosOficiaisPNCP || {}),
             numeroControlePNCP: pacotePncp.numeroControlePNCP,
+            dataEncerramentoProposta:
+              det?.dataEncerramentoProposta ||
+              (analysisResult as any).dadosOficiaisPNCP?.dataEncerramentoProposta,
+            dataAberturaProposta:
+              det?.dataAberturaProposta ||
+              (analysisResult as any).dadosOficiaisPNCP?.dataAberturaProposta,
             arquivosLidosPNCP: todosArquivosLidos,
             consultadoEm: new Date().toISOString(),
           };
         }
-        
-        setActiveEdital(analysisResult);
-        setOriginalEdital(analysisResult);
+
+        // Garante a Data limite de recebimento oficial do PNCP como fonte prioritária:
+        // 1) pacote/servidor, 2) metadados vindos do Radar, 3) consulta direta por ID,
+        // 4) busca automática no PNCP por órgão/CNPJ/número para PDFs enviados do computador.
+        let datasOficiaisFinais: DatasOficiaisPncp | null = {
+          dataEncerramentoProposta:
+            pacotePncp?.detalhe?.dataEncerramentoProposta ||
+            (analysisResult as any).dadosOficiaisPNCP?.dataEncerramentoProposta ||
+            directPayload?.dataEncerramentoProposta,
+          dataAberturaProposta:
+            pacotePncp?.detalhe?.dataAberturaProposta ||
+            (analysisResult as any).dadosOficiaisPNCP?.dataAberturaProposta ||
+            directPayload?.dataAberturaProposta,
+          linkPNCP:
+            pacotePncp?.linkPNCP ||
+            directPayload?.linkPNCP ||
+            analysisResult.identificacaoCertame?.linkPNCP ||
+            analysisResult.linkPNCP,
+          numeroControlePNCP:
+            pacotePncp?.numeroControlePNCP ||
+            resolvedPncpControl ||
+            analysisResult.identificacaoCertame?.idContratacaoPNCP ||
+            analysisResult.idContratacaoPNCP,
+        };
+
+        if (!datasOficiaisFinais.dataEncerramentoProposta) {
+          try {
+            const idBusca =
+              datasOficiaisFinais.numeroControlePNCP ||
+              datasOficiaisFinais.linkPNCP ||
+              extrairIdentificadorPncpDoEdital(analysisResult);
+            const consultada = idBusca
+              ? await buscarDataOficialPncp(idBusca)
+              : await buscarDataOficialPncpPorMetadados(extrairMetadadosPncpDoEdital(analysisResult));
+            if (consultada) {
+              datasOficiaisFinais = {
+                ...datasOficiaisFinais,
+                ...consultada,
+                dataEncerramentoProposta:
+                  consultada.dataEncerramentoProposta || datasOficiaisFinais.dataEncerramentoProposta,
+                dataAberturaProposta:
+                  consultada.dataAberturaProposta || datasOficiaisFinais.dataAberturaProposta,
+              };
+            }
+          } catch {
+            // prossegue com os dados disponíveis
+          }
+        }
+
+        const analysisEnriquecido = aplicarDatasOficiaisPncpNoEdital(
+          analysisResult,
+          datasOficiaisFinais
+        ).editalAtualizado;
+
+        setActiveEdital(analysisEnriquecido);
+        setOriginalEdital(analysisEnriquecido);
         setIsRefined(false);
 
         confetti({ particleCount: 100, spread: 70, origin: { y: 0.8 } });
@@ -1578,11 +1855,11 @@ export default function EditalAnalyzerTab({
         // Salvar no histórico compartilhado (grava local + Supabase e avisa
         // todas as outras ferramentas na mesma hora)
         const firstFileName = filesToUse.length > 0 ? filesToUse[0].name : null;
-        const historyTitle = analysisResult.descricaoProduto
-          ? `Análise - ${analysisResult.descricaoProduto.slice(0, 45)}${analysisResult.descricaoProduto.length > 45 ? "..." : ""}`
+        const historyTitle = analysisEnriquecido.descricaoProduto
+          ? `Análise - ${analysisEnriquecido.descricaoProduto.slice(0, 45)}${analysisEnriquecido.descricaoProduto.length > 45 ? "..." : ""}`
           : (firstFileName ? `Anexo: ${firstFileName}` : `Análise S/N`);
 
-        addEditalToHistory(analysisResult, historyTitle).catch((e) => console.warn("Erro ao salvar edital no histórico:", e));
+        addEditalToHistory(analysisEnriquecido, historyTitle).catch((e) => console.warn("Erro ao salvar edital no histórico:", e));
 
         // O usuário agora escolhe explicitamente no topo do edital analisado
         // se deseja inserir a disputa no Calendário e qual será o status dela.
@@ -1842,7 +2119,36 @@ export default function EditalAnalyzerTab({
 
   return (
     <div id="edital-analyzer-tab" className="space-y-6">
-      
+
+      {missingDossieNotice && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-foreground"
+        >
+          <div className="flex items-start gap-2.5 min-w-0">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+            <div className="space-y-1 text-xs leading-relaxed">
+              <p className="font-bold text-amber-900 dark:text-amber-200">
+                Nenhum Dossiê analisado encontrado para {rotuloDisputaResumido(missingDossieNotice)}.
+              </p>
+              <p className="text-muted-foreground">
+                {missingDossieNotice.linkPNCP
+                  ? "O link do PNCP desta disputa já foi preenchido abaixo. Carregue os documentos ou importe pelo PNCP para gerar o Dossiê Executivo."
+                  : "Anexe os arquivos do edital (PDF/TXT) ou informe o link do PNCP abaixo para gerar o Dossiê Executivo desta disputa."}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMissingDossieNotice(null)}
+            title="Fechar aviso"
+            className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition hover:bg-amber-500/20 hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Upload and input form */}
       <Card className="p-5 md:p-6 relative overflow-hidden gap-0">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
@@ -2688,18 +2994,20 @@ export default function EditalAnalyzerTab({
           )}
 
           {/* Tab Selector Menu for Sub-Information Panels (Apenas Dossiê Executivo e Checklist) */}
-          <Tabs value={analysisActiveTab} onValueChange={(v) => setAnalysisActiveTab(v as "struc" | "checklist")}>
-            <TabsList className="w-full sm:w-auto overflow-x-auto">
-              <TabsTrigger value="struc" className="gap-1.5 whitespace-nowrap font-bold">
-                <FileText className="w-4 h-4 text-success" />
-                Dossiê Executivo do Edital (PDF)
-              </TabsTrigger>
-              <TabsTrigger value="checklist" className="gap-1.5 whitespace-nowrap font-bold">
-                <CheckSquare className="w-4 h-4 text-primary" />
-                Checklist &amp; Alertas Rápidos
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div ref={dossieSectionRef} className="scroll-mt-20">
+            <Tabs value={analysisActiveTab} onValueChange={(v) => setAnalysisActiveTab(v as "struc" | "checklist")}>
+              <TabsList className="w-full sm:w-auto overflow-x-auto">
+                <TabsTrigger value="struc" className="gap-1.5 whitespace-nowrap font-bold">
+                  <FileText className="w-4 h-4 text-success" />
+                  Dossiê Executivo do Edital (PDF)
+                </TabsTrigger>
+                <TabsTrigger value="checklist" className="gap-1.5 whitespace-nowrap font-bold">
+                  <CheckSquare className="w-4 h-4 text-primary" />
+                  Checklist &amp; Alertas Rápidos
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
 
           {/* TAB 1: DOSSIÊ EXECUTIVO DO EDITAL (MODELO INTELIGÊNCIA LICITATÓRIA + EDITOR + PDF A4) */}
           {analysisActiveTab === "struc" && (

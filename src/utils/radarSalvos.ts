@@ -19,6 +19,8 @@ export interface DisputaSalvaRadar {
   dataPublicacao: string;
   dataAtualizacao: string;
   dataAbertura: string;
+  dataEncerramentoProposta?: string;
+  dataAberturaProposta?: string;
   valorEstimadoRaw: number;
   valorEstimado: string;
   valorHomologadoRaw?: number;

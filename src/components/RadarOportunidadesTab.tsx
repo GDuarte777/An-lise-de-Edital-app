@@ -68,6 +68,8 @@ interface LicitacaoDetailed {
   dataPublicacao: string;
   dataAtualizacao: string;
   dataAbertura: string;
+  dataEncerramentoProposta?: string;
+  dataAberturaProposta?: string;
   valorEstimadoRaw: number;
   valorEstimado: string;
   valorHomologadoRaw?: number;
@@ -446,8 +448,17 @@ export default function RadarOportunidadesTab({
             ? new Date(item.dataAtualizacaoPncp).toLocaleDateString("pt-BR")
             : pubDateFormatted;
 
-          const openDateFormatted = item.dataAberturaProposta
-            ? new Date(item.dataAberturaProposta).toLocaleDateString("pt-BR") + " às " + new Date(item.dataAberturaProposta).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+          const rawEncerramento =
+            item.dataEncerramentoProposta ||
+            item.data_encerramento_proposta ||
+            item.data_fim_recebimento_propostas ||
+            item.data_fim_vigencia ||
+            "";
+          const rawAbertura = item.dataAberturaProposta || item.data_abertura_proposta || "";
+          const rawPrincipal = rawEncerramento || rawAbertura;
+
+          const openDateFormatted = rawPrincipal
+            ? new Date(rawPrincipal).toLocaleDateString("pt-BR") + " às " + new Date(rawPrincipal).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
             : "Ver Cronograma no Edital";
 
           return {
@@ -465,6 +476,8 @@ export default function RadarOportunidadesTab({
             dataPublicacao: pubDateFormatted,
             dataAtualizacao: updateDateFormatted,
             dataAbertura: openDateFormatted,
+            dataEncerramentoProposta: rawEncerramento || undefined,
+            dataAberturaProposta: rawAbertura || undefined,
             valorEstimadoRaw: rawVal > 0 ? rawVal : rawHomologado,
             valorEstimado: valorFormatted,
             valorHomologadoRaw: rawHomologado,
@@ -531,15 +544,15 @@ export default function RadarOportunidadesTab({
                   ? `R$ ${vHom.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                   : undefined;
 
-              const novaAbertura =
-                detalhe?.dataAberturaProposta || detalhe?.dataEncerramentoProposta
-                  ? new Date(detalhe.dataAberturaProposta || detalhe.dataEncerramentoProposta!).toLocaleDateString("pt-BR") +
-                    " às " +
-                    new Date(detalhe.dataAberturaProposta || detalhe.dataEncerramentoProposta!).toLocaleTimeString("pt-BR", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : undefined;
+              const rawDataOficial = detalhe?.dataEncerramentoProposta || detalhe?.dataAberturaProposta;
+              const novaAbertura = rawDataOficial
+                ? new Date(rawDataOficial).toLocaleDateString("pt-BR") +
+                  " às " +
+                  new Date(rawDataOficial).toLocaleTimeString("pt-BR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : undefined;
 
               const atualizarCard = (card: LicitacaoDetailed): LicitacaoDetailed => {
                 if (card.numeroControlePNCP !== numControle) return card;
@@ -551,10 +564,16 @@ export default function RadarOportunidadesTab({
                   valorHomologado: txtHomologado || card.valorHomologado,
                   orcamentoSigiloso: sig,
                   precoCarregando: false,
+                  dataEncerramentoProposta:
+                    detalhe?.dataEncerramentoProposta || card.dataEncerramentoProposta,
+                  dataAberturaProposta:
+                    detalhe?.dataAberturaProposta || card.dataAberturaProposta,
                   dataAbertura:
-                    card.dataAbertura === "Ver Cronograma no Edital" && novaAbertura
+                    detalhe?.dataEncerramentoProposta && novaAbertura
                       ? novaAbertura
-                      : card.dataAbertura,
+                      : card.dataAbertura === "Ver Cronograma no Edital" && novaAbertura
+                        ? novaAbertura
+                        : card.dataAbertura,
                 };
               };
 
@@ -850,13 +869,19 @@ export default function RadarOportunidadesTab({
 
       (window as any).__aipPendingEdital = {
         numeroControlePNCP: item.numeroControlePNCP,
+        linkPNCP: item.linkPNCP,
+        dataEncerramentoProposta: item.dataEncerramentoProposta,
+        dataAberturaProposta: item.dataAberturaProposta,
         file: resultado.arquivo,
         files: [resultado.arquivo],
         explicitSelection: true,
       };
 
       setActiveItem(null);
-      onSelectForAnalysis(`Edital oficial do PNCP ${item.numeroControlePNCP} — ${item.orgao}`);
+      const linhaPrazo = item.dataEncerramentoProposta
+        ? `\nData Limite de Recebimento de Propostas (PNCP): ${item.dataEncerramentoProposta}`
+        : "";
+      onSelectForAnalysis(`Edital oficial do PNCP ${item.numeroControlePNCP} — ${item.orgao}${linhaPrazo}`);
     } catch (err: any) {
       setAnalisePrepError(err?.message || "Não foi possível preparar a análise deste edital.");
     } finally {
@@ -934,6 +959,9 @@ export default function RadarOportunidadesTab({
 
       (window as any).__aipPendingEdital = {
         numeroControlePNCP: item.numeroControlePNCP,
+        linkPNCP: item.linkPNCP,
+        dataEncerramentoProposta: item.dataEncerramentoProposta,
+        dataAberturaProposta: item.dataAberturaProposta,
         file: arquivosProntos[0],
         files: arquivosProntos,
         explicitSelection: true,
@@ -941,8 +969,11 @@ export default function RadarOportunidadesTab({
       };
 
       setActiveItem(null);
+      const linhaPrazo = item.dataEncerramentoProposta
+        ? `\nData Limite de Recebimento de Propostas (PNCP): ${item.dataEncerramentoProposta}`
+        : "";
       onSelectForAnalysis(
-        `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nDocumentos selecionados (${arquivosProntos.length}): ${nomesSelecionados}\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}`
+        `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nDocumentos selecionados (${arquivosProntos.length}): ${nomesSelecionados}\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}${linhaPrazo}`
       );
     } catch (err: any) {
       setAnalisePrepError(err?.message || "Não foi possível preparar os documentos selecionados para análise.");
@@ -994,9 +1025,16 @@ export default function RadarOportunidadesTab({
     adicionar("LOCALIZAÇÃO", [item.municipio, item.uf].filter(Boolean).join(" - "));
     adicionar("OBJETO", item.objeto);
     adicionar("DATA DE PUBLICAÇÃO NO PNCP", item.dataPublicacao);
-    adicionar("DATA/HORA DA SESSÃO", item.dataAbertura);
+    adicionar("DATA LIMITE DE RECEBIMENTO DE PROPOSTAS (PNCP)", item.dataEncerramentoProposta || item.dataAbertura);
     adicionar("VALOR TOTAL ESTIMADO", item.valorEstimado);
     adicionar("LINK OFICIAL", item.linkPNCP);
+
+    (window as any).__aipPendingEdital = {
+      numeroControlePNCP: item.numeroControlePNCP,
+      linkPNCP: item.linkPNCP,
+      dataEncerramentoProposta: item.dataEncerramentoProposta,
+      dataAberturaProposta: item.dataAberturaProposta,
+    };
 
     onSelectForAnalysis(campos.join("\n"));
   };
@@ -1011,11 +1049,17 @@ export default function RadarOportunidadesTab({
     setPreparandoAnalise(chave);
     try {
       (window as any).__aipPendingEdital = {
-        numeroControlePNCP: item.numeroControlePNCP
+        numeroControlePNCP: item.numeroControlePNCP,
+        linkPNCP: item.linkPNCP,
+        dataEncerramentoProposta: item.dataEncerramentoProposta,
+        dataAberturaProposta: item.dataAberturaProposta,
       };
       setActiveItem(null);
+      const linhaPrazo = item.dataEncerramentoProposta
+        ? `\nData Limite de Recebimento de Propostas (PNCP): ${item.dataEncerramentoProposta}`
+        : "";
       onSelectForAnalysis(
-        `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}`
+        `Contratação Oficial PNCP ${item.numeroControlePNCP}\nÓrgão: ${item.orgao}\nModalidade: ${item.modalidade} (${item.numero})\nObjeto: ${item.objeto}\nLink Oficial: ${item.linkPNCP || ""}${linhaPrazo}`
       );
     } catch (err: any) {
       alert(err?.message || "Não foi possível preparar a análise deste edital.");

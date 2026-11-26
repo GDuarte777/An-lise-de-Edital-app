@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays, ChevronLeft, ChevronRight, ExternalLink, Filter, Landmark, AlertCircle, CalendarPlus,
-  Plus, Pencil, Trash2, Link2, MessageSquarePlus, CalendarX, Sparkles
+  Plus, Pencil, Trash2, Link2, MessageSquarePlus, CalendarX, Sparkles, FileText
 } from "lucide-react";
 import { DisputaRow, DisputaStatus, DisputaStatusType, EditalAnalysis } from "../types";
 import {
@@ -58,6 +58,8 @@ interface CalendarTabProps {
   onExternalStatusFilterChange?: (newFilter: string) => void;
   onExternalStatusChange?: (id: string, newStatus: DisputaStatus) => void;
   onExternalToggleCalendario?: (id: string) => void;
+  onVerDossie?: (row: DisputaRow) => void;
+  disputasComDossie?: Set<string>;
 }
 
 const DEFAULT_CALENDAR_STATUS_TYPES: DisputaStatusType[] = [
@@ -114,7 +116,9 @@ export default function CalendarTab({
   externalStatusFilter,
   onExternalStatusFilterChange,
   onExternalStatusChange,
-  onExternalToggleCalendario
+  onExternalToggleCalendario,
+  onVerDossie,
+  disputasComDossie,
 }: CalendarTabProps) {
   const [internalStatusTypes, setStatusTypes] = useState<DisputaStatusType[]>(() => {
     const saved = localStorage.getItem("aip_disputas_status_types");
@@ -659,6 +663,23 @@ export default function CalendarTab({
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
+                  {onVerDossie && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 border-primary/35 bg-primary/10 px-2 text-[11px] font-semibold text-primary hover:bg-primary/20 hover:text-primary"
+                      onClick={() => onVerDossie(row)}
+                      title={
+                        disputasComDossie?.has(row.id)
+                          ? "Abrir Dossiê Executivo desta disputa"
+                          : "Sem Dossiê salvo — abrir Análise de Edital"
+                      }
+                    >
+                      <FileText className="h-3 w-3 shrink-0" />
+                      <span>Ver Dossiê</span>
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     size="sm"
@@ -936,6 +957,23 @@ export default function CalendarTab({
                 )}
 
                 <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border pt-2">
+                  {onVerDossie && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1 border-primary/35 bg-primary/10 px-2 text-[11px] font-semibold text-primary hover:bg-primary/20 hover:text-primary"
+                      onClick={() => { setSelectedDay(null); onVerDossie(row); }}
+                      title={
+                        disputasComDossie?.has(row.id)
+                          ? "Abrir Dossiê Executivo desta disputa"
+                          : "Sem Dossiê salvo — abrir Análise de Edital"
+                      }
+                    >
+                      <FileText className="h-3 w-3 shrink-0" />
+                      <span>Ver Dossiê</span>
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="ghost"

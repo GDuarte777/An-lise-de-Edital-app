@@ -304,12 +304,17 @@ export function normalizarItemBuscaIndexadaPncp(raw: any): any {
     situacaoCompraNome: raw?.situacao_nome || raw?.situacaoCompraNome || (raw?.cancelado ? "Cancelada" : "Divulgada no PNCP"),
     dataPublicacaoPncp: raw?.data_publicacao_pncp || raw?.createdAt || raw?.dataPublicacaoPncp || "",
     dataAtualizacaoPncp: raw?.data_atualizacao_pncp || raw?.dataAtualizacao || raw?.data_publicacao_pncp || "",
-    dataAberturaProposta:
+    dataEncerramentoProposta:
       raw?.data_fim_recebimento_propostas ||
-      raw?.data_inicio_recebimento_propostas ||
+      raw?.dataEncerramentoProposta ||
+      raw?.data_encerramento_proposta ||
       raw?.data_fim_vigencia ||
-      raw?.data_inicio_vigencia ||
+      "",
+    dataAberturaProposta:
       raw?.dataAberturaProposta ||
+      raw?.data_abertura_proposta ||
+      raw?.data_inicio_recebimento_propostas ||
+      raw?.data_inicio_vigencia ||
       "",
     valorTotalEstimado: valorEstimadoRaw,
     valorTotalHomologado: valorHomologadoRaw,

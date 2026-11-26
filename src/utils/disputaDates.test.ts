@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   parseDisputaDate,
   normalizarDataHoraDisputa,
+  formatarDataPncpBrasilia,
   extrairDataPncpPreferencial,
   getDisputaDateTag,
   getContrastTextColor,
@@ -49,20 +50,46 @@ describe("parseDisputaDate", () => {
   });
 });
 
-describe("normalizarDataHoraDisputa e extrairDataPncpPreferencial", () => {
+describe("normalizarDataHoraDisputa, formatarDataPncpBrasilia e extrairDataPncpPreferencial", () => {
   it("normaliza datas da IA para padrão brasileiro canônico", () => {
     expect(normalizarDataHoraDisputa("Dia 15/03/2026 às 09h30 (Horário de Brasília)")).toBe("15/03/2026 09:30");
     expect(normalizarDataHoraDisputa("25 de novembro de 2026")).toBe("25/11/2026");
     expect(normalizarDataHoraDisputa("Não identificado no edital")).toBe("");
   });
 
-  it("prioriza dataEncerramentoProposta do PNCP e usa dataAberturaProposta apenas como fallback", () => {
+  it("preserva hora local em ISO sem fuso e converte ISO UTC para horário de Brasília", () => {
+    expect(formatarDataPncpBrasilia("2026-12-05T09:00:00")).toBe("05/12/2026 09:00");
+    expect(formatarDataPncpBrasilia("2026-12-05T12:30:00Z")).toBe("05/12/2026 09:30");
+    expect(formatarDataPncpBrasilia("2026-12-05T09:00:00-03:00")).toBe("05/12/2026 09:00");
+  });
+
+  it("prioriza dataEncerramentoProposta e aliases do PNCP sobre dataAberturaProposta", () => {
     const comAmbas = extrairDataPncpPreferencial({
       dataAberturaProposta: "2026-11-10T08:00:00",
       dataEncerramentoProposta: "2026-11-25T09:30:00",
     });
     expect(comAmbas).toEqual({
       dataFormatada: "25/11/2026 09:30",
+      raw: "2026-11-25T09:30:00",
+      origem: "encerramento",
+    });
+
+    const viaIndice = extrairDataPncpPreferencial({
+      data_inicio_vigencia: "2026-11-10T08:00:00",
+      data_fim_recebimento_propostas: "2026-11-28T14:00:00Z",
+    });
+    expect(viaIndice).toEqual({
+      dataFormatada: "28/11/2026 11:00",
+      raw: "2026-11-28T14:00:00Z",
+      origem: "encerramento",
+    });
+
+    const viaVigencia = extrairDataPncpPreferencial({
+      data_fim_vigencia: "2026-12-02T10:15:00",
+    });
+    expect(viaVigencia).toEqual({
+      dataFormatada: "02/12/2026 10:15",
+      raw: "2026-12-02T10:15:00",
       origem: "encerramento",
     });
 
@@ -72,6 +99,7 @@ describe("normalizarDataHoraDisputa e extrairDataPncpPreferencial", () => {
     });
     expect(soAbertura).toEqual({
       dataFormatada: "10/11/2026 08:00",
+      raw: "2026-11-10T08:00:00",
       origem: "abertura",
     });
 

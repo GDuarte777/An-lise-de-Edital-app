@@ -11,6 +11,7 @@ import { apiFetch, prepareAttachmentForServer, formatAiError, readJsonResponse }
 import { abrirChatDaDisputa } from "../utils/chatDisputa";
 import { valorDoCartao } from "../utils/disputaCartao";
 import { getContrastTextColor } from "../utils/disputaDates";
+import { encontrarEditalDaDisputa } from "../utils/disputaDossie";
 import { useEditalHistory } from "../utils/editalHistory";
 import DisputaDateTag from "./DisputaDateTag";
 import CalendarTab from "./CalendarTab";
@@ -56,6 +57,7 @@ import {
 interface DisputasSheetTabProps {
   activeEdital?: EditalAnalysis | null;
   onNavigateToAnalyzer?: () => void;
+  onOpenDisputaDossie?: (row: DisputaRow, matchedEdital: EditalAnalysis | null) => void;
 }
 
 interface AnalyzedEditalOption {
@@ -293,7 +295,11 @@ function StatusColorEditor({
   );
 }
 
-export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps) {
+export default function DisputasSheetTab({
+  activeEdital,
+  onNavigateToAnalyzer,
+  onOpenDisputaDossie,
+}: DisputasSheetTabProps) {
   const editalHistory = useEditalHistory();
 
   // Mode Switcher: "spreadsheet" (Painel), "kanban" (Quadro Kanban) ou "calendar" (Calendário)
@@ -859,6 +865,25 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
     setNotification({ text, type });
     setTimeout(() => setNotification(null), 4000);
   };
+
+  const disputasComDossie = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of disputas) {
+      if (encontrarEditalDaDisputa(row, editalHistory, activeEdital)) {
+        ids.add(row.id);
+      }
+    }
+    return ids;
+  }, [disputas, editalHistory, activeEdital]);
+
+  const handleVerDossie = useCallback((row: DisputaRow) => {
+    const match = encontrarEditalDaDisputa(row, editalHistory, activeEdital);
+    if (onOpenDisputaDossie) {
+      onOpenDisputaDossie(row, match?.edital ?? null);
+    } else {
+      onNavigateToAnalyzer?.();
+    }
+  }, [editalHistory, activeEdital, onOpenDisputaDossie, onNavigateToAnalyzer]);
 
   // Open Add Modal
   const handleOpenAddModal = (defaultStatus?: string) => {
@@ -1575,6 +1600,19 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                       </>
                     )}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => handleVerDossie(row)}
+                    title={
+                      disputasComDossie.has(row.id)
+                        ? "Abrir Dossiê Executivo desta disputa"
+                        : "Sem Dossiê salvo — abrir Análise de Edital"
+                    }
+                    className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-lg border border-primary/35 bg-primary/10 px-2 py-1 text-[11px] font-semibold text-primary transition hover:bg-primary/20"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0" />
+                    <span>Ver Dossiê</span>
+                  </button>
                   <div className="flex shrink-0 items-center gap-0.5">
                     <Button
                       type="button"
@@ -1870,6 +1908,21 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                             </button>
                           </div>
                         </div>
+                        <div className="flex items-center justify-end border-t border-border/60 pt-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleVerDossie(row); }}
+                            title={
+                              disputasComDossie.has(row.id)
+                                ? "Abrir Dossiê Executivo desta disputa"
+                                : "Sem Dossiê salvo — abrir Análise de Edital"
+                            }
+                            className="inline-flex w-full cursor-pointer items-center justify-center gap-1 rounded-md border border-primary/35 bg-primary/10 px-2 py-1 text-[10.5px] font-semibold text-primary transition hover:bg-primary/20"
+                          >
+                            <FileText className="h-3 w-3 shrink-0" />
+                            <span>Ver Dossiê</span>
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -1908,6 +1961,8 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
           onExternalStatusFilterChange={setStatusFilter}
           onExternalStatusChange={handleStatusChange}
           onExternalToggleCalendario={handleToggleCalendario}
+          onVerDossie={handleVerDossie}
+          disputasComDossie={disputasComDossie}
         />
       )}
 
@@ -2336,20 +2391,40 @@ export default function DisputasSheetTab({ activeEdital }: DisputasSheetTabProps
                   z-[9999] e o painel do chat em z-50, então o chat abriria atrás
                   dele e o usuário não veria nada acontecer. */}
               {editingRow && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full sm:mr-auto sm:w-auto gap-1.5 text-primary"
-                  onClick={() => {
-                    const disputa = { ...editingRow, ...formData } as DisputaRow;
-                    setIsModalOpen(false);
-                    abrirChatDaDisputa(disputa);
-                  }}
-                  title="Abrir um chat da IA já com os dados desta disputa"
-                >
-                  <MessageSquarePlus className="w-3.5 h-3.5" />
-                  Falar com a IA
-                </Button>
+                <div className="flex w-full flex-wrap items-center gap-2 sm:mr-auto sm:w-auto">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1 sm:flex-none gap-1.5 border-primary/35 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary"
+                    onClick={() => {
+                      const disputa = { ...editingRow, ...formData } as DisputaRow;
+                      setIsModalOpen(false);
+                      handleVerDossie(disputa);
+                    }}
+                    title={
+                      disputasComDossie.has(editingRow.id)
+                        ? "Abrir Dossiê Executivo desta disputa"
+                        : "Sem Dossiê salvo — abrir Análise de Edital"
+                    }
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    Ver Dossiê
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1 sm:flex-none gap-1.5 text-primary"
+                    onClick={() => {
+                      const disputa = { ...editingRow, ...formData } as DisputaRow;
+                      setIsModalOpen(false);
+                      abrirChatDaDisputa(disputa);
+                    }}
+                    title="Abrir um chat da IA já com os dados desta disputa"
+                  >
+                    <MessageSquarePlus className="w-3.5 h-3.5" />
+                    Falar com a IA
+                  </Button>
+                </div>
               )}
               <Button
                 type="button"

@@ -1,4 +1,5 @@
 import { urlDaApi, cabecalhosDaApi } from "./apiBase";
+import { formatarDataPncpBrasilia } from "./disputaDates";
 import {
   PNCP_MODALIDADES,
   chaveContratacao,
@@ -71,6 +72,7 @@ export interface PacoteOficialPncp {
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search/";
 const PNCP_CONSULTA_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes";
+const PNCP_CONSULTA_ORGAOS_URL = "https://pncp.gov.br/api/consulta/v1/orgaos";
 const PNCP_INTEGRACAO_URL = "https://pncp.gov.br/api/pncp/v1/orgaos";
 
 export interface DetalhePrecoPncp {
@@ -321,8 +323,10 @@ export function aplicarCachePrecosContratacoesPncp(items: any[]): any[] {
         valorTotalEstimado: cached.valorTotalEstimado > 0 ? cached.valorTotalEstimado : valorAtual,
         valorTotalHomologado: cached.valorTotalHomologado,
         orcamentoSigiloso: cached.orcamentoSigiloso,
+        dataEncerramentoProposta:
+          item.dataEncerramentoProposta || cached.dataEncerramentoProposta || "",
         dataAberturaProposta:
-          item.dataAberturaProposta || cached.dataAberturaProposta || cached.dataEncerramentoProposta || "",
+          item.dataAberturaProposta || cached.dataEncerramentoProposta || cached.dataAberturaProposta || "",
         processo: item.processo || cached.processo || "",
         numeroCompra: item.numeroCompra || cached.numeroCompra || "",
         precoPendente: false,
@@ -1195,6 +1199,7 @@ export async function buscarPacoteOficialPncp(
     baixarArquivos ? listarArquivosPncp(numeroControleFormatado).catch(() => []) : Promise.resolve([]),
   ]);
 
+  const baseConsultaUrl = `${PNCP_CONSULTA_ORGAOS_URL}/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
   let detalhe = detalheDireto;
   let itens = Array.isArray(itensRawDireto)
     ? itensRawDireto
@@ -1202,8 +1207,23 @@ export async function buscarPacoteOficialPncp(
       ? itensRawDireto.data
       : [];
 
-  // Fallback via servidor se o navegador não conseguiu consultar o cabeçalho/itens do PNCP
-  if (!detalhe && itens.length === 0) {
+  // Se o endpoint de integração falhou ou não trouxe dataEncerramentoProposta, tenta o endpoint de consulta
+  if (!detalhe || !detalhe.dataEncerramentoProposta) {
+    try {
+      const respConsulta = await fetchComTimeout(baseConsultaUrl, { headers: { Accept: "application/json" } }, 9_000);
+      if (respConsulta.ok) {
+        const detConsulta = await respConsulta.json().catch(() => null);
+        if (detConsulta && typeof detConsulta === "object") {
+          detalhe = detalhe ? { ...detConsulta, ...detalhe, dataEncerramentoProposta: detalhe.dataEncerramentoProposta || detConsulta.dataEncerramentoProposta, dataAberturaProposta: detalhe.dataAberturaProposta || detConsulta.dataAberturaProposta } : detConsulta;
+        }
+      }
+    } catch {
+      // prossegue para fallback via servidor
+    }
+  }
+
+  // Fallback via servidor se o navegador não conseguiu consultar o cabeçalho/itens ou a data limite do PNCP
+  if (!detalhe || (!detalhe.dataEncerramentoProposta && !detalhe.dataAberturaProposta) || itens.length === 0) {
     try {
       const respProxy = await fetchComTimeout(
         urlDaApi(`/api/pncp/contratacao?numeroControle=${encodeURIComponent(numeroControleFormatado)}`),
@@ -1212,8 +1232,31 @@ export async function buscarPacoteOficialPncp(
       );
       if (respProxy.ok) {
         const payload = await respProxy.json().catch(() => null);
-        if (payload?.contratacao) detalhe = payload.contratacao;
-        if (Array.isArray(payload?.itens)) itens = payload.itens;
+        if (payload?.contratacao) {
+          detalhe = detalhe
+            ? {
+                ...payload.contratacao,
+                ...detalhe,
+                dataEncerramentoProposta:
+                  detalhe.dataEncerramentoProposta ||
+                  payload.contratacao.dataEncerramentoProposta ||
+                  payload?.datasOficiais?.dataEncerramentoProposta,
+                dataAberturaProposta:
+                  detalhe.dataAberturaProposta ||
+                  payload.contratacao.dataAberturaProposta ||
+                  payload?.datasOficiais?.dataAberturaProposta,
+              }
+            : payload.contratacao;
+        } else if (payload?.datasOficiais) {
+          detalhe = {
+            ...(detalhe || {}),
+            dataEncerramentoProposta:
+              detalhe?.dataEncerramentoProposta || payload.datasOficiais.dataEncerramentoProposta,
+            dataAberturaProposta:
+              detalhe?.dataAberturaProposta || payload.datasOficiais.dataAberturaProposta,
+          };
+        }
+        if (itens.length === 0 && Array.isArray(payload?.itens)) itens = payload.itens;
       }
     } catch {
       // mantém dados disponíveis
@@ -1264,12 +1307,12 @@ export async function buscarPacoteOficialPncp(
     }
     if (detalhe.dataEncerramentoProposta) {
       linhasTexto.push(
-        `Data de Encerramento das Propostas / Início da Disputa (PNCP): ${new Date(detalhe.dataEncerramentoProposta).toLocaleString("pt-BR")}`
+        `Data de Encerramento das Propostas / Data Limite de Recebimento (PNCP): ${formatarDataPncpBrasilia(detalhe.dataEncerramentoProposta) || detalhe.dataEncerramentoProposta}`
       );
     }
     if (detalhe.dataAberturaProposta) {
       linhasTexto.push(
-        `Data de Abertura do Recebimento de Propostas (PNCP): ${new Date(detalhe.dataAberturaProposta).toLocaleString("pt-BR")}`
+        `Data de Abertura do Recebimento de Propostas (PNCP): ${formatarDataPncpBrasilia(detalhe.dataAberturaProposta) || detalhe.dataAberturaProposta}`
       );
     }
   }
@@ -1313,58 +1356,280 @@ export interface DatasOficiaisPncp {
   numeroControlePNCP?: string;
 }
 
+export function extrairCamposDatasOficiaisPncp(
+  raw: any,
+  defaults?: { linkPNCP?: string; numeroControlePNCP?: string }
+): DatasOficiaisPncp | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const dataEncerramentoProposta =
+    raw.dataEncerramentoProposta ||
+    raw.data_encerramento_proposta ||
+    raw.dataFimRecebimentoProposta ||
+    raw.data_fim_recebimento_propostas ||
+    raw.dataLimiteRecebimentoProposta ||
+    raw.data_limite_recebimento_propostas ||
+    raw.dataFimVigencia ||
+    raw.data_fim_vigencia ||
+    undefined;
+
+  const dataAberturaProposta =
+    raw.dataAberturaProposta ||
+    raw.data_abertura_proposta ||
+    raw.dataInicioRecebimentoProposta ||
+    raw.data_inicio_recebimento_propostas ||
+    raw.dataInicioVigencia ||
+    raw.data_inicio_vigencia ||
+    undefined;
+
+  if (!dataEncerramentoProposta && !dataAberturaProposta) return null;
+
+  return {
+    dataEncerramentoProposta: dataEncerramentoProposta ? String(dataEncerramentoProposta) : undefined,
+    dataAberturaProposta: dataAberturaProposta ? String(dataAberturaProposta) : undefined,
+    linkPNCP: raw.linkPNCP || defaults?.linkPNCP,
+    numeroControlePNCP: raw.numeroControlePNCP || raw.idContratacaoPNCP || defaults?.numeroControlePNCP,
+  };
+}
+
 /**
  * Consulta sob demanda os dados oficiais de uma contratação no PNCP para obter
- * as datas de encerramento/abertura das propostas (usado no agendamento do Calendário
- * quando a análise da IA não encontrou data nos documentos).
+ * a Data limite de recebimento (encerramento) e abertura das propostas.
+ * Tenta em cascata: integração direta, consulta direta, proxy do servidor
+ * (sem CORS) e busca indexada pelo número de controle.
  */
 export async function buscarDataOficialPncp(linkOuNumeroControle: string): Promise<DatasOficiaisPncp | null> {
   const alvo = parseNumeroControlePNCP(linkOuNumeroControle);
   if (!alvo) return null;
 
   const seqNum = Number(alvo.sequencial) || 0;
-  const baseUrl = `${PNCP_INTEGRACAO_URL}/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
-  const numeroControlePNCP = `${alvo.cnpj}-1-${String(seqNum).padStart(6, "0")}/${alvo.ano}`;
-  const linkPNCP = `https://pncp.gov.br/app/editais/${alvo.cnpj}/${alvo.ano}/${seqNum}`;
+  const seqPadded = String(seqNum).padStart(6, "0");
+  const baseIntegracaoUrl = `${PNCP_INTEGRACAO_URL}/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
+  const baseConsultaUrl = `${PNCP_CONSULTA_ORGAOS_URL}/${alvo.cnpj}/compras/${alvo.ano}/${seqNum}`;
+  const numeroControlePNCP = `${alvo.cnpj}-1-${seqPadded}/${alvo.ano}`;
+  const linkPNCP = `https://pncp.gov.br/app/editais/${alvo.cnpj}/${alvo.ano}/${seqPadded}`;
+  const defaults = { linkPNCP, numeroControlePNCP };
 
-  const extrairCampos = (raw: any): DatasOficiaisPncp | null => {
-    if (!raw || typeof raw !== "object") return null;
-    const dataEncerramentoProposta = raw.dataEncerramentoProposta || raw.data_encerramento_proposta || undefined;
-    const dataAberturaProposta = raw.dataAberturaProposta || raw.data_abertura_proposta || undefined;
-    if (!dataEncerramentoProposta && !dataAberturaProposta) return null;
-    return {
-      dataEncerramentoProposta: dataEncerramentoProposta ? String(dataEncerramentoProposta) : undefined,
-      dataAberturaProposta: dataAberturaProposta ? String(dataAberturaProposta) : undefined,
-      linkPNCP,
-      numeroControlePNCP,
-    };
+  let melhorParcial: DatasOficiaisPncp | null = null;
+  const registrar = (dados: DatasOficiaisPncp | null): DatasOficiaisPncp | null => {
+    if (!dados) return null;
+    if (dados.dataEncerramentoProposta) return dados;
+    if (!melhorParcial) melhorParcial = dados;
+    return null;
   };
 
+  // 1. Endpoint oficial de integração PNCP
   try {
-    const resp = await fetchComTimeout(baseUrl, { headers: { Accept: "application/json" } }, 9_000);
+    const resp = await fetchComTimeout(baseIntegracaoUrl, { headers: { Accept: "application/json" } }, 9_000);
     if (resp.ok) {
-      const dados = extrairCampos(await resp.json().catch(() => null));
-      if (dados) return dados;
+      const pronto = registrar(extrairCamposDatasOficiaisPncp(await resp.json().catch(() => null), defaults));
+      if (pronto) return pronto;
     }
   } catch {
-    // tenta proxy do servidor logo abaixo
+    // prossegue para endpoint de consulta
   }
 
+  // 2. Endpoint oficial de consulta PNCP
+  try {
+    const respConsulta = await fetchComTimeout(baseConsultaUrl, { headers: { Accept: "application/json" } }, 9_000);
+    if (respConsulta.ok) {
+      const pronto = registrar(extrairCamposDatasOficiaisPncp(await respConsulta.json().catch(() => null), defaults));
+      if (pronto) return pronto;
+    }
+  } catch {
+    // prossegue para proxy do servidor
+  }
+
+  // 3. Proxy do próprio servidor (sem CORS) — envia `numeroControle` corretamente
   try {
     const respProxy = await fetchComTimeout(
-      urlDaApi(`/api/pncp/contratacao?id=${encodeURIComponent(numeroControlePNCP)}`),
+      urlDaApi(`/api/pncp/contratacao?numeroControle=${encodeURIComponent(numeroControlePNCP)}`),
       { headers: cabecalhosDaApi() },
-      12_000
+      14_000
     );
     if (respProxy.ok) {
       const payload = await respProxy.json().catch(() => null);
-      const dados = extrairCampos(payload?.contratacao || payload);
+      const pronto =
+        registrar(extrairCamposDatasOficiaisPncp(payload?.datasOficiais, defaults)) ||
+        registrar(extrairCamposDatasOficiaisPncp(payload?.contratacao, defaults)) ||
+        registrar(extrairCamposDatasOficiaisPncp(payload, defaults));
+      if (pronto) return pronto;
+    }
+  } catch {
+    // prossegue para fallback na busca indexada
+  }
+
+  // 4. Fallback via busca por link/ID (lendo o 1º item de `res.data`)
+  try {
+    const res = await buscarContratacaoPorLinkOuIdPncp(linkOuNumeroControle).catch(() => null);
+    const primeiro = Array.isArray(res?.data) ? res.data[0] : null;
+    const pronto = registrar(extrairCamposDatasOficiaisPncp(primeiro, defaults));
+    if (pronto) return pronto;
+  } catch {
+    // retorna melhor parcial abaixo
+  }
+
+  return melhorParcial;
+}
+
+export interface MetadadosBuscaDataPncp {
+  orgao?: string;
+  cnpj?: string;
+  numeroLicitacao?: string;
+  uasg?: string;
+  objeto?: string;
+}
+
+function extrairNumeroEAnoMetadados(numeroLicitacao?: string): { numero: string; ano: string } | null {
+  const bruto = String(numeroLicitacao || "").trim();
+  if (!bruto) return null;
+  const m = bruto.match(/(\d{1,6})\s*\/\s*(20\d{2})/);
+  if (!m) return null;
+  return { numero: String(parseInt(m[1], 10)), ano: m[2] };
+}
+
+function tokensOrgao(valor?: string): Set<string> {
+  const stop = new Set([
+    "de", "da", "do", "das", "dos", "para", "com", "em", "no", "na", "e",
+    "prefeitura", "municipal", "secretaria", "estado", "governo", "ministerio",
+    "municipio", "fundo", "instituto", "camara", "autarquia",
+  ]);
+  return new Set(
+    normalizarTextoBuscaPncp(String(valor || ""))
+      .split(" ")
+      .filter((t) => t.length >= 3 && !stop.has(t))
+  );
+}
+
+/**
+ * Busca automaticamente no PNCP a contratação correspondente a um PDF enviado
+ * do computador (sem link/ID PNCP explícito), cruzando CNPJ, número/ano do
+ * certame, órgão e UASG, e retorna a Data limite de recebimento oficial.
+ */
+export async function buscarDataOficialPncpPorMetadados(
+  meta: MetadadosBuscaDataPncp
+): Promise<DatasOficiaisPncp | null> {
+  const cnpjLimpo = String(meta.cnpj || "").replace(/\D/g, "");
+  const numAno = extrairNumeroEAnoMetadados(meta.numeroLicitacao);
+  const orgaoLimpo = String(meta.orgao || "").trim();
+  const uasgLimpa = String(meta.uasg || "").replace(/\D/g, "");
+
+  if (!numAno && cnpjLimpo.length !== 14 && !orgaoLimpo) {
+    return null;
+  }
+
+  // 1. Tenta primeiro o endpoint do servidor (evita CORS e já faz lookup completo da compra)
+  try {
+    const qs = new URLSearchParams();
+    if (orgaoLimpo) qs.set("orgao", orgaoLimpo);
+    if (cnpjLimpo.length === 14) qs.set("cnpj", cnpjLimpo);
+    if (numAno) {
+      qs.set("numero", numAno.numero);
+      qs.set("ano", numAno.ano);
+    }
+    if (uasgLimpa) qs.set("uasg", uasgLimpa);
+    if (meta.objeto) qs.set("objeto", String(meta.objeto).slice(0, 140));
+
+    const resp = await fetchComTimeout(
+      urlDaApi(`/api/pncp/buscar-data?${qs.toString()}`),
+      { headers: cabecalhosDaApi() },
+      15_000
+    );
+    if (resp.ok) {
+      const payload = await resp.json().catch(() => null);
+      const dados = extrairCamposDatasOficiaisPncp(payload?.datasOficiais || payload, {
+        linkPNCP: payload?.linkPNCP,
+        numeroControlePNCP: payload?.numeroControlePNCP,
+      });
       if (dados) return dados;
     }
   } catch {
-    // tenta fallback genérico de busca por link
+    // fallback direto no navegador via /api/search/
   }
 
-  const contratacao = await buscarContratacaoPorLinkOuIdPncp(linkOuNumeroControle).catch(() => null);
-  return extrairCampos(contratacao);
+  // 2. Fallback direto no índice /api/search/ do PNCP
+  const consultas: string[] = [];
+  if (cnpjLimpo.length === 14 && numAno) {
+    consultas.push(`${cnpjLimpo} ${numAno.numero}/${numAno.ano}`);
+  }
+  if (orgaoLimpo && numAno) {
+    const partesOrgao = orgaoLimpo.split(/\s+/).slice(0, 5).join(" ");
+    consultas.push(`${partesOrgao} ${numAno.numero}/${numAno.ano}`);
+  }
+  if (consultas.length === 0 && orgaoLimpo) {
+    consultas.push(orgaoLimpo.split(/\s+/).slice(0, 6).join(" "));
+  }
+
+  const orgaoTokens = tokensOrgao(orgaoLimpo);
+
+  for (const termo of consultas) {
+    try {
+      const qSearch = montarQueryBuscaIndexadaPncp({
+        pagina: 1,
+        tamanhoPagina: 15,
+        status: "todos",
+        q: termo,
+      });
+      const respSearch = await fetchComTimeout(
+        `${PNCP_SEARCH_URL}?${qSearch}`,
+        { headers: { Accept: "application/json" } },
+        10_000
+      );
+      if (!respSearch.ok) continue;
+      const json = await respSearch.json().catch(() => null);
+      const itensRaw = Array.isArray(json?.items) ? json.items : [];
+      if (itensRaw.length === 0) continue;
+
+      let melhorItem: any = null;
+      let melhorScore = 0;
+
+      for (const rawItem of itensRaw) {
+        const norm = normalizarItemBuscaIndexadaPncp(rawItem);
+        const itemCnpj = String(norm.cnpjOrgao || "").replace(/\D/g, "");
+        const itemNumAno =
+          extrairNumeroEAnoMetadados(`${norm.numeroCompra || ""}/${norm.anoCompra || ""}`) ||
+          extrairNumeroEAnoMetadados(norm.tituloDocumento) ||
+          extrairNumeroEAnoMetadados(norm.processo);
+        const itemUasg = String(norm.unidadeOrgao?.codigoUnidade || "").replace(/\D/g, "");
+        const itemOrgaoTokens = tokensOrgao(norm.orgaoEntidade?.razaoSocial);
+
+        let score = 0;
+        const mesmoCnpj = cnpjLimpo.length === 14 && itemCnpj === cnpjLimpo;
+        const mesmoNumAno = Boolean(
+          numAno && itemNumAno && itemNumAno.numero === numAno.numero && itemNumAno.ano === numAno.ano
+        );
+        const mesmaUasg = Boolean(uasgLimpa && itemUasg && uasgLimpa === itemUasg);
+
+        let comunsOrgao = 0;
+        for (const t of orgaoTokens) {
+          if (itemOrgaoTokens.has(t)) comunsOrgao++;
+        }
+        const orgaoCompativel =
+          comunsOrgao >= 2 || (orgaoTokens.size === 1 && comunsOrgao === 1);
+
+        if (mesmoCnpj && mesmoNumAno) score = 100;
+        else if (mesmaUasg && mesmoNumAno) score = 95;
+        else if (orgaoCompativel && mesmoNumAno) score = 85;
+
+        if (score > melhorScore) {
+          melhorScore = score;
+          melhorItem = norm;
+        }
+      }
+
+      if (melhorItem && melhorScore >= 85 && melhorItem.numeroControlePNCP) {
+        const detalheOficial = await buscarDataOficialPncp(melhorItem.numeroControlePNCP).catch(() => null);
+        if (detalheOficial) return detalheOficial;
+        const doIndice = extrairCamposDatasOficiaisPncp(melhorItem, {
+          linkPNCP: melhorItem.linkPNCP,
+          numeroControlePNCP: melhorItem.numeroControlePNCP,
+        });
+        if (doIndice) return doIndice;
+      }
+    } catch {
+      // tenta próxima consulta
+    }
+  }
+
+  return null;
 }
